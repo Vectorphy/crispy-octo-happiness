@@ -1186,7 +1186,29 @@ class StudyGroup:
     async def _enforce_video(self, member: discord.Member) -> None:
         user_id = member.id
         try:
-            await asyncio.sleep(self.video_timer)
+            warning_seconds = 30
+            warning_delay = max(0, self.video_timer - warning_seconds)
+            await asyncio.sleep(warning_delay)
+            if not self.active or self.video_mode != "force":
+                return
+            voice_state = member.voice
+            if not voice_state or not voice_state.channel or voice_state.channel.id != self.vc_id:
+                return
+            if voice_state.self_video:
+                return
+            try:
+                await member.send(
+                    f"Please turn on your camera in **{self.name}** within 30 seconds, "
+                    "or you will be disconnected from the study voice channel."
+                )
+            except discord.HTTPException:
+                logger.warning(
+                    "Could not send video warning guild_id=%s group_id=%s user_id=%s",
+                    self.guild_id,
+                    self.group_id,
+                    user_id,
+                )
+            await asyncio.sleep(min(warning_seconds, self.video_timer))
             if not self.active or self.video_mode != "force":
                 return
             voice_state = member.voice

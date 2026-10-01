@@ -137,7 +137,12 @@ async def test_force_video_disconnects_member_after_timer():
     with patch("cogs.study_groups.asyncio.sleep", new=AsyncMock()) as sleep:
         await group._enforce_video(member)
 
-    sleep.assert_awaited_once_with(60)
+    assert sleep.await_args_list[0].args == (30,)
+    assert sleep.await_args_list[1].args == (30,)
+    member.send.assert_awaited_once_with(
+        f"Please turn on your camera in **{group.name}** within 30 seconds, "
+        "or you will be disconnected from the study voice channel."
+    )
     member.move_to.assert_awaited_once_with(None, reason=f"Video required in study group {group.group_id}")
     assert member.id not in group.video_enforcement_tasks
 

@@ -23,7 +23,7 @@
 - `/purge_groups`: End all active groups in this server (Moderator or higher).
   - Uses persisted records after a restart. If cleanup deletes the invocation channel, the final result is sent by DM.
 
-The dashboard's Speak and Force Video controls change the voice permissions and save the settings. Speak controls microphone access for the channel. Force Video allows camera and screen sharing and disconnects members who do not enable video within 60 seconds.
+The dashboard's Speak and Force Video controls change the voice permissions and save the settings. Speak controls microphone access for the channel. Force Video allows camera and screen sharing, warns members after 30 seconds, and disconnects members who still do not enable video after 60 seconds.
 
 - `/transfer_group <new_owner> [group_name]`: Transfer study group ownership
   - `new_owner`: The server member to transfer ownership to

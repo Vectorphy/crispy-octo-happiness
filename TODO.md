@@ -21,7 +21,7 @@ Verified on 2026-10-01 against the rc3 candidate based on `c7bdca3`. Checked ite
 - [x] Make task results and `/create_group` results public.
 - [x] Combine initial group mentions, status, and controls in one dashboard message.
 - [x] Persist `/set_mod_log_channel` and send group creation, ending, and purge event embeds without mentions.
-- [x] Implement forced video participation with a 60-second grace period; members who remain camera-off are disconnected.
+- [x] Implement forced video participation with a 30-second warning and 60-second grace period; members who remain camera-off are disconnected.
 
 ## Technical debt
 
