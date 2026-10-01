@@ -9,6 +9,25 @@ from discord.ext import commands
 
 logger = logging.getLogger(__name__)
 
+
+async def should_use_ephemeral(interaction: discord.Interaction, db) -> bool:
+    """Return whether a command response should be hidden outside the configured group category."""
+    guild = getattr(interaction, "guild", None)
+    if guild is None:
+        return True
+
+    channel = getattr(interaction, "channel", None)
+    category_id = getattr(channel, "category_id", None)
+    if category_id is None:
+        category = getattr(channel, "category", None)
+        category_id = getattr(category, "id", None)
+    if category_id is None:
+        return True
+
+    configured_category_id = await db.get_group_category(guild.id)
+    return category_id != configured_category_id
+
+
 ### Parsing Time Functions
 
 
