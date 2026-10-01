@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.4] - 2026-10-02
+
+This rc4 release candidate introduces category-based response visibility and server-scoped tasks. Python package metadata is `1.0.0rc4`.
+
 ### Changed
 - Expanded category-based response visibility (`should_use_ephemeral`) across study groups, Pomodoro, check-ins, management, and productivity commands, keeping success responses public inside configured group categories and ephemeral elsewhere while preserving strictly ephemeral permission and validation errors.
 - Scoped task storage and default `/task_list` results in a server to that specific server (`guild_id`), preventing tasks from leaking across different servers unless `all_groups: true` is explicitly opted into.
