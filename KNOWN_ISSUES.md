@@ -106,6 +106,12 @@
 
 ## Verified fixes and release checks
 
+### AD-11: Hosting default entrypoint mismatch
+- **Severity**: High (P1)
+- **Status**: **RESOLVED**
+- **Affected File**: `main.py`
+- **Details**: Some hosting panels start the service with `python3 /home/container/main.py`, while the project previously exposed only `bot.py`. The new compatibility launcher delegates to the existing bot startup path.
+
 The rc3 candidate builds on `c7bdca3`. On bundled Python 3.12.14 with the original virtual environment's packages, all 60 pytest tests pass, including the standalone 54-flow matrix. Mypy and Ruff lint/format checks pass. The upstream `audioop` deprecation warning remains.
 
 `davey 0.1.6` is installed in the original virtual environment and declared in both runtime manifests. The five-tier permission implementation is preserved. Checks use mocked Discord APIs; this run does not verify live provisioning. GitHub publishing remains pending because this automation cannot reach GitHub over the network.

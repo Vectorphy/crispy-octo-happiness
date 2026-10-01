@@ -25,7 +25,7 @@ dev = [
 ]
 
 [tool.setuptools]
-py-modules = ["bot", "database", "utils"]
+py-modules = ["bot", "database", "utils", "main"]
 
 [tool.setuptools.packages.find]
 include = ["cogs*"]

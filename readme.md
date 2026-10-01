@@ -40,6 +40,7 @@ Chief Productivity Officer (CPO) is a Discord bot designed to enhance productivi
     ```bash
     python bot.py
     ```
+    Hosting panels configured to run `python3 main.py` are also supported; `main.py` delegates to the same startup logic.
 
 ## Usage
 
