@@ -1,0 +1,62 @@
+# Compiled bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.eggs/
+dist/
+build/
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE/Editor files
+.idea/
+.vscode/
+.idx/
+*.iml
+.project
+.classpath
+
+# Local configuration
+.env
+.env.local
+.env.development.local
+.env.production.local
+.fae/
+
+# Database files
+*.sqlite3
+*.sqlite
+*.db
+
+# Logs
+logs/
+*.log
+
+# Temporary and Scratch files
+*.tmp
+*~
+scratch_*.py
+
+# Test and linter caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+
+# System files
+.DS_Store
+Thumbs.db
+.Trash/
+.Spotlight-V100/
+
+# Explicitly exclude sensitive files
+credentials.json
+gha-creds-*.json
+
+# Gemini CLI settings
+.gemini/

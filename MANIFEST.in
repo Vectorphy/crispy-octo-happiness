@@ -1,0 +1,4 @@
+include requirements*.txt
+include test_file.py
+include AGENTS.md ARCHITECTURE.md CHANGELOG.md KNOWLEDGE_GRAPH.md KNOWN_ISSUES.md TODO.md commands.md
+include .github/scripts/extract_release_notes.py

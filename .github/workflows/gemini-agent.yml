@@ -1,0 +1,41 @@
+name: Gemini AI Agent
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  gemini-agent:
+    # Trigger if:
+    # 1. Pull request is opened/updated/reopened (automatic code review)
+    # 2. Someone comments mentioning @gemini-cli (e.g. "@gemini-cli review", "@gemini-cli fix this", "@gemini-cli explain")
+    # 3. An issue is opened mentioning @gemini-cli
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@gemini-cli')) ||
+      (github.event_name == 'issues' && contains(github.event.issue.body, '@gemini-cli'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gemini CLI Agent
+        uses: google-github-actions/run-gemini-cli@v0
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+        env:
+          NODE_OPTIONS: '--no-warnings'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
