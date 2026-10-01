@@ -144,7 +144,7 @@ class TestPomodoroRatioAndFeatures(unittest.TestCase):
             await cog.start_pomodoro.callback(cog, interaction, focus=25, require_vc=False)
 
             self.assertEqual(interaction.response.is_done.call_count, 2)
-            interaction.response.defer.assert_awaited_once_with()
+            interaction.response.defer.assert_awaited_once_with(ephemeral=True)
             interaction.followup.send.assert_awaited_once()
             interaction.response.send_message.assert_not_awaited()
 
