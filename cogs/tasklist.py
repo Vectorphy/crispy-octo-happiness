@@ -5,6 +5,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from utils import should_use_ephemeral
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,10 +42,11 @@ class TaskActionSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        ephemeral = await should_use_ephemeral(interaction, self.db)
+        await interaction.response.defer(ephemeral=ephemeral)
         task_id = self.values[0] if self.values else None
         if task_id is None or task_id not in self.task_groups:
-            await interaction.followup.send("Choose a task from this menu.", ephemeral=True)
+            await interaction.followup.send("Choose a task from this menu.", ephemeral=ephemeral)
             return
         success = await self.db.apply_task_action(
             interaction.user.id, int(task_id), self.task_groups[task_id], self.action
@@ -141,7 +144,8 @@ class TaskList(commands.Cog):
     )
     @app_commands.describe(description="The task description")
     async def add_task(self, interaction: discord.Interaction, *, description: str):
-        await interaction.response.defer()
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
+        await interaction.response.defer(ephemeral=ephemeral)
         group_id = None
         group_name = None
         channel_id = getattr(interaction, "channel_id", None)
@@ -152,17 +156,30 @@ class TaskList(commands.Cog):
                 group_id = group.get("group_id") or str(group.get("id"))
                 group_name = group.get("name")
 
+        guild = getattr(interaction, "guild", None)
+        guild_id = getattr(interaction, "guild_id", None) if guild is not None else None
+        if not isinstance(guild_id, int) and guild is not None:
+            guild_id = getattr(guild, "id", None)
+        if not isinstance(guild_id, int):
+            guild_id = None
+
         if group_id:
-            task_id = await self.bot.db.add_task(interaction.user.id, description, group_id=group_id)
-            await interaction.followup.send(f"Task #{task_id} added successfully to **{group_name}**: {description}")
+            task_id = await self.bot.db.add_task(interaction.user.id, description, group_id=group_id, guild_id=guild_id)
+            await interaction.followup.send(
+                f"Task #{task_id} added successfully to **{group_name}**: {description}", ephemeral=ephemeral
+            )
+        elif guild_id:
+            task_id = await self.bot.db.add_task(interaction.user.id, description, guild_id=guild_id)
+            await interaction.followup.send(f"Task added successfully. Task ID: {task_id}", ephemeral=ephemeral)
         else:
             task_id = await self.bot.db.add_task(interaction.user.id, description)
-            await interaction.followup.send(f"Task added successfully. Task ID: {task_id}")
+            await interaction.followup.send(f"Task added successfully. Task ID: {task_id}", ephemeral=ephemeral)
 
     @app_commands.command(name="task_complete", description="Mark a task as complete")
     @app_commands.describe(task_ids="The ID(s) or task number(s) to complete (comma-separated, optional if using UI)")
     async def complete_task(self, interaction: discord.Interaction, task_ids: Optional[str] = None):
-        await interaction.response.defer()
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
+        await interaction.response.defer(ephemeral=ephemeral)
         if task_ids is not None:
             group_id = None
             channel_id = getattr(interaction, "channel_id", None)
@@ -193,17 +210,25 @@ class TaskList(commands.Cog):
                 res.append(f"Failed to find or already completed: {', '.join(failed_list)}")
 
             if res:
-                await interaction.followup.send("\n".join(res))
+                await interaction.followup.send("\n".join(res), ephemeral=ephemeral)
             else:
-                await interaction.followup.send("No valid tasks were provided.")
+                await interaction.followup.send("No valid tasks were provided.", ephemeral=ephemeral)
             return
 
         await self._send_task_menu(interaction, "complete")
 
     async def _send_task_menu(self, interaction, action):
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         group_id = None
         group_name = None
         channel_id = getattr(interaction, "channel_id", None)
+        guild = getattr(interaction, "guild", None)
+        guild_id = getattr(interaction, "guild_id", None) if guild is not None else None
+        if not isinstance(guild_id, int) and guild is not None:
+            guild_id = getattr(guild, "id", None)
+        if not isinstance(guild_id, int):
+            guild_id = None
+
         if isinstance(channel_id, int):
             group = await self.bot.db.get_study_group_by_channel(channel_id)
             if group:
@@ -211,16 +236,18 @@ class TaskList(commands.Cog):
                 group_name = dict(group).get("name", "Study group")
         if group_id:
             tasks = await self.bot.db.get_user_tasks(interaction.user.id, group_id=group_id)
+        elif guild_id:
+            tasks = await self.bot.db.get_user_tasks(interaction.user.id, guild_id=guild_id)
         else:
             tasks = await self.bot.db.get_user_tasks(interaction.user.id, global_only=True)
         choices = [dict(task) for task in tasks if action == "delete" or not task["completed"]]
         for task in choices:
-            task["group_name"] = group_name or ("Study group" if task.get("group_id") else "Global Task")
+            task["group_name"] = group_name or ("Study group" if task.get("group_id") else "Server Task")
         if not choices:
-            await interaction.followup.send(f"You have no tasks to {action}.")
+            await interaction.followup.send(f"You have no tasks to {action}.", ephemeral=ephemeral)
             return
         view = TaskActionView(choices[:25], self.bot.db, interaction.user.id, action)
-        await interaction.followup.send(f"Select a task to {action}:", view=view)
+        await interaction.followup.send(f"Select a task to {action}:", view=view, ephemeral=ephemeral)
 
     @app_commands.command(name="task_list", description="List your current tasks")
     @app_commands.describe(all_groups="Show tasks across all groups (default False if inside a group)")
@@ -238,12 +265,22 @@ class TaskList(commands.Cog):
                 group_id = group.get("group_id") or str(group.get("id"))
                 group_name = group.get("name")
 
+        guild = getattr(interaction, "guild", None)
+        guild_id = getattr(interaction, "guild_id", None) if guild is not None else None
+        if not isinstance(guild_id, int) and guild is not None:
+            guild_id = getattr(guild, "id", None)
+        if not isinstance(guild_id, int):
+            guild_id = None
+
         if all_groups:
             tasks = await self.bot.db.get_user_tasks(interaction.user.id)
             title = f"{interaction.user.display_name}'s Tasks — All Groups"
         elif group_id:
             tasks = await self.bot.db.get_user_tasks(interaction.user.id, group_id=group_id)
             title = f"{interaction.user.display_name}'s Tasks — {group_name}"
+        elif guild_id:
+            tasks = await self.bot.db.get_user_tasks(interaction.user.id, guild_id=guild_id)
+            title = f"{interaction.user.display_name}'s Tasks"
         else:
             tasks = await self.bot.db.get_user_tasks(interaction.user.id, global_only=True)
             title = f"{interaction.user.display_name}'s Tasks"
@@ -258,7 +295,8 @@ class TaskList(commands.Cog):
     @app_commands.command(name="task_delete", description="Delete one or multiple tasks")
     @app_commands.describe(task_ids="The ID(s) to delete (comma-separated, optional if using the menu)")
     async def delete_task(self, interaction: discord.Interaction, task_ids: Optional[str] = None):
-        await interaction.response.defer()
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
+        await interaction.response.defer(ephemeral=ephemeral)
         if task_ids is None:
             await self._send_task_menu(interaction, "delete")
             return
@@ -291,9 +329,9 @@ class TaskList(commands.Cog):
             res.append(f"Failed to find or delete: {', '.join(failed_list)}")
 
         if res:
-            await interaction.followup.send("\n".join(res))
+            await interaction.followup.send("\n".join(res), ephemeral=ephemeral)
         else:
-            await interaction.followup.send("No valid tasks were provided.")
+            await interaction.followup.send("No valid tasks were provided.", ephemeral=ephemeral)
 
     @app_commands.command(
         name="task_purge",
@@ -301,11 +339,14 @@ class TaskList(commands.Cog):
     )
     @app_commands.describe(all_tasks="⚠️ CAUTION: Set to True to purge ALL your tasks globally across ALL study groups")
     async def purge_tasks(self, interaction: discord.Interaction, all_tasks: bool = False):
-        await interaction.response.defer()
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
+        await interaction.response.defer(ephemeral=ephemeral)
         if all_tasks:
             deleted_count = await self.bot.db.purge_all_user_tasks(interaction.user.id)
             cleanup = await self._purge_task_messages(interaction)
-            await interaction.followup.send(f"Purged {deleted_count} tasks globally across all your groups.{cleanup}")
+            await interaction.followup.send(
+                f"Purged {deleted_count} tasks globally across all your groups.{cleanup}", ephemeral=ephemeral
+            )
             return
 
         group_id = None
@@ -316,15 +357,30 @@ class TaskList(commands.Cog):
                 group = dict(group)
                 group_id = group.get("group_id") or str(group.get("id"))
 
-        if not group_id:
-            await interaction.followup.send(
-                "You must use this command inside a study group channel to purge its tasks."
-            )
-            return
+        guild = getattr(interaction, "guild", None)
+        guild_id = getattr(interaction, "guild_id", None) if guild is not None else None
+        if not isinstance(guild_id, int) and guild is not None:
+            guild_id = getattr(guild, "id", None)
+        if not isinstance(guild_id, int):
+            guild_id = None
 
-        count = await self.bot.db.purge_group_tasks(interaction.user.id, group_id)
-        cleanup = await self._purge_task_messages(interaction)
-        await interaction.followup.send(f"Successfully purged {count} tasks from this group.{cleanup}")
+        if group_id:
+            count = await self.bot.db.purge_group_tasks(interaction.user.id, group_id)
+            cleanup = await self._purge_task_messages(interaction)
+            await interaction.followup.send(
+                f"Successfully purged {count} tasks from this group.{cleanup}", ephemeral=ephemeral
+            )
+        elif guild_id:
+            count = await self.bot.db.purge_guild_tasks(interaction.user.id, guild_id)
+            cleanup = await self._purge_task_messages(interaction)
+            await interaction.followup.send(
+                f"Successfully purged {count} tasks from this server.{cleanup}", ephemeral=ephemeral
+            )
+        else:
+            await interaction.followup.send(
+                "You must use this command inside a study group channel or server to purge its tasks.",
+                ephemeral=ephemeral,
+            )
 
     async def _purge_task_messages(self, interaction):
         channel = interaction.channel

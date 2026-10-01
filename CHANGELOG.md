@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Scoped task storage and default `/task_list` results in a server to that specific server (`guild_id`), preventing tasks from leaking across different servers unless `all_groups: true` is explicitly opted into.
+- Integrated category-based response visibility helper (`should_use_ephemeral`) across task commands (`/task_add`, `/task_complete`, `/task_delete`, `/task_purge`) and voice commands (`/create_vc`, `/delete_vc`, `/delete_role`, `/delete_text_channel`), while preserving `/task_list` visibility scoping and ephemeral rules.
 - Scoped default `/task_list` results to global tasks outside a study group; `all_groups: true` is now the explicit cross-group opt-in and returns an ephemeral result.
 - Force Video now stores `force`, warns members after 30 seconds, enforces a 60-second camera grace period, and Speak toggles update both channel-wide and group-role microphone permissions.
 - Study-group voice channels now remain available when the last member leaves; deletion remains manual or part of group cleanup.
