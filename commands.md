@@ -66,11 +66,17 @@ The dashboard's Speak and Force Video controls change the voice permissions and 
 - `/delete_vc`: Delete the voice channel for the study group
   - Removes the voice channel associated with your study group.
 
+- `/delete_role <role>`: Delete the selected role for the study group (Manage Roles permission required)
+  - `role`: The group role to delete and unassign.
+
+- `/delete_text_channel <text_channel>`: Delete the selected text channel for the study group (Manage Channels permission required)
+  - `text_channel`: The group text channel to delete.
+
 ## Task List
 
 - `/task_add <description>`: Add a new task to your list
   - `description`: The description of the task
-  - Adds a new task to your personal task list.
+  - Adds a new task to your personal task list, scoped to the current server (and study group if invoked within one).
 
 - `/task_complete [task_ids]`: Complete tasks by comma-separated IDs or numbers. Omit IDs to use a Select menu.
   - Inside a study group, choices and operations are scoped to that group. Only the task owner can use the menu.
@@ -78,13 +84,19 @@ The dashboard's Speak and Force Video controls change the voice permissions and 
 - `/task_delete [task_ids]`: Delete tasks by comma-separated IDs or numbers. Omit IDs to use the same owner-checked menu.
 
 - `/task_list [all_groups]`: List tasks, including completed ones, with 15 tasks per page.
-  - Inside a group, the default list covers that group. Set `all_groups:True` to list tasks across groups.
+  - By default, tasks are scoped to the current server and active group (or global server tasks outside groups). Set `all_groups:True` to list all tasks across groups.
+  - Note: `all_groups:True` results are always sent ephemerally to prevent channel clutter.
 
 - `/task_purge [all_tasks]`: Delete your tasks in the current group with one database operation.
-  - Set `all_tasks:True` to delete your tasks across every group and global scope.
+  - Set `all_tasks:True` to delete your tasks across every group in this server and global scope.
   - Also checks the latest 100 messages in the current text channel and removes matching bot task messages attributed to you. Cleanup failure is reported after the task records are deleted.
 
-Task command results are public and work in DMs. Menus show up to 25 choices; use typed IDs for additional tasks. Menu actions use the database row ID internally to avoid ambiguous legacy task numbers.
+Task command results follow category-based visibility and work in DMs. Menus show up to 25 choices; use typed IDs for additional tasks. Menu actions use the database row ID internally to avoid ambiguous legacy task numbers.
+
+## Productivity
+
+- `/productivity`: Display your personal productivity metrics
+  - Returns an embed showing total tasks completed, total time spent, and efficiency score (tasks completed per hour).
 
 ## Check-in
 
@@ -92,6 +104,10 @@ Task command results are public and work in DMs. Menus show up to 25 choices; us
   - `duration`: The duration of the check-in session (e.g., "30m" for 30 minutes)
   - `mentions`: Users or roles to include in the check-in session
   - Starts a new check-in session with specified duration and participants.
+
+- `/settings_checkin [max_absences] [warning_threshold]`: Configure check-in settings for this server (Manager only)
+  - `max_absences`: Number of consecutive unacknowledged pings before taking action.
+  - `warning_threshold`: Absence count triggering a warning alert.
 
 ## Management & Authorization
 
@@ -134,5 +150,11 @@ Task command results are public and work in DMs. Menus show up to 25 choices; us
   - Scans the guild and registers the server owner & administrators as `ADMIN` (Level 3) and moderators/staff as `MODERATOR` (Level 2).
 
 Note: All commands use slash command syntax (`/`). Commands requiring elevated permissions use Discord's native `default_permissions` to remain hidden from unauthorized members in the Discord client interface.
+
+### Response Visibility & Privacy Rules
+
+- **Category-Based Contextual Visibility**: Commands invoked inside the configured study group category send public responses so group members can collaborate and view session updates in the channel.
+- **Outside-Category Ephemeral Fallback**: Commands invoked outside the study group category (such as general channels or DMs) default to ephemeral responses to prevent channel clutter.
+- **Strict Privacy for Errors & Cross-Group Lists**: Permission denials, authorization rejections, missing server context, input validation errors, and cross-group task lists (`/task_list all_groups:True`) are strictly sent as ephemeral responses regardless of channel context.
 
 ---

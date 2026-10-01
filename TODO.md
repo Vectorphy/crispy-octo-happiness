@@ -44,8 +44,10 @@ Verified on 2026-10-01 against the rc3 candidate based on `c7bdca3`. Checked ite
 ## Release verification
 
 - [x] Prevent default task-list results from exposing group tasks; require `all_groups: true` for cross-group listing and make cross-group results ephemeral.
+- [x] Scope task persistence and default listings by `guild_id`, preventing cross-server task leaks.
+- [x] Implement category-based response visibility (`should_use_ephemeral`) across all command cogs, keeping responses public in configured categories and ephemeral elsewhere.
 - [x] Keep study-group voice channels when the last member leaves; retain explicit deletion paths.
 - [x] Provide a `main.py` compatibility launcher for hosting panels whose default startup command targets `python3 main.py`.
-- [x] Verify the candidate: 60 pytest tests, the asserted 54-flow standalone runner, mypy, Ruff lint, and Ruff formatting on Python 3.12.
+- [x] Verify the candidate: 68 pytest tests, the asserted 54-flow standalone runner, mypy, Ruff lint, and Ruff formatting on Python 3.12.
 - [x] Correct unsupported completion claims and synchronize commands, architecture, and issue documentation.
 - [ ] Publish the verified commit, move the existing tag with an explicit lease, refresh the prerelease, and verify downloaded packages. This automation's GitHub network access is blocked.
