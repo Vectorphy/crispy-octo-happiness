@@ -223,25 +223,6 @@ class VoiceChannels(commands.Cog):
                     ephemeral=True,
                 )
 
-    @commands.Cog.listener()
-    async def on_voice_state_update(self, member, before, after):
-        logger.debug(f"Voice state update: {member} moved from {before.channel} to {after.channel}")
-        if before.channel and not after.channel:
-            group = await self.bot.db.get_study_group(before.channel.guild.id)
-            if group:
-                group_id = group.get("group_id") or group.get("id")
-                group_vc_id = group.get("vc_id")
-                if group_vc_id == before.channel.id:
-                    logger.debug(f"Member {member} left study group voice channel {before.channel.id}")
-                    if not before.channel.members:
-                        try:
-                            await before.channel.delete()
-                            await self.bot.db.update_voice_channel(group_id, None)
-                            logger.info(f"Deleted empty voice channel {before.channel.id} for group {group_id}")
-                        except discord.HTTPException as e:
-                            logger.error(f"Failed to delete empty voice channel: {str(e)}")
-
-
 async def setup(bot):
     await bot.add_cog(VoiceChannels(bot))
     logger.info("VoiceChannels cog loaded")

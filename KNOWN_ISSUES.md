@@ -106,6 +106,12 @@
 
 ## Verified fixes and release checks
 
+### AD-12: Study-group voice channels were deleted when empty
+- **Severity**: Medium (P2)
+- **Status**: **RESOLVED**
+- **Affected File**: `cogs/voice_channels.py`
+- **Details**: Removed the voice-state listener that deleted a study-group voice channel when its last member disconnected. Manual `/delete_vc` and group-ending cleanup remain available.
+
 ### AD-11: Hosting default entrypoint mismatch
 - **Severity**: High (P1)
 - **Status**: **RESOLVED**
