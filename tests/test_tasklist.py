@@ -81,6 +81,50 @@ class TestTaskListCog(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_list_tasks_in_configured_category_is_public(self):
+        async def run_test():
+            self.mock_db.get_group_category.return_value = 20
+            self.mock_db.get_study_group_by_channel.return_value = None
+            self.mock_db.get_user_tasks.return_value = [
+                {"id": 1, "description": "Task 1", "completed": 0, "group_id": None}
+            ]
+            interaction = AsyncMock()
+            interaction.user.id = 12345
+            interaction.user.display_name = "TestUser"
+            interaction.guild.id = 10
+            interaction.channel.category_id = 20
+            interaction.channel_id = 999
+
+            await self.cog.list_tasks.callback(self.cog, interaction, all_groups=False)
+
+            interaction.response.defer.assert_called_once_with(ephemeral=False)
+            interaction.followup.send.assert_called_once()
+            self.assertFalse(interaction.followup.send.call_args.kwargs.get("ephemeral"))
+
+        asyncio.run(run_test())
+
+    def test_list_tasks_in_other_category_is_ephemeral(self):
+        async def run_test():
+            self.mock_db.get_group_category.return_value = 20
+            self.mock_db.get_study_group_by_channel.return_value = None
+            self.mock_db.get_user_tasks.return_value = [
+                {"id": 1, "description": "Task 1", "completed": 0, "group_id": None}
+            ]
+            interaction = AsyncMock()
+            interaction.user.id = 12345
+            interaction.user.display_name = "TestUser"
+            interaction.guild.id = 10
+            interaction.channel.category_id = 999  # Different category
+            interaction.channel_id = 123
+
+            await self.cog.list_tasks.callback(self.cog, interaction, all_groups=False)
+
+            interaction.response.defer.assert_called_once_with(ephemeral=True)
+            interaction.followup.send.assert_called_once()
+            self.assertTrue(interaction.followup.send.call_args.kwargs.get("ephemeral"))
+
+        asyncio.run(run_test())
+
 
 if __name__ == "__main__":
     unittest.main()

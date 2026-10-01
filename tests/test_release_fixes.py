@@ -255,23 +255,32 @@ async def test_task_list_defaults_to_global_scope_and_true_lists_all_groups():
     bot.db.get_user_tasks.return_value = [
         {"id": 1, "description": "Global", "completed": 0, "group_id": None},
     ]
+    bot.db.get_group_category.return_value = 20
     request = interaction()
     request.channel_id = None
+    request.channel.category_id = 20
     cog = TaskList(bot)
 
-    # In a server, all_groups=False limits tasks to that guild/server
+    # In configured category, all_groups=False limits tasks to guild and is public
     await cog.list_tasks.callback(cog, request, all_groups="false")
     bot.db.get_user_tasks.assert_awaited_once_with(123, guild_id=99)
     request.response.defer.assert_awaited_once_with(ephemeral=False)
 
-    # In DM (no guild), all_groups=False defaults to global tasks
+    # In other categories outside the group category, all_groups=False is ephemeral
+    bot.db.get_user_tasks.reset_mock()
+    request_other = interaction()
+    request_other.channel.category_id = 999
+    await cog.list_tasks.callback(cog, request_other, all_groups="false")
+    request_other.response.defer.assert_awaited_once_with(ephemeral=True)
+
+    # In DM (no guild), all_groups=False defaults to global tasks and is ephemeral
     bot.db.get_user_tasks.reset_mock()
     request_dm = interaction()
     request_dm.guild = None
     request_dm.channel_id = None
     await cog.list_tasks.callback(cog, request_dm, all_groups="false")
     bot.db.get_user_tasks.assert_awaited_once_with(123, global_only=True)
-    request_dm.response.defer.assert_awaited_once_with(ephemeral=False)
+    request_dm.response.defer.assert_awaited_once_with(ephemeral=True)
 
     # all_groups=True fetches all tasks across all groups/servers and is ephemeral
     bot.db.get_user_tasks.reset_mock()
