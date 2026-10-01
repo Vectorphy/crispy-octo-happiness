@@ -1,12 +1,49 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from utils import ProductivityService, parse_duration, parse_seconds_to_hms
+from utils import ProductivityService, parse_duration, parse_seconds_to_hms, should_use_ephemeral
 
 
 class TestUtils(unittest.TestCase):
+    def test_response_visibility_matches_configured_category(self):
+        async def run_test():
+            db = AsyncMock()
+            db.get_group_category.return_value = 42
+            public_interaction = SimpleNamespace(
+                guild=SimpleNamespace(id=7),
+                channel=SimpleNamespace(category_id=42),
+            )
+            outside_interaction = SimpleNamespace(
+                guild=SimpleNamespace(id=7),
+                channel=SimpleNamespace(category_id=99),
+            )
+
+            self.assertFalse(await should_use_ephemeral(public_interaction, db))
+            self.assertTrue(await should_use_ephemeral(outside_interaction, db))
+            db.get_group_category.assert_awaited()
+
+        import asyncio
+
+        asyncio.run(run_test())
+
+    def test_response_visibility_is_ephemeral_without_guild_or_category(self):
+        async def run_test():
+            db = AsyncMock()
+            no_guild = SimpleNamespace(guild=None, channel=None)
+            no_category = SimpleNamespace(guild=SimpleNamespace(id=7), channel=SimpleNamespace(category_id=None))
+
+            self.assertTrue(await should_use_ephemeral(no_guild, db))
+            self.assertTrue(await should_use_ephemeral(no_category, db))
+            db.get_group_category.assert_not_awaited()
+
+        import asyncio
+
+        asyncio.run(run_test())
+
     def test_parse_duration(self):
         self.assertEqual(parse_duration("30s"), 30)
         self.assertEqual(parse_duration("15m"), 900)
