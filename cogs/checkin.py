@@ -19,6 +19,7 @@ from utils import (
     parse_duration,
     parse_mentions,
     parse_seconds_to_hms,
+    should_use_ephemeral,
     validate_parameters,
 )
 
@@ -1347,7 +1348,8 @@ class CheckinCog(commands.Cog):
         duration: str,
         mentions: Optional[str] = None,
     ):
-        await interaction.response.defer()
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
+        await interaction.response.defer(ephemeral=ephemeral)
         if not interaction.guild:
             await interaction.followup.send("This command can only be used in a server.", ephemeral=True)
             return
@@ -1422,7 +1424,8 @@ class CheckinCog(commands.Cog):
         max_user_sessions: int = 5,
         permission_mode: str = "ALLOW",
     ):
-        await interaction.response.defer(ephemeral=True)
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
+        await interaction.response.defer(ephemeral=ephemeral)
         if not interaction.guild:
             await interaction.followup.send("This command can only be used in a server.", ephemeral=True)
             return
@@ -1483,7 +1486,7 @@ class CheckinCog(commands.Cog):
                 f"**Max User Sessions**: {max_user_sessions}"
             )
 
-            await interaction.followup.send(response, ephemeral=True)
+            await interaction.followup.send(response, ephemeral=ephemeral)
             logger.info(f"Updated Check-in settings for guild {guild_id} by user {interaction.user.id}")
 
         except Exception as e:

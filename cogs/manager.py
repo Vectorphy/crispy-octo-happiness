@@ -7,6 +7,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from utils import should_use_ephemeral
+
 # Set up logging
 logger = logging.getLogger(__name__)
 
@@ -328,7 +330,8 @@ class Manager(commands.Cog):
         max_members: Optional[app_commands.Range[int, 1, 50]] = None,
         category: Optional[discord.CategoryChannel] = None,
     ):
-        await interaction.response.defer(ephemeral=True)
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
+        await interaction.response.defer(ephemeral=ephemeral)
         level = await self.get_permission_level(
             interaction.guild_id,
             interaction.user.id,
@@ -370,7 +373,7 @@ class Manager(commands.Cog):
             embed.add_field(name="✅ Changes Saved", value="\n".join(updated_items), inline=False)
 
         embed.set_footer(text="To change settings, run /setup with options or use /set_group_category.")
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
     @app_commands.command(
         name="sync_commands",
@@ -379,7 +382,8 @@ class Manager(commands.Cog):
     @app_commands.describe(guild_only="If true, syncs only to this server. If false, syncs globally.")
     @app_commands.default_permissions(administrator=True)
     async def sync_commands(self, interaction: discord.Interaction, guild_only: bool = False):
-        await interaction.response.defer(ephemeral=True)
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
+        await interaction.response.defer(ephemeral=ephemeral)
         if not interaction.guild and guild_only:
             await interaction.followup.send("Guild-only sync can only be used inside a server.", ephemeral=True)
             return
@@ -402,13 +406,13 @@ class Manager(commands.Cog):
                 synced = await self.bot.tree.sync(guild=interaction.guild)
                 await interaction.followup.send(
                     f"Successfully synced **{len(synced)}** command(s) to server **{interaction.guild.name}**.",
-                    ephemeral=True,
+                    ephemeral=ephemeral,
                 )
             else:
                 synced = await self.bot.tree.sync()
                 await interaction.followup.send(
                     f"Successfully synced **{len(synced)}** command(s) globally across all servers.",
-                    ephemeral=True,
+                    ephemeral=ephemeral,
                 )
             logger.info(f"Slash commands synced by {interaction.user.display_name} (guild_only={guild_only})")
         except Exception as e:
@@ -426,6 +430,7 @@ class Manager(commands.Cog):
             await interaction.response.send_message("Could not identify the target member.", ephemeral=True)
             return
 
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         level = await self.get_permission_level(interaction.guild_id, target_member.id, member=target_member)
         tier = self.get_tier_name(level)
 
@@ -451,7 +456,7 @@ class Manager(commands.Cog):
         )
         embed.set_footer(text=f"User ID: {target_member.id}")
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
 
     @app_commands.command(
         name="sync_managers",
@@ -459,7 +464,8 @@ class Manager(commands.Cog):
     )
     @app_commands.default_permissions(administrator=True)
     async def sync_managers(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
+        await interaction.response.defer(ephemeral=ephemeral)
         if not interaction.guild:
             await interaction.followup.send("This command can only be used in a server.", ephemeral=True)
             return
@@ -480,7 +486,7 @@ class Manager(commands.Cog):
 
         await interaction.followup.send(
             f"Successfully synced **{len(synced)}** server owner & moderator members in the database:\n{names or 'None detected'}",
-            ephemeral=True,
+            ephemeral=ephemeral,
         )
 
     @app_commands.command(name="add_bot_developer", description="Add a bot developer (Bot Developer only)")
@@ -498,12 +504,15 @@ class Manager(commands.Cog):
                 )
             return
 
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         await self.bot.db.add_manager(user.id, None, PermissionLevel.BOT_DEVELOPER)
         logger.info(f"Added {user.id} as bot developer")
         if interaction.response.is_done():
-            await interaction.followup.send(f"{user.name} has been added as a bot developer.", ephemeral=True)
+            await interaction.followup.send(f"{user.name} has been added as a bot developer.", ephemeral=ephemeral)
         else:
-            await interaction.response.send_message(f"{user.name} has been added as a bot developer.", ephemeral=True)
+            await interaction.response.send_message(
+                f"{user.name} has been added as a bot developer.", ephemeral=ephemeral
+            )
 
     @app_commands.command(name="add_guild_manager", description="Add a guild manager (Admin only)")
     @app_commands.describe(user="The user to add as a guild manager")
@@ -520,17 +529,18 @@ class Manager(commands.Cog):
                 )
             return
 
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         await self.bot.db.add_manager(user.id, interaction.guild_id, PermissionLevel.ADMIN)
         logger.info(f"Added {user.id} as guild manager for guild {interaction.guild_id}")
         if interaction.response.is_done():
             await interaction.followup.send(
                 f"{user.name} has been added as a guild manager for this server.",
-                ephemeral=True,
+                ephemeral=ephemeral,
             )
         else:
             await interaction.response.send_message(
                 f"{user.name} has been added as a guild manager for this server.",
-                ephemeral=True,
+                ephemeral=ephemeral,
             )
 
     @app_commands.command(name="remove_guild_manager", description="Remove a guild manager (Admin only)")
@@ -548,23 +558,25 @@ class Manager(commands.Cog):
                 )
             return
 
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         await self.bot.db.remove_manager(user.id, interaction.guild_id)
         logger.info(f"Removed {user.id} as guild manager for guild {interaction.guild_id}")
         if interaction.response.is_done():
             await interaction.followup.send(
                 f"{user.name} has been removed as a guild manager for this server.",
-                ephemeral=True,
+                ephemeral=ephemeral,
             )
         else:
             await interaction.response.send_message(
                 f"{user.name} has been removed as a guild manager for this server.",
-                ephemeral=True,
+                ephemeral=ephemeral,
             )
 
     @app_commands.command(name="list_managers", description="List all managers and staff for this server")
     @app_commands.default_permissions(manage_guild=True)
     async def list_managers(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
+        await interaction.response.defer(ephemeral=ephemeral)
         logger.info(f"Listing managers for guild {interaction.guild_id}")
         managers_from_db = await self.bot.db.get_all_managers(interaction.guild_id)
         embed = discord.Embed(title="Server Staff & Managers", color=discord.Color.blue())
@@ -604,19 +616,19 @@ class Manager(commands.Cog):
         count = 0
         for cat_name, users in categories.items():
             if users:
-                val = "\\n".join(users)
+                val = "\n".join(users)
                 if len(val) > 1024:
-                    val = val[:1000] + "...\\n(Truncated)"
+                    val = val[:1000] + "...\n(Truncated)"
                 embed.add_field(name=cat_name, value=val, inline=False)
                 count += len(users)
 
         if count == 0:
             embed.description = (
-                "No managers found in the database.\\nUse `/sync_managers` to import server mods automatically."
+                "No managers found in the database.\nUse `/sync_managers` to import server mods automatically."
             )
 
         logger.debug(f"Found {count} managers for guild {interaction.guild_id}")
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
     @app_commands.command(
         name="set_permission_level",
@@ -657,6 +669,7 @@ class Manager(commands.Cog):
                 )
             return
 
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         if level == PermissionLevel.REGULAR_USER:
             await self.bot.db.remove_manager(user.id, interaction.guild_id)
             logger.info(f"Removed all permissions for user {user.id}")
@@ -674,10 +687,10 @@ class Manager(commands.Cog):
         }
         name_str = permission_names.get(PermissionLevel(level), str(level))
         if interaction.response.is_done():
-            await interaction.followup.send(f"Set {user.name}'s permission level to {name_str}.", ephemeral=True)
+            await interaction.followup.send(f"Set {user.name}'s permission level to {name_str}.", ephemeral=ephemeral)
         else:
             await interaction.response.send_message(
-                f"Set {user.name}'s permission level to {name_str}.", ephemeral=True
+                f"Set {user.name}'s permission level to {name_str}.", ephemeral=ephemeral
             )
 
 

@@ -24,7 +24,10 @@ async def should_use_ephemeral(interaction: discord.Interaction, db) -> bool:
     if category_id is None:
         return True
 
-    configured_category_id = await db.get_group_category(guild.id)
+    get_cat = getattr(db, "get_group_category", None)
+    if not callable(get_cat):
+        return True
+    configured_category_id = await get_cat(guild.id)
     return category_id != configured_category_id
 
 
