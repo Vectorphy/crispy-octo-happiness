@@ -7,6 +7,7 @@ import pytest
 
 from cogs.study_groups import GroupInvitationView, StudyGroup, StudyGroupCog
 from cogs.tasklist import TaskActionView, TaskList
+from cogs.voice_channels import VoiceChannels
 from database import DBHandler
 from test_file import run_all_feature_tests
 
@@ -242,8 +243,8 @@ async def test_task_delete_empty_menu_and_dm_public_acknowledgement():
     request.guild = None
     cog = TaskList(bot)
     await cog.delete_task.callback(cog, request)
-    request.response.defer.assert_awaited_once_with()
-    request.followup.send.assert_awaited_once_with("You have no tasks to delete.")
+    request.response.defer.assert_awaited_once_with(ephemeral=True)
+    request.followup.send.assert_awaited_once_with("You have no tasks to delete.", ephemeral=True)
 
 
 @pytest.mark.asyncio
@@ -258,10 +259,21 @@ async def test_task_list_defaults_to_global_scope_and_true_lists_all_groups():
     request.channel_id = None
     cog = TaskList(bot)
 
+    # In a server, all_groups=False limits tasks to that guild/server
     await cog.list_tasks.callback(cog, request, all_groups="false")
-    bot.db.get_user_tasks.assert_awaited_once_with(123, global_only=True)
+    bot.db.get_user_tasks.assert_awaited_once_with(123, guild_id=99)
     request.response.defer.assert_awaited_once_with(ephemeral=False)
 
+    # In DM (no guild), all_groups=False defaults to global tasks
+    bot.db.get_user_tasks.reset_mock()
+    request_dm = interaction()
+    request_dm.guild = None
+    request_dm.channel_id = None
+    await cog.list_tasks.callback(cog, request_dm, all_groups="false")
+    bot.db.get_user_tasks.assert_awaited_once_with(123, global_only=True)
+    request_dm.response.defer.assert_awaited_once_with(ephemeral=False)
+
+    # all_groups=True fetches all tasks across all groups/servers and is ephemeral
     bot.db.get_user_tasks.reset_mock()
     request.response.defer.reset_mock()
     request.followup.send.reset_mock()
@@ -270,6 +282,43 @@ async def test_task_list_defaults_to_global_scope_and_true_lists_all_groups():
     request.response.defer.assert_awaited_once_with(ephemeral=True)
     request.followup.send.assert_awaited_once()
     assert request.followup.send.call_args.kwargs["ephemeral"] is True
+
+
+@pytest.mark.asyncio
+async def test_voice_commands_use_category_visibility():
+    bot = MagicMock()
+    bot.db = AsyncMock()
+    bot.db.get_group_category.return_value = 50
+    bot.db.get_study_group.return_value = None
+    cog = VoiceChannels(bot)
+
+    # Outside category -> ephemeral=True
+    req_outside = interaction()
+    req_outside.guild.id = 99
+    req_outside.channel = MagicMock()
+    req_outside.channel.category_id = 10
+    await cog.create_vc.callback(cog, req_outside)
+    req_outside.response.defer.assert_awaited_once_with(ephemeral=True)
+    req_outside.followup.send.assert_awaited_once_with("No study group exists in this server.", ephemeral=True)
+
+    # Inside configured category -> ephemeral=False
+    req_inside = interaction()
+    req_inside.guild.id = 99
+    req_inside.channel = MagicMock()
+    req_inside.channel.category_id = 50
+    await cog.create_vc.callback(cog, req_inside)
+    req_inside.response.defer.assert_awaited_once_with(ephemeral=False)
+    req_inside.followup.send.assert_awaited_once_with("No study group exists in this server.", ephemeral=False)
+
+    # Delete commands outside category -> ephemeral=True
+    req_delete = interaction()
+    req_delete.guild.id = 99
+    req_delete.channel = MagicMock()
+    req_delete.channel.category_id = 10
+    dummy_vc = MagicMock(spec=discord.VoiceChannel)
+    await cog.delete_vc.callback(cog, req_delete, dummy_vc)
+    req_delete.response.defer.assert_awaited_once_with(ephemeral=True)
+    req_delete.followup.send.assert_awaited_once_with("No study group exists for this server.", ephemeral=True)
 
 
 @pytest.mark.asyncio

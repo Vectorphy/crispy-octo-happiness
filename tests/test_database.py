@@ -64,12 +64,15 @@ class TestDBHandler(unittest.TestCase):
             await self.db.connect()
             await self.db.add_task(123, "Global task")
             await self.db.add_task(123, "Group task", group_id="group-1")
+            await self.db.add_task(123, "Server task", guild_id=99)
 
             global_tasks = await self.db.get_user_tasks(123, global_only=True)
+            server_tasks = await self.db.get_user_tasks(123, guild_id=99)
             all_tasks = await self.db.get_user_tasks(123)
 
             self.assertEqual([task["description"] for task in global_tasks], ["Global task"])
-            self.assertEqual([task["description"] for task in all_tasks], ["Global task", "Group task"])
+            self.assertEqual([task["description"] for task in server_tasks], ["Server task"])
+            self.assertEqual([task["description"] for task in all_tasks], ["Global task", "Group task", "Server task"])
 
         asyncio.run(run_test())
 

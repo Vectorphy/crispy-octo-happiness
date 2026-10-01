@@ -223,6 +223,30 @@ class DBHandler:
                 cursor.execute("ALTER TABLE tasks ADD COLUMN task_number INTEGER DEFAULT NULL;")
                 logger.info("Added 'task_number' column to 'tasks' table.")
 
+            if "guild_id" not in task_columns:
+                cursor.execute("ALTER TABLE tasks ADD COLUMN guild_id INTEGER DEFAULT NULL;")
+                logger.info("Added 'guild_id' column to 'tasks' table.")
+
+            # Backfill guild_id for tasks associated with a study group
+            cursor.execute("""
+            UPDATE tasks
+            SET guild_id = (
+                SELECT guild_id FROM study_groups
+                WHERE study_groups.group_id = tasks.group_id
+                   OR CAST(study_groups.id AS TEXT) = tasks.group_id
+                LIMIT 1
+            )
+            WHERE guild_id IS NULL AND group_id IS NOT NULL;
+            """)
+
+            # If the database only has a single guild registered across study groups/settings, backfill remaining unassigned tasks
+            cursor.execute(
+                "SELECT DISTINCT guild_id FROM study_groups UNION SELECT DISTINCT guild_id FROM guild_settings;"
+            )
+            distinct_guilds = [r[0] for r in cursor.fetchall() if r[0] is not None]
+            if len(distinct_guilds) == 1:
+                cursor.execute("UPDATE tasks SET guild_id = ? WHERE guild_id IS NULL;", (distinct_guilds[0],))
+
             ### CHECKIN SESSIONS TABLE
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS checkin_sessions (
@@ -1041,12 +1065,22 @@ class DBHandler:
             logger.debug(f"Retrieved {len(managers)} managers for guild {guild_id}")
             return managers
 
-    async def add_task(self, user_id, description, group_id=None):
+    async def add_task(self, user_id, description, group_id=None, guild_id=None):
         import secrets
         import string
 
         async with self.lock:
             cursor = self.conn.cursor()
+
+            # If guild_id not provided, try to find it from group_id
+            if group_id and not guild_id:
+                cursor.execute(
+                    "SELECT guild_id FROM study_groups WHERE group_id = ? OR CAST(id AS TEXT) = ? LIMIT 1",
+                    (str(group_id), str(group_id)),
+                )
+                row = cursor.fetchone()
+                if row:
+                    guild_id = row[0]
 
             # Generate a unique 4-character ID
             while True:
@@ -1057,13 +1091,15 @@ class DBHandler:
 
             cursor.execute(
                 """
-            INSERT INTO tasks (user_id, description, group_id, task_id_str)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO tasks (user_id, description, group_id, task_id_str, guild_id)
+            VALUES (?, ?, ?, ?, ?)
             """,
-                (user_id, description, str(group_id) if group_id else None, new_id),
+                (user_id, description, str(group_id) if group_id else None, new_id, guild_id),
             )
             self.conn.commit()
-            logger.info(f"Added task for user {user_id}: ID={new_id}, group={group_id}, description='{description}'")
+            logger.info(
+                f"Added task for user {user_id}: ID={new_id}, group={group_id}, guild={guild_id}, description='{description}'"
+            )
             return new_id
 
     async def complete_task(self, user_id, task_id, group_id=None):
@@ -1116,7 +1152,7 @@ class DBHandler:
             self.conn.commit()
             return cursor.rowcount > 0
 
-    async def get_user_tasks(self, user_id, group_id=None, global_only=False):
+    async def get_user_tasks(self, user_id, group_id=None, global_only=False, guild_id=None):
         async with self.lock:
             cursor = self.conn.cursor()
             if group_id:
@@ -1124,9 +1160,14 @@ class DBHandler:
                     "SELECT * FROM tasks WHERE user_id = ? AND group_id = ? ORDER BY id ASC",
                     (user_id, str(group_id)),
                 )
+            elif guild_id is not None:
+                cursor.execute(
+                    "SELECT * FROM tasks WHERE user_id = ? AND guild_id = ? ORDER BY id ASC",
+                    (user_id, guild_id),
+                )
             elif global_only:
                 cursor.execute(
-                    "SELECT * FROM tasks WHERE user_id = ? AND group_id IS NULL ORDER BY id ASC",
+                    "SELECT * FROM tasks WHERE user_id = ? AND group_id IS NULL AND guild_id IS NULL ORDER BY id ASC",
                     (user_id,),
                 )
             else:
@@ -1186,6 +1227,21 @@ class DBHandler:
             self.conn.commit()
             count = cursor.rowcount
             logger.info(f"Purged {count} tasks for user {user_id} in group {group_id}")
+            return count
+
+    async def purge_guild_tasks(self, user_id, guild_id):
+        async with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+            DELETE FROM tasks
+            WHERE user_id = ? AND guild_id = ?
+            """,
+                (user_id, guild_id),
+            )
+            self.conn.commit()
+            count = cursor.rowcount
+            logger.info(f"Purged {count} tasks for user {user_id} in guild {guild_id}")
             return count
 
     async def purge_all_user_tasks(self, user_id):
