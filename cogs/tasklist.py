@@ -212,7 +212,7 @@ class TaskList(commands.Cog):
         if group_id:
             tasks = await self.bot.db.get_user_tasks(interaction.user.id, group_id=group_id)
         else:
-            tasks = await self.bot.db.get_user_tasks(interaction.user.id)
+            tasks = await self.bot.db.get_user_tasks(interaction.user.id, global_only=True)
         choices = [dict(task) for task in tasks if action == "delete" or not task["completed"]]
         for task in choices:
             task["group_name"] = group_name or ("Study group" if task.get("group_id") else "Global Task")
@@ -226,6 +226,8 @@ class TaskList(commands.Cog):
     @app_commands.describe(all_groups="Show tasks across all groups (default False if inside a group)")
     async def list_tasks(self, interaction: discord.Interaction, all_groups: bool = False):
         await interaction.response.defer()
+        if isinstance(all_groups, str):
+            all_groups = all_groups.strip().lower() in {"true", "1", "yes", "on"}
         group_id = None
         group_name = None
         channel_id = getattr(interaction, "channel_id", None)
@@ -236,11 +238,14 @@ class TaskList(commands.Cog):
                 group_id = group.get("group_id") or str(group.get("id"))
                 group_name = group.get("name")
 
-        if group_id:
+        if all_groups:
+            tasks = await self.bot.db.get_user_tasks(interaction.user.id)
+            title = f"{interaction.user.display_name}'s Tasks — All Groups"
+        elif group_id:
             tasks = await self.bot.db.get_user_tasks(interaction.user.id, group_id=group_id)
             title = f"{interaction.user.display_name}'s Tasks — {group_name}"
         else:
-            tasks = await self.bot.db.get_user_tasks(interaction.user.id)
+            tasks = await self.bot.db.get_user_tasks(interaction.user.id, global_only=True)
             title = f"{interaction.user.display_name}'s Tasks"
 
         if not tasks:

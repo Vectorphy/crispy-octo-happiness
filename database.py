@@ -1116,13 +1116,18 @@ class DBHandler:
             self.conn.commit()
             return cursor.rowcount > 0
 
-    async def get_user_tasks(self, user_id, group_id=None):
+    async def get_user_tasks(self, user_id, group_id=None, global_only=False):
         async with self.lock:
             cursor = self.conn.cursor()
             if group_id:
                 cursor.execute(
                     "SELECT * FROM tasks WHERE user_id = ? AND group_id = ? ORDER BY id ASC",
                     (user_id, str(group_id)),
+                )
+            elif global_only:
+                cursor.execute(
+                    "SELECT * FROM tasks WHERE user_id = ? AND group_id IS NULL ORDER BY id ASC",
+                    (user_id,),
                 )
             else:
                 cursor.execute("SELECT * FROM tasks WHERE user_id = ? ORDER BY id ASC", (user_id,))

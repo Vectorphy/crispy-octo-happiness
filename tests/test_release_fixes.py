@@ -242,6 +242,26 @@ async def test_task_delete_empty_menu_and_dm_public_acknowledgement():
 
 
 @pytest.mark.asyncio
+async def test_task_list_defaults_to_global_scope_and_true_lists_all_groups():
+    bot = MagicMock()
+    bot.db = AsyncMock()
+    bot.db.get_study_group_by_channel.return_value = None
+    bot.db.get_user_tasks.return_value = [
+        {"id": 1, "description": "Global", "completed": 0, "group_id": None},
+    ]
+    request = interaction()
+    request.channel_id = None
+    cog = TaskList(bot)
+
+    await cog.list_tasks.callback(cog, request, all_groups="false")
+    bot.db.get_user_tasks.assert_awaited_once_with(123, global_only=True)
+
+    bot.db.get_user_tasks.reset_mock()
+    await cog.list_tasks.callback(cog, request, all_groups=True)
+    bot.db.get_user_tasks.assert_awaited_once_with(123)
+
+
+@pytest.mark.asyncio
 async def test_task_purge_removes_only_owners_bot_task_messages():
     bot = MagicMock()
     bot.user.id = 999

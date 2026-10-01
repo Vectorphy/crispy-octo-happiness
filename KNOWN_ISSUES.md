@@ -106,6 +106,12 @@
 
 ## Verified fixes and release checks
 
+### AD-14: Task list scope leaked group tasks by default
+- **Severity**: High (P1)
+- **Status**: **RESOLVED**
+- **Affected Files**: `cogs/tasklist.py`, `database.py`, `tests/test_release_fixes.py`, `tests/test_database.py`
+- **Details**: Default task listing now shows only global tasks outside a group. Cross-group results require an explicit `all_groups: true` value.
+
 ### AD-13: Force Video and strict Speak controls
 - **Severity**: Medium (P2)
 - **Status**: **RESOLVED**

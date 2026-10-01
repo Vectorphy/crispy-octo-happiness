@@ -59,6 +59,20 @@ class TestDBHandler(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_task_scope_can_be_global_only_or_all_groups(self):
+        async def run_test():
+            await self.db.connect()
+            await self.db.add_task(123, "Global task")
+            await self.db.add_task(123, "Group task", group_id="group-1")
+
+            global_tasks = await self.db.get_user_tasks(123, global_only=True)
+            all_tasks = await self.db.get_user_tasks(123)
+
+            self.assertEqual([task["description"] for task in global_tasks], ["Global task"])
+            self.assertEqual([task["description"] for task in all_tasks], ["Global task", "Group task"])
+
+        asyncio.run(run_test())
+
     def test_study_group_transfer_and_channel_lookup(self):
         async def run_test():
             await self.db.connect()
