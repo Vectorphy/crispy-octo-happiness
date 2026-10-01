@@ -254,7 +254,8 @@ class TaskList(commands.Cog):
     async def list_tasks(self, interaction: discord.Interaction, all_groups: bool = False):
         if isinstance(all_groups, str):
             all_groups = all_groups.strip().lower() in {"true", "1", "yes", "on"}
-        await interaction.response.defer(ephemeral=all_groups)
+        ephemeral = True if all_groups else await should_use_ephemeral(interaction, self.bot.db)
+        await interaction.response.defer(ephemeral=ephemeral)
         group_id = None
         group_name = None
         channel_id = getattr(interaction, "channel_id", None)
@@ -286,11 +287,11 @@ class TaskList(commands.Cog):
             title = f"{interaction.user.display_name}'s Tasks"
 
         if not tasks:
-            await interaction.followup.send("You have no tasks.", ephemeral=all_groups)
+            await interaction.followup.send("You have no tasks.", ephemeral=ephemeral)
             return
 
         view = TaskPaginationView(tasks, title)
-        await interaction.followup.send(embed=view.get_embed(), view=view, ephemeral=all_groups)
+        await interaction.followup.send(embed=view.get_embed(), view=view, ephemeral=ephemeral)
 
     @app_commands.command(name="task_delete", description="Delete one or multiple tasks")
     @app_commands.describe(task_ids="The ID(s) to delete (comma-separated, optional if using the menu)")
