@@ -110,7 +110,7 @@
 - **Severity**: High (P1)
 - **Status**: **RESOLVED**
 - **Affected Files**: `cogs/tasklist.py`, `database.py`, `tests/test_release_fixes.py`, `tests/test_database.py`
-- **Details**: Default task listing now shows only global tasks outside a group. Cross-group results require an explicit `all_groups: true` value.
+- **Details**: Default task listing now shows only global tasks outside a group. Cross-group results require an explicit `all_groups: true` value and are sent ephemerally.
 
 ### AD-13: Force Video and strict Speak controls
 - **Severity**: Medium (P2)

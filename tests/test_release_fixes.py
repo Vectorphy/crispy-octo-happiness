@@ -260,10 +260,16 @@ async def test_task_list_defaults_to_global_scope_and_true_lists_all_groups():
 
     await cog.list_tasks.callback(cog, request, all_groups="false")
     bot.db.get_user_tasks.assert_awaited_once_with(123, global_only=True)
+    request.response.defer.assert_awaited_once_with(ephemeral=False)
 
     bot.db.get_user_tasks.reset_mock()
+    request.response.defer.reset_mock()
+    request.followup.send.reset_mock()
     await cog.list_tasks.callback(cog, request, all_groups=True)
     bot.db.get_user_tasks.assert_awaited_once_with(123)
+    request.response.defer.assert_awaited_once_with(ephemeral=True)
+    request.followup.send.assert_awaited_once()
+    assert request.followup.send.call_args.kwargs["ephemeral"] is True
 
 
 @pytest.mark.asyncio
