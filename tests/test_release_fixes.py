@@ -114,7 +114,32 @@ async def test_voice_toggle_preserves_connect_and_persists(permission):
     assert overwrite.connect is True
     assert getattr(overwrite, permission) == (permission == "stream")
     group.db.update_study_group_by_id.assert_awaited_once()
-    channel.set_permissions.assert_awaited_once()
+    assert channel.set_permissions.await_count == (2 if permission == "speak" else 1)
+    if permission == "stream":
+        assert group.video_mode == "force"
+    else:
+        targets = {call.args[0] for call in channel.set_permissions.await_args_list}
+        assert targets == {role, group.guild.default_role}
+        assert all(call.kwargs["overwrite"].speak is False for call in channel.set_permissions.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_force_video_disconnects_member_after_timer():
+    group, channel, _ = group_fixture()
+    group.active = True
+    group.video_mode = "force"
+    group.video_timer = 60
+    channel.id = group.vc_id
+    member = MagicMock(spec=discord.Member)
+    member.id = 456
+    member.voice = MagicMock(channel=channel, self_video=False)
+
+    with patch("cogs.study_groups.asyncio.sleep", new=AsyncMock()) as sleep:
+        await group._enforce_video(member)
+
+    sleep.assert_awaited_once_with(60)
+    member.move_to.assert_awaited_once_with(None, reason=f"Video required in study group {group.group_id}")
+    assert member.id not in group.video_enforcement_tasks
 
 
 @pytest.mark.asyncio
@@ -505,7 +530,7 @@ async def test_voice_setting_database_failure_rolls_back_discord_permissions():
     group.db.update_study_group_by_id.side_effect = sqlite3.OperationalError("busy")
     await group.speak_toggle_callback(interaction())
     assert group.speak_enabled is True
-    assert channel.set_permissions.await_count == 2
+    assert channel.set_permissions.await_count == 4
     restored = channel.set_permissions.call_args.kwargs["overwrite"]
     assert restored.connect is True and restored.speak is True
     group.group_info_embed.assert_not_awaited()

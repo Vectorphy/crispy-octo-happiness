@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Force Video now stores `force`, enforces a 60-second camera grace period, and Speak toggles update both channel-wide and group-role microphone permissions.
 - Study-group voice channels now remain available when the last member leaves; deletion remains manual or part of group cleanup.
 - Added a `main.py` compatibility launcher for hosting providers that invoke `/home/container/main.py`; it delegates to the canonical `bot.py` startup path.
 - Corrected the TODO and known-issue registers after checking completion claims against the release code and test assertions.

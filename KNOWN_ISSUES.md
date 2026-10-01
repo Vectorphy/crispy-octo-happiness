@@ -106,6 +106,12 @@
 
 ## Verified fixes and release checks
 
+### AD-13: Force Video and strict Speak controls
+- **Severity**: Medium (P2)
+- **Status**: **RESOLVED**
+- **Affected Files**: `cogs/study_groups.py`, `tests/test_release_fixes.py`
+- **Details**: Force Video now gives members a 60-second camera grace period before disconnecting them, while Speak updates both `@everyone` and group-role microphone permissions with transactional rollback.
+
 ### AD-12: Study-group voice channels were deleted when empty
 - **Severity**: Medium (P2)
 - **Status**: **RESOLVED**

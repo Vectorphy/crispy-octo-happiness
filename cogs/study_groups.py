@@ -114,7 +114,7 @@ class StudyGroup:
         # VC Settings
         self.speak_enabled: bool = True
         self.video_mode: str = "off"
-        self.video_timer: int = 10  # in seconds
+        self.video_timer: int = 60  # in seconds
 
         # Time related attributes
         self.start_time: float = datetime.now().timestamp()
@@ -132,6 +132,7 @@ class StudyGroup:
         self.guild: Optional[discord.Guild] = None
         self.view: Optional[View] = None
         self.membership_lock = asyncio.Lock()
+        self.video_enforcement_tasks: dict[int, asyncio.Task[None]] = {}
 
     ## Setup - Generate Group ID
     def generate_group_id(self) -> str:
@@ -563,7 +564,9 @@ class StudyGroup:
 
             # Row 1: VC and Session Controls
             speak_toggle_button: Button[Any] = Button(label="Speak On/Off", style=discord.ButtonStyle.secondary, row=1)
-            video_toggle_button: Button[Any] = Button(label="Video On/Off", style=discord.ButtonStyle.secondary, row=1)
+            video_toggle_button: Button[Any] = Button(
+                label="Force Video On/Off", style=discord.ButtonStyle.secondary, row=1
+            )
             extend_button: Button[Any] = Button(label="Extend", style=discord.ButtonStyle.secondary, row=1)
             votekick_button: Button[Any] = Button(label="Votekick", style=discord.ButtonStyle.secondary, row=1)
 
@@ -1094,11 +1097,22 @@ class StudyGroup:
             await interaction.followup.send("The group's voice channel or role is unavailable.", ephemeral=True)
             return
         enabled = not self.speak_enabled if permission == "speak" else self.video_mode == "off"
-        overwrite = channel.overwrites_for(role)
-        previous_overwrite = discord.PermissionOverwrite.from_pair(*overwrite.pair())
-        setattr(overwrite, permission, enabled)
+        targets = [role]
+        if permission == "speak" and self.guild is not None:
+            targets.append(self.guild.default_role)
+        previous_overwrites: list[tuple[discord.Role, discord.PermissionOverwrite]] = []
+        overwrites: list[tuple[discord.Role, discord.PermissionOverwrite]] = []
+        for target in targets:
+            overwrite = channel.overwrites_for(target)
+            previous_overwrites.append((target, discord.PermissionOverwrite.from_pair(*overwrite.pair())))
+            overwrites.append((target, overwrite))
+        for _, overwrite in overwrites:
+            setattr(overwrite, permission, enabled)
+        applied_targets: list[discord.Role] = []
         try:
-            await channel.set_permissions(role, overwrite=overwrite)
+            for target, overwrite in overwrites:
+                await channel.set_permissions(target, overwrite=overwrite)
+                applied_targets.append(target)
         except discord.HTTPException:
             logger.exception(
                 "Voice permission update failed guild_id=%s group_id=%s user_id=%s",
@@ -1106,6 +1120,17 @@ class StudyGroup:
                 self.group_id,
                 interaction.user.id,
             )
+            for target, previous_overwrite in previous_overwrites:
+                if target in applied_targets:
+                    try:
+                        await channel.set_permissions(target, overwrite=previous_overwrite)
+                    except discord.HTTPException:
+                        logger.exception(
+                            "Voice permission rollback failed guild_id=%s group_id=%s target_id=%s",
+                            self.guild_id,
+                            self.group_id,
+                            target.id,
+                        )
             await interaction.followup.send("Discord could not update the voice permissions.", ephemeral=True)
             return
         changes: dict[str, Any] = {"group_id": self.group_id}
@@ -1113,26 +1138,88 @@ class StudyGroup:
             changes["speak_enabled"] = enabled
             label = "Speak"
         else:
-            changes["video_mode"] = "on" if enabled else "off"
+            changes["video_mode"] = "force" if enabled else "off"
             label = "Video"
         try:
             await self.db.update_study_group_by_id(changes)
         except sqlite3.Error:
             logger.exception("Voice setting save failed guild_id=%s group_id=%s", self.guild_id, self.group_id)
-            try:
-                await channel.set_permissions(role, overwrite=previous_overwrite)
-            except discord.HTTPException:
-                logger.exception(
-                    "Voice permission rollback failed guild_id=%s group_id=%s", self.guild_id, self.group_id
-                )
+            for target, previous_overwrite in previous_overwrites:
+                try:
+                    await channel.set_permissions(target, overwrite=previous_overwrite)
+                except discord.HTTPException:
+                    logger.exception(
+                        "Voice permission rollback failed guild_id=%s group_id=%s target_id=%s",
+                        self.guild_id,
+                        self.group_id,
+                        target.id,
+                    )
             await interaction.followup.send("The voice setting could not be saved. Try again later.", ephemeral=True)
             return
         if permission == "speak":
             self.speak_enabled = enabled
         else:
             self.video_mode = changes["video_mode"]
+            if enabled and isinstance(channel, discord.VoiceChannel):
+                for member in channel.members:
+                    if not member.bot and member.voice and not member.voice.self_video:
+                        self._schedule_video_enforcement(member)
+            else:
+                self._cancel_video_enforcement()
         await interaction.followup.send(f"{label} Toggle: {'On' if enabled else 'Off'}.", ephemeral=True)
         await self.group_info_embed(update=True)
+
+    def _cancel_video_enforcement(self, user_id: Optional[int] = None) -> None:
+        if user_id is None:
+            tasks = list(self.video_enforcement_tasks.values())
+            self.video_enforcement_tasks.clear()
+        else:
+            task = self.video_enforcement_tasks.pop(user_id, None)
+            tasks = [task] if task is not None else []
+        for task in tasks:
+            task.cancel()
+
+    def _schedule_video_enforcement(self, member: discord.Member) -> None:
+        self._cancel_video_enforcement(member.id)
+        self.video_enforcement_tasks[member.id] = asyncio.create_task(self._enforce_video(member))
+
+    async def _enforce_video(self, member: discord.Member) -> None:
+        user_id = member.id
+        try:
+            await asyncio.sleep(self.video_timer)
+            if not self.active or self.video_mode != "force":
+                return
+            voice_state = member.voice
+            if not voice_state or not voice_state.channel or voice_state.channel.id != self.vc_id:
+                return
+            if voice_state.self_video:
+                return
+            await member.move_to(None, reason=f"Video required in study group {self.group_id}")
+            logger.info(
+                "Disconnected member without video guild_id=%s group_id=%s user_id=%s",
+                self.guild_id,
+                self.group_id,
+                user_id,
+            )
+        except asyncio.CancelledError:
+            return
+        except discord.HTTPException:
+            logger.exception(
+                "Could not enforce video requirement guild_id=%s group_id=%s user_id=%s",
+                self.guild_id,
+                self.group_id,
+                user_id,
+            )
+        finally:
+            self.video_enforcement_tasks.pop(user_id, None)
+
+    async def handle_voice_state_update(self, member: discord.Member, before, after) -> None:
+        if not self.active or self.video_mode != "force" or member.bot:
+            return
+        if after.channel is None or after.channel.id != self.vc_id or after.self_video:
+            self._cancel_video_enforcement(member.id)
+            return
+        self._schedule_video_enforcement(member)
 
     ## Callback (Not Implemented)- Votekick
     async def votekick_callback(self, interaction: discord.Interaction):
@@ -1493,6 +1580,7 @@ class StudyGroup:
             self.text_id = None
 
             # Clear VC settings
+            self._cancel_video_enforcement()
             self.speak_enabled = None
             self.video_mode = None
             self.video_timer = None
@@ -1519,7 +1607,7 @@ class StudyGroup:
             self.study_group = study_group
             self.speak_enabled = True  # Track whether speaking is enabled in the VC
             self.video_mode = "on"  # "on", "off", or "force"
-            self.video_timer = 10  # Timer for forcing video to be on, default to 10 seconds
+            self.video_timer = 60  # Timer for forcing video to be on, default to 60 seconds
 
         def create_vc(self, guild):
             """Create a voice channel for the group and return its ID."""
@@ -1586,6 +1674,12 @@ class StudyGroupCog(commands.Cog):
         self.bot = bot
         self.active_study_groups = {}
         logger.info("Study Group cog initialized")
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member: discord.Member, before, after):
+        for group in list(self.active_study_groups.values()):
+            if group.vc_id == getattr(before.channel, "id", None) or group.vc_id == getattr(after.channel, "id", None):
+                await group.handle_voice_state_update(member, before, after)
 
     @app_commands.command(name="set_mod_log_channel", description="Set or disable study group action logging")
     @app_commands.default_permissions(manage_guild=True)
