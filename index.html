@@ -39,11 +39,12 @@
     .band h2, .developers h2 { margin: 0; font-size: 2.6rem; line-height: 1; font-weight: 500; }
     .band p { max-width: 600px; margin: 0; color: #dce5d9; font-size: 1.15rem; }
     .developers { padding: 76px 0 90px; }
-    .developer-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin-top: 36px; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+    .developer-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-top: 36px; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
     .developer { min-height: 150px; padding: 24px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--card); text-decoration: none; }
     .developer:hover, .developer:focus { background: #f1e6d6; }
     .developer small { display: block; margin-bottom: 14px; color: var(--accent-dark); font: 700 .72rem Arial, sans-serif; letter-spacing: .12em; text-transform: uppercase; }
     .developer strong { font-size: 1.35rem; font-weight: 500; }
+    .developer-note { margin: 28px 0 0; color: var(--muted); font-size: 1.1rem; }
     footer { padding: 24px 0 36px; border-top: 1px solid var(--line); color: var(--muted); font: .78rem Arial, sans-serif; }
     footer .wrap { display: flex; justify-content: space-between; gap: 20px; }
     footer a { text-decoration: none; }
@@ -68,7 +69,7 @@
       <div class="orbit" aria-hidden="true"><div class="orbit-card"><strong>25:05</strong><span>One focused block<br>at a time</span></div></div>
     </section>
     <section class="band"><div class="wrap band-grid"><h2>Less friction.<br>More follow-through.</h2><p>Build a calm rhythm for your server: gather a group, choose a session, make the next step visible, and keep moving together.</p></div></section>
-    <section class="wrap developers"><h2>Built in the open</h2><div class="developer-grid"><a class="developer" href="https://github.com/ImpulseADHD" rel="me noopener noreferrer"><small>Developer</small><strong>ImpulseADHD ↗</strong></a><a class="developer" href="https://github.com/7han0s" rel="noopener noreferrer"><small>Developer</small><strong>7han0s ↗</strong></a><a class="developer" href="https://github.com/SleepyZenitsu" rel="noopener noreferrer"><small>Developer</small><strong>SleepyZenitsu ↗</strong></a></div></section>
+    <section class="wrap developers"><h2>Built in the open</h2><div class="developer-grid"><a class="developer" href="https://github.com/Vectorphy" rel="me noopener noreferrer"><small>Project owner</small><strong>Vectorphy ↗</strong></a><a class="developer" href="https://github.com/ImpulseADHD" rel="me noopener noreferrer"><small>Developer</small><strong>ImpulseADHD ↗</strong></a><a class="developer" href="https://github.com/7han0s" rel="noopener noreferrer"><small>Developer</small><strong>7han0s ↗</strong></a><a class="developer" href="https://github.com/SleepyZenitsu" rel="noopener noreferrer"><small>Developer</small><strong>SleepyZenitsu ↗</strong></a></div><p class="developer-note">We provide employment to AI agents while we chase shiny objects.</p></section>
   </main>
   <footer><div class="wrap"><p>© <span data-year></span> Chief Productivity Officer</p><p><a href="https://github.com/Vectorphy" rel="me noopener noreferrer">GitHub profile ↗</a></p></div></footer>
   <script>document.querySelector('[data-year]').textContent = new Date().getFullYear();</script>
