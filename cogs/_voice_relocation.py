@@ -54,6 +54,12 @@ async def relocate_to_default_vc(member: discord.Member, db, source_id: int, gro
             member.id,
             destination_id,
         )
+        try:
+            await member.send(
+                f"You were moved to **{destination.name}** because camera or screen sharing is required in your study group."
+            )
+        except discord.HTTPException:
+            logger.warning("Could not send relocation notification guild_id=%s user_id=%s", guild.id, member.id)
         return True
     except (discord.HTTPException, sqlite3.Error, OSError, RuntimeError, ValueError):
         logger.exception("Voice relocation failed guild_id=%s group_id=%s user_id=%s", guild.id, group_id, member.id)
