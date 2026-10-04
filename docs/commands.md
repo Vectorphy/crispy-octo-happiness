@@ -79,6 +79,7 @@
 ## Management
 
 - `/add_bot_developer <user>`: Add a bot developer (Bot Developer only)
+- `/remove_bot_developer <user>`: Remove a bot developer (Bot Developer only)
   - `user`: The user to promote to bot developer
   - Grants the highest level of permissions to the specified user.
 

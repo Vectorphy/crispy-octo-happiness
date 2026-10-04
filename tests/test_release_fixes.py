@@ -29,6 +29,8 @@ def interaction(user_id=123):
 def group_fixture():
     bot = MagicMock()
     bot.db = AsyncMock()
+    bot.db.get_user_created_group_count = AsyncMock(return_value=0)
+    bot.db.get_user_joined_group_count = AsyncMock(return_value=0)
     cog = StudyGroupCog(bot)
     group = StudyGroup(bot.db, cog, 99, "Physics", 123, 20, 5, [123])
     group.active = True
@@ -508,6 +510,8 @@ async def test_failed_invitation_admission_leaves_roster_unchanged(failure):
 @pytest.mark.asyncio
 async def test_declined_invitation_cannot_be_accepted():
     group, channel, role = group_fixture()
+    owner = AsyncMock(spec=discord.Member)
+    group.guild.get_member.return_value = owner
     view = GroupInvitationView(group, 456)
     await view.decline_button.callback(interaction(456))
     await view.join_button.callback(interaction(456))

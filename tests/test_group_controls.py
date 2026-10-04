@@ -104,7 +104,10 @@ def creation(monkeypatch):
     monkeypatch.setattr(StudyGroup, "button_view", AsyncMock())
     monkeypatch.setattr(StudyGroup, "group_info_embed", AsyncMock())
     monkeypatch.setattr(StudyGroup, "check_end_condition", AsyncMock())
-    return environment()
+    cog, guild, people, category, text, voice = environment()
+    cog.bot.db.get_user_created_group_count = AsyncMock(return_value=0)
+    cog.bot.db.get_user_joined_group_count = AsyncMock(return_value=0)
+    return cog, guild, people, category, text, voice
 
 
 @pytest.mark.asyncio

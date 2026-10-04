@@ -363,6 +363,54 @@ class PomodoroInvitationView(discord.ui.View):
         session.participants.add(interaction.user.id)
         await self.cog._persist_session(session)
         member = guild.get_member(interaction.user.id)
+        
+        sg_cog = self.cog.bot.get_cog("StudyGroupCog")
+        if sg_cog:
+            db_grp = await self.cog.bot.db.fetch_study_group_by_id(session.group_id)
+            if db_grp:
+                group = sg_cog.active_study_groups.get(session.group_id)
+                if not group:
+                    members = await self.cog.bot.db.fetch_members_of_group(session.group_id)
+                    from cogs.study_groups import StudyGroup
+                    group = StudyGroup(
+                        self.cog.bot.db,
+                        sg_cog,
+                        session.guild_id,
+                        db_grp["name"],
+                        db_grp["creator_id"],
+                        db_grp.get("category_id") or 0,
+                        db_grp["max_members"],
+                        members,
+                    )
+                    group.group_id = session.group_id
+                    group.member_ids = list(dict.fromkeys(members))
+                    group.owner_id = db_grp["owner_id"]
+                    group.guild = guild
+                    group.active = True
+                    group.text_id = db_grp.get("text_id") or 0
+                    group.vc_id = db_grp.get("vc_id") or 0
+                    group.group_role_id = db_grp.get("group_role_id") or 0
+                    group.info_embed_id = db_grp.get("info_embed_id") or 0
+                    group.start_time = db_grp.get("start_time") or group.start_time
+                    group.duration = db_grp.get("duration") or group.duration
+                    group.end_time = db_grp.get("end_time") or group.end_time
+                    group.speak_enabled = bool(db_grp.get("speak_enabled", 1))
+                    group.video_mode = db_grp.get("video_mode") or "off"
+                    group.video_timer = db_grp.get("video_timer") or 60
+                    sg_cog.active_study_groups[session.group_id] = group
+
+                if interaction.user.id not in group.member_ids:
+                    success = await group.add_member(interaction.user.id)
+                    if success:
+                        await group.group_info_embed(update=True)
+                        if group.owner_id:
+                            owner = guild.get_member(group.owner_id)
+                            if owner:
+                                try:
+                                    await owner.send(f"<@{interaction.user.id}> accepted the invitation to join **{group.name}**.")
+                                except discord.HTTPException:
+                                    pass
+
         destination = guild.get_channel(session.vc_id) if session.vc_id else None
         if (
             session.require_vc
@@ -388,8 +436,18 @@ class PomodoroInvitationView(discord.ui.View):
             await interaction.response.send_message("This invitation is for someone else.", ephemeral=True)
             return
         await interaction.response.send_message("Invitation declined.", ephemeral=True)
+        sg_cog = self.cog.bot.get_cog("StudyGroupCog")
+        if sg_cog:
+            db_grp = await self.cog.bot.db.fetch_study_group_by_id(self.session.group_id)
+            if db_grp:
+                guild = self.cog.bot.get_guild(self.session.guild_id)
+                owner = guild.get_member(db_grp["owner_id"]) if guild else None
+                if owner:
+                    try:
+                        await owner.send(f"<@{interaction.user.id}> declined the invitation to join the Pomodoro session in **{db_grp['name']}**.")
+                    except discord.HTTPException:
+                        pass
         self.stop()
-
 
 class PomodoroRenewView(discord.ui.View):
     def __init__(self, cog: "Pomodoro", session: PomodoroSession, deadline: datetime):
@@ -1029,7 +1087,7 @@ class Pomodoro(commands.Cog):
         # Check permissions: owner, creator, or manager
         is_mgr = await check_manager(interaction)
         if interaction.user.id not in (group.get("creator_id"), group.get("owner_id")) and not is_mgr:
-            msg = "Only the group owner or a server manager can edit Pomodoro settings."
+            msg = "Go away peasent"
             if interaction.response.is_done():
                 await send_response(interaction, msg, ephemeral=True)
             else:
@@ -1463,6 +1521,36 @@ class Pomodoro(commands.Cog):
             await send_response(interaction, embed=embed, ephemeral=ephemeral)
         else:
             await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
+
+    @app_commands.command(
+        name="invite_to_pomodoro",
+        description="Invite someone to the current Pomodoro session",
+    )
+    @app_commands.describe(user="The user to invite")
+    async def invite_to_pomodoro(self, interaction: discord.Interaction, user: discord.Member):
+        if not interaction.response.is_done():
+            await acknowledge_interaction(interaction)
+        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
+
+        group = await self._resolve_group(interaction)
+        session = self._get_session(group)
+
+        if not group or not session:
+            await send_response(interaction, "No active Pomodoro session for your group.", ephemeral=True)
+            return
+
+        if user.bot:
+            await send_response(interaction, "You cannot invite bots.", ephemeral=True)
+            return
+
+        try:
+            await user.send(
+                f"You are invited by <@{interaction.user.id}> to join the Pomodoro session in **{group['name']}**.\nIf you accept, you will also join the study group.",
+                view=PomodoroInvitationView(self, session, user.id),
+            )
+            await send_response(interaction, f"Sent a Pomodoro invitation to {user.mention}.", ephemeral=ephemeral)
+        except discord.HTTPException:
+            await send_response(interaction, f"Could not DM {user.mention}. They might have DMs disabled.", ephemeral=True)
 
 
 async def setup(bot):

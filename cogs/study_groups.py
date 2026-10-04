@@ -75,6 +75,13 @@ class GroupInvitationView(discord.ui.View):
                 content=f"You joined **{self.group.name}**.", embed=None, view=None
             )
             await self.group.group_info_embed(update=True)
+            if self.group.owner_id:
+                owner = self.group.guild.get_member(self.group.owner_id)
+                if owner:
+                    try:
+                        await owner.send(f"<@{self.user_id}> accepted the invitation to join **{self.group.name}**.")
+                    except discord.HTTPException:
+                        pass
 
     @discord.ui.button(label="Decline", style=discord.ButtonStyle.secondary)
     async def decline_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -86,6 +93,13 @@ class GroupInvitationView(discord.ui.View):
                 return
             self.stop()
             await interaction.edit_original_response(content="Invitation declined.", embed=None, view=None)
+            if self.group.owner_id:
+                owner = self.group.guild.get_member(self.group.owner_id)
+                if owner:
+                    try:
+                        await owner.send(f"<@{self.user_id}> declined the invitation to join **{self.group.name}**.")
+                    except discord.HTTPException:
+                        pass
 
 
 class StudyGroup:
@@ -319,6 +333,11 @@ class StudyGroup:
                 error = f"This group is full with No. of Members: {len(self.member_ids)}"
             elif member is None or role is None:
                 error = "The member or study group role is unavailable."
+            else:
+                joined_count = await self.db.get_user_joined_group_count(user_id)
+                if joined_count >= 5:
+                    error = "You can only join a maximum of 5 groups."
+
             if error:
                 if interaction:
                     await send_response(interaction, error, ephemeral=True)
@@ -393,7 +412,14 @@ class StudyGroup:
             member = self.guild.get_member(user_id)
             if not member:
                 logger.warning(f"Member with ID {user_id} not found in the guild {self.name}.")
-                await send_response(interaction, f"Member with ID {user_id} not found.", ephemeral=True)
+                if user_id in self.member_ids:
+                    self.member_ids.remove(user_id)
+                await self.db.remove_member_from_study_group_db(self.group_id, user_id)
+                await send_response(
+                    interaction,
+                    f"Member with ID {user_id} is not in the server and was removed from the group.",
+                    ephemeral=ephemeral,
+                )
                 return
 
             # Remove the group role from the member
@@ -483,7 +509,13 @@ class StudyGroup:
 
             # If new owner is not already a member, add them to the group
             if new_owner_id not in self.member_ids:
-                await self.add_member(new_owner)
+                success = await self.add_member(new_owner)
+                if not success:
+                    if interaction.response.is_done():
+                        await send_response(interaction, f"Could not transfer ownership because {new_owner.mention} could not be added to the group.", ephemeral=True)
+                    else:
+                        await interaction.response.send_message(f"Could not transfer ownership because {new_owner.mention} could not be added to the group.", ephemeral=True)
+                    return
 
             # Transfer ownership
             old_owner = interaction.guild.get_member(self.owner_id)
@@ -782,6 +814,7 @@ class StudyGroup:
                     # If the message was deleted, send a new one
                     new_message = await text_channel.send(embed=embed, view=self.view)
                     self.info_embed_id = new_message.id
+                    await self.db.update_study_group_by_id({"group_id": self.group_id, "info_embed_id": self.info_embed_id})
                     logger.info(
                         f"Group info embed sent in channel '{text_channel.name}' for group '{self.name}' (new message)."
                     )
@@ -796,6 +829,7 @@ class StudyGroup:
                     allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
                 )
                 self.info_embed_id = new_message.id
+                await self.db.update_study_group_by_id({"group_id": self.group_id, "info_embed_id": self.info_embed_id})
                 logger.info(
                     f"Group info embed sent in channel '{text_channel.name}' for group '{self.name}' (first message)."
                 )
@@ -1729,9 +1763,7 @@ class StudyGroupCog(commands.Cog):
         await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         if not interaction.guild or not await check_manager(interaction):
-            await send_response(
-                interaction, "Only a server manager can trigger resource cleanup retries.", ephemeral=True
-            )
+            await send_response(interaction, "Go away peasent", ephemeral=True)
             return
 
         summary = await self.process_pending_cleanups(interaction.guild)
@@ -1757,7 +1789,7 @@ class StudyGroupCog(commands.Cog):
         await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         if not interaction.guild or not await check_manager(interaction):
-            await send_response(interaction, "Only a server manager can configure action logging.", ephemeral=True)
+            await send_response(interaction, "Go away peasent", ephemeral=True)
             return
         if channel is not None and channel.guild.id != interaction.guild.id:
             await send_response(interaction, "Choose a log channel in this server.", ephemeral=True)
@@ -1827,7 +1859,7 @@ class StudyGroupCog(commands.Cog):
             if await manager_cog.get_permission_level(interaction.guild_id, interaction.user.id) < 3:
                 await send_response(
                     interaction,
-                    "You must be at least a Moderator to use this command.",
+                    "Go away peasent",
                     ephemeral=True,
                 )
                 return
@@ -1869,6 +1901,12 @@ class StudyGroupCog(commands.Cog):
         ephemeral: bool,
     ) -> None:
         assert interaction.guild is not None
+        
+        created_count = await self.bot.db.get_user_created_group_count(interaction.user.id)
+        if created_count >= 3:
+            await send_response(interaction, "You can only create a maximum of 3 groups.", ephemeral=True)
+            return
+            
         if name is not None and (not name.strip() or len(name.strip()) > 100):
             await send_response(interaction, "Choose a group name between 1 and 100 characters.", ephemeral=True)
             return
@@ -2064,7 +2102,7 @@ class StudyGroupCog(commands.Cog):
                 if interaction.user.id not in (db_grp.get("creator_id"), db_grp.get("owner_id")) and not is_mgr:
                     await send_response(
                         interaction,
-                        "You don't have permission to transfer this group.",
+                        "Go away peasent",
                         ephemeral=True,
                     )
                     return
@@ -2087,7 +2125,7 @@ class StudyGroupCog(commands.Cog):
         if not await target_group.can_control(interaction.user):
             await send_response(
                 interaction,
-                "Only the group owner, creator, or server managers/moderators can transfer this study group.",
+                "Go away peasent",
                 ephemeral=True,
             )
             return
@@ -2111,7 +2149,7 @@ class StudyGroupCog(commands.Cog):
             if level < 3:
                 await send_response(
                     interaction,
-                    "You must be at least a Moderator to use this command.",
+                    "Go away peasent",
                     ephemeral=True,
                 )
                 return
@@ -2471,6 +2509,15 @@ class StudyGroupCog(commands.Cog):
             return
 
         grp_id = db_grp.get("group_id") or str(db_grp.get("id"))
+        members = await self.bot.db.fetch_members_of_group(grp_id)
+        if interaction.user.id not in members:
+            await send_response(
+                interaction,
+                f"You are not a member of study group **{db_grp['name']}**.",
+                ephemeral=True,
+            )
+            return
+
         await self.bot.db.remove_member_from_study_group_db(grp_id, interaction.user.id)
         role = interaction.guild.get_role(db_grp.get("group_role_id", 0))
         if role and isinstance(interaction.user, discord.Member):
@@ -2499,6 +2546,10 @@ class StudyGroupCog(commands.Cog):
         member = interaction.guild.get_member(user.id)
         if member is None:
             await send_response(interaction, "Invite a member from this server.", ephemeral=True)
+            return
+
+        if member.bot:
+            await send_response(interaction, "You cannot invite bots.", ephemeral=True)
             return
 
         async with self._creation_locks.setdefault(interaction.guild.id, asyncio.Lock()):

@@ -67,7 +67,7 @@ class Help(commands.Cog):
             )
             embed.add_field(
                 name="Bot developer commands",
-                value="`/add_bot_developer`: grant global developer access. `/set_permission_level`: remove a server grant or grant Manager/Developer. These operations require Level 4.",
+                value="`/add_bot_developer` and `/remove_bot_developer`: manage global developer access. `/set_permission_level`: remove a server grant or grant Manager/Developer. These operations require Level 4.",
                 inline=False,
             )
         await send_response(interaction, embed=embed, ephemeral=True)

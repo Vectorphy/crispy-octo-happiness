@@ -887,6 +887,37 @@ class DBHandler:
 
         logger.info(f"StudyGroup '{study_group_data.get('name', 'Unknown')}' updated in the database.")
 
+    async def get_user_created_group_count(self, user_id: int) -> int:
+        def _sync() -> int:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) FROM study_groups WHERE creator_id = ? AND active = 1",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            return row[0] if row else 0
+        
+        async with self.lock:
+            return await self._run_in_thread(_sync)
+
+    async def get_user_joined_group_count(self, user_id: int) -> int:
+        def _sync() -> int:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT study_groups.id)
+                FROM study_groups
+                JOIN study_groups_members ON study_groups.group_id = study_groups_members.group_id
+                WHERE study_groups_members.user_id = ? AND study_groups.active = 1
+                """,
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            return row[0] if row else 0
+        
+        async with self.lock:
+            return await self._run_in_thread(_sync)
+
     async def get_user_group(self, user_id, channel_id):
         def _sync() -> Optional[sqlite3.Row]:
             cursor = self.conn.cursor()
@@ -1417,8 +1448,9 @@ class DBHandler:
     async def remove_manager(self, user_id, guild_id):
         query = "DELETE FROM managers WHERE user_id = ? AND guild_id IS ?"
         async with self.lock:
-            await self._run_in_thread(self._execute_commit_sync, query, (user_id, guild_id))
-            logger.info(f"Removed manager: user={user_id}, guild={guild_id}")
+            count = await self._run_in_thread(self._execute_commit_sync, query, (user_id, guild_id))
+            logger.info(f"Removed manager: user={user_id}, guild={guild_id}, count={count}")
+            return count
 
     async def get_manager(self, user_id, guild_id):
         query = (

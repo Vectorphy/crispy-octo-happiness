@@ -100,9 +100,9 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
     if isinstance(actual_error, discord.app_commands.CommandOnCooldown):
         message = f"This command is on cooldown. Try again in {actual_error.retry_after:.2f} seconds."
     elif isinstance(actual_error, discord.app_commands.MissingPermissions):
-        message = "You don't have the required permissions to use this command."
+        message = "Go away peasent"
     elif isinstance(actual_error, discord.app_commands.CheckFailure):
-        message = str(actual_error) if str(actual_error) else "You don't have permission to use this command."
+        message = str(actual_error) if str(actual_error) else "Go away peasent"
     else:
         logger.exception(f"An error occurred in app command: {error}")
 

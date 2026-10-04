@@ -392,7 +392,7 @@ async def _run_command_matrix(bot):
         )
         await manager_cog.sync_managers.callback(manager_cog, interaction)
         text = get_response_text(interaction)
-        assert "don't have permission" in text
+        assert "don't have permission" in text or "Go away peasent" in text
 
     await execute_test(
         "Manager - /sync_managers (Unauthorized Regular User)",
@@ -426,7 +426,7 @@ async def _run_command_matrix(bot):
         )
         await manager_cog.add_guild_manager.callback(manager_cog, interaction, user=dummy_target_user)
         text = get_response_text(interaction)
-        assert "don't have permission" in text
+        assert "don't have permission" in text or "Go away peasent" in text
 
     await execute_test(
         "Manager - /add_guild_manager (Unauthorized Regular User)",
@@ -472,6 +472,7 @@ async def _run_command_matrix(bot):
 
     async def test_manager_remove_guild_manager_authorized():
         interaction, _, _, _ = DummyInteractionFactory.create(bot)
+        await bot.db.add_manager(dummy_target_user.id, interaction.guild_id, PermissionLevel.ADMIN)
         await manager_cog.remove_guild_manager.callback(manager_cog, interaction, user=dummy_target_user)
         text = get_response_text(interaction)
         assert "removed as a guild manager" in text
@@ -521,7 +522,7 @@ async def _run_command_matrix(bot):
         )
         await manager_cog.sync_commands.callback(manager_cog, interaction, guild_only=False)
         text = get_response_text(interaction)
-        assert "must be an Administrator or Bot Developer" in text
+        assert "don't have permission" in text or "Go away peasent" in text
 
     await execute_test(
         "Manager - /sync_commands (Unauthorized regular user blocked)",
@@ -848,7 +849,10 @@ async def _run_command_matrix(bot):
         await sg_cog.transfer_group.callback(sg_cog, interaction, new_owner=new_owner, group_name="Alpha Study Cohort")
         text = get_response_text(interaction)
         assert (
-            "Only the group owner" in text or "don't have permission" in text or "Only the group owner, creator" in text
+            "Only the group owner" in text
+            or "don't have permission" in text
+            or "Only the group owner, creator" in text
+            or "Go away peasent" in text
         )
 
     await execute_test(

@@ -149,7 +149,7 @@ class Manager(commands.Cog):
                     f"User {interaction.user.display_name} is not the owner of {class_name} with name: {session_name}"
                 )
                 await interaction.response.send_message(
-                    f"You are not the owner of this {class_name} with name: {session_name}.",
+                    "Go away peasent",
                     ephemeral=True,
                 )
 
@@ -363,7 +363,7 @@ class Manager(commands.Cog):
         )
         if level < PermissionLevel.MODERATOR:
             await interaction.followup.send(
-                "You must be server staff (Level 3) or a Bot Developer to use this command.",
+                "Go away peasent",
                 ephemeral=True,
             )
             return
@@ -437,7 +437,7 @@ class Manager(commands.Cog):
         if level < PermissionLevel.ADMIN:
             await send_response(
                 interaction,
-                "You must be an Administrator or Bot Developer to sync commands.",
+                "Go away peasent",
                 ephemeral=True,
             )
             return
@@ -533,7 +533,7 @@ class Manager(commands.Cog):
             member=(interaction.user if isinstance(interaction.user, discord.Member) else None),
         )
         if level < PermissionLevel.ADMIN:
-            await send_response(interaction, "You don't have permission to use this command.", ephemeral=True)
+            await send_response(interaction, "Go away peasent", ephemeral=True)
             return
 
         synced = await self.sync_guild_managers(interaction.guild)
@@ -549,12 +549,85 @@ class Manager(commands.Cog):
             ephemeral=ephemeral,
         )
 
+    async def _handle_self_role_update_attempt(
+        self, interaction: discord.Interaction, action_name: str, *, has_perm: bool
+    ) -> None:
+        """Reject self-role update attempts and dispatch incident DM alerts to developers."""
+        logger.warning(
+            "Self-role update attempt detected: actor_id=%s guild_id=%s channel_id=%s action=%s has_perm=%s",
+            interaction.user.id,
+            interaction.guild_id,
+            interaction.channel_id,
+            action_name,
+            has_perm,
+        )
+
+        dev_ids: set[int] = set()
+        global_dev_id = getattr(self.bot, "bot_developer_id", None)
+        if isinstance(global_dev_id, int):
+            dev_ids.add(global_dev_id)
+
+        if interaction.guild_id:
+            try:
+                managers = await self.bot.db.get_all_managers(interaction.guild_id)
+                for mgr in managers:
+                    if mgr.get("permission_level") == PermissionLevel.BOT_DEVELOPER:
+                        dev_ids.add(int(mgr["user_id"]))
+            except Exception:
+                logger.exception("Failed to query guild managers for incident notification")
+
+        guild = getattr(interaction, "guild", None)
+        guild_str = f"{guild.name} (ID: {guild.id})" if guild is not None else "Direct Message / None"
+        channel = getattr(interaction, "channel", None)
+        channel_str = (
+            channel.mention if channel is not None and hasattr(channel, "mention") else f"ID: {interaction.channel_id}"
+        )
+        timestamp_str = f"<t:{int(discord.utils.utcnow().timestamp())}:F>"
+
+        embed = discord.Embed(
+            title="🚨 Security Incident: Self-Role Update Attempt",
+            description="A user attempted to update roles or permissions for themselves.",
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(
+            name="Actor / Target",
+            value=f"{interaction.user.mention} (`{interaction.user.name}` • ID: `{interaction.user.id}`)",
+            inline=False,
+        )
+        embed.add_field(name="Attempted Action", value=f"`{action_name}`", inline=True)
+        embed.add_field(name="Server", value=guild_str, inline=True)
+        embed.add_field(name="Channel", value=channel_str, inline=True)
+        embed.add_field(name="Timestamp", value=timestamp_str, inline=False)
+
+        for dev_id in dev_ids:
+            try:
+                dev_user = self.bot.get_user(dev_id)
+                if dev_user is None:
+                    dev_user = await self.bot.fetch_user(dev_id)
+                if dev_user:
+                    await dev_user.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                logger.warning("Could not dispatch incident DM to developer %s: %s", dev_id, exc)
+
+        if not has_perm:
+            await send_response(interaction, "Go away peasent", ephemeral=True)
+        else:
+            await send_response(interaction, "You cannot update your own roles or permissions.", ephemeral=True)
+
     @app_commands.command(name="add_bot_developer", description="Add a bot developer (Bot Developer only)")
     @app_commands.describe(user="The user to add as a bot developer")
     async def add_bot_developer(self, interaction: discord.Interaction, user: discord.User):
         await acknowledge_interaction(interaction)
-        if await self.get_permission_level(interaction.guild_id, interaction.user.id) != PermissionLevel.BOT_DEVELOPER:
-            await send_response(interaction, "You don't have permission to use this command.")
+        is_self = user.id == interaction.user.id
+        has_perm = (
+            await self.get_permission_level(interaction.guild_id, interaction.user.id) == PermissionLevel.BOT_DEVELOPER
+        )
+        if is_self:
+            await self._handle_self_role_update_attempt(interaction, "/add_bot_developer", has_perm=has_perm)
+            return
+        if not has_perm:
+            await send_response(interaction, "Go away peasent", ephemeral=True)
             return
         await self.bot.db.add_manager(user.id, None, PermissionLevel.BOT_DEVELOPER)
         role_warnings = await self._sync_staff_access(interaction, global_scope=True)
@@ -567,16 +640,83 @@ class Manager(commands.Cog):
             ephemeral=await should_use_ephemeral(interaction, self.bot.db),
         )
 
+    @app_commands.command(name="remove_bot_developer", description="Remove a bot developer (Bot Developer only)")
+    @app_commands.describe(user="The user to remove as a bot developer")
+    async def remove_bot_developer(self, interaction: discord.Interaction, user: discord.User):
+        await acknowledge_interaction(interaction)
+        is_self = user.id == interaction.user.id
+        has_perm = (
+            await self.get_permission_level(interaction.guild_id, interaction.user.id) == PermissionLevel.BOT_DEVELOPER
+        )
+        if is_self:
+            await self._handle_self_role_update_attempt(interaction, "/remove_bot_developer", has_perm=has_perm)
+            return
+        if not has_perm:
+            await send_response(interaction, "Go away peasent", ephemeral=True)
+            return
+
+        if user.id == self.bot.bot_developer_id:
+            await send_response(
+                interaction,
+                "The primary bot developer configured via environment cannot be removed.",
+                ephemeral=True,
+            )
+            return
+
+        record = await self.bot.db.get_manager(user.id, None)
+        if not record or record["permission_level"] != PermissionLevel.BOT_DEVELOPER:
+            await send_response(
+                interaction,
+                f"{user.name} is not a bot developer.",
+                ephemeral=True,
+            )
+            return
+
+        await self.bot.db.remove_manager(user.id, None)
+        role_warnings = await self._sync_staff_access(interaction, global_scope=True)
+        logger.info(
+            "Bot developer removed guild_id=%s actor_id=%s user_id=%s",
+            interaction.guild_id,
+            interaction.user.id,
+            user.id,
+        )
+        await send_response(
+            interaction,
+            f"{user.name} has been removed as a bot developer." + role_warnings,
+            ephemeral=await should_use_ephemeral(interaction, self.bot.db),
+        )
+
     @app_commands.command(name="add_guild_manager", description="Add a guild manager (Admin only)")
     @app_commands.describe(user="The user to add as a guild manager")
     async def add_guild_manager(self, interaction: discord.Interaction, user: discord.User):
         await acknowledge_interaction(interaction)
-        if interaction.guild is None:
-            await send_response(interaction, "This command can only be used in a server.")
+        if interaction.guild is None or interaction.guild_id is None:
+            await send_response(interaction, "This command can only be used in a server.", ephemeral=True)
             return
-        if await self.get_permission_level(interaction.guild_id, interaction.user.id) < PermissionLevel.ADMIN:
-            await send_response(interaction, "You don't have permission to use this command.")
+
+        is_self = user.id == interaction.user.id
+        has_perm = await self.get_permission_level(interaction.guild_id, interaction.user.id) >= PermissionLevel.ADMIN
+        if is_self:
+            await self._handle_self_role_update_attempt(interaction, "/add_guild_manager", has_perm=has_perm)
             return
+        if not has_perm:
+            await send_response(interaction, "Go away peasent", ephemeral=True)
+            return
+
+        member = interaction.guild.get_member(user.id)
+        if member is None:
+            try:
+                member = await interaction.guild.fetch_member(user.id)
+            except (discord.NotFound, discord.HTTPException):
+                member = None
+        if member is None:
+            await send_response(
+                interaction,
+                "This user is not a member of this server.",
+                ephemeral=True,
+            )
+            return
+
         await self.bot.db.add_manager(user.id, interaction.guild_id, PermissionLevel.ADMIN)
         role_warnings = await self._sync_staff_access(interaction)
         logger.info(
@@ -592,17 +732,41 @@ class Manager(commands.Cog):
     @app_commands.describe(user="The user to remove as a guild manager")
     async def remove_guild_manager(self, interaction: discord.Interaction, user: discord.User):
         await acknowledge_interaction(interaction)
-        if interaction.guild is None:
-            await send_response(interaction, "This command can only be used in a server.")
+        if interaction.guild is None or interaction.guild_id is None:
+            await send_response(interaction, "This command can only be used in a server.", ephemeral=True)
             return
+
         logger.info(f"Attempt to remove guild manager: {user.id} by user: {interaction.user.id}")
-        if await self.get_permission_level(interaction.guild_id, interaction.user.id) < PermissionLevel.ADMIN:
+        is_self = user.id == interaction.user.id
+        has_perm = await self.get_permission_level(interaction.guild_id, interaction.user.id) >= PermissionLevel.ADMIN
+        if is_self:
+            await self._handle_self_role_update_attempt(interaction, "/remove_guild_manager", has_perm=has_perm)
+            return
+        if not has_perm:
             logger.warning(f"User {interaction.user.id} attempted to remove guild manager without permission")
-            await send_response(interaction, "You don't have permission to use this command.")
+            await send_response(interaction, "Go away peasent", ephemeral=True)
+            return
+
+        member = interaction.guild.get_member(user.id)
+        count = await self.bot.db.remove_manager(user.id, interaction.guild_id)
+
+        if count == 0 and member is None:
+            await send_response(
+                interaction,
+                "This user is not a member of this server.",
+                ephemeral=True,
+            )
+            return
+
+        if count == 0:
+            await send_response(
+                interaction,
+                f"{user.name} is not a guild manager for this server.",
+                ephemeral=True,
+            )
             return
 
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await self.bot.db.remove_manager(user.id, interaction.guild_id)
         role_warnings = await self._sync_staff_access(interaction)
         logger.info(f"Removed {user.id} as guild manager for guild {interaction.guild_id}")
         await send_response(
@@ -618,7 +782,7 @@ class Manager(commands.Cog):
             await send_response(interaction, "This command can only be used in a server.")
             return
         if await self.get_permission_level(interaction.guild_id, interaction.user.id) < PermissionLevel.MODERATOR:
-            await send_response(interaction, "You don't have permission to use this command.")
+            await send_response(interaction, "Go away peasent", ephemeral=True)
             return
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         records = await self.bot.db.get_all_managers(interaction.guild_id)
@@ -706,11 +870,18 @@ class Manager(commands.Cog):
         logger.info(
             f"Attempt to set permission level for user {user.id} to level {level} by user {interaction.user.id}"
         )
-        if await self.get_permission_level(interaction.guild_id, interaction.user.id) != PermissionLevel.BOT_DEVELOPER:
+        is_self = user.id == interaction.user.id
+        has_perm = (
+            await self.get_permission_level(interaction.guild_id, interaction.user.id) == PermissionLevel.BOT_DEVELOPER
+        )
+        if is_self:
+            await self._handle_self_role_update_attempt(interaction, "/set_permission_level", has_perm=has_perm)
+            return
+        if not has_perm:
             logger.warning(
                 f"User {interaction.user.id} attempted to set permission level without being a Bot Developer"
             )
-            await send_response(interaction, "You don't have permission to use this command.")
+            await send_response(interaction, "Go away peasent", ephemeral=True)
             return
 
         if level not in [0, 3, 4]:
@@ -725,9 +896,38 @@ class Manager(commands.Cog):
             await send_response(interaction, "Server grants can only be changed inside a server.")
             return
 
+        if level == PermissionLevel.ADMIN and interaction.guild is not None:
+            member = interaction.guild.get_member(user.id)
+            if member is None:
+                try:
+                    member = await interaction.guild.fetch_member(user.id)
+                except (discord.NotFound, discord.HTTPException):
+                    member = None
+            if member is None:
+                await send_response(
+                    interaction,
+                    "This user is not a member of this server.",
+                    ephemeral=True,
+                )
+                return
+
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         if level == PermissionLevel.REGULAR_USER:
+            member = interaction.guild.get_member(user.id) if interaction.guild else None
+            manager_rec = await self.bot.db.get_manager(user.id, interaction.guild_id)
+            if isinstance(manager_rec, (dict, sqlite3.Row)):
+                has_rec = manager_rec["guild_id"] == interaction.guild_id
+            else:
+                has_rec = manager_rec is not None
+            if member is None and not has_rec and interaction.guild is not None:
+                await send_response(
+                    interaction,
+                    "This user is not a member of this server.",
+                    ephemeral=True,
+                )
+                return
             await self.bot.db.remove_manager(user.id, interaction.guild_id)
+            await self.bot.db.remove_manager(user.id, None)
             logger.info(f"Removed all permissions for user {user.id}")
         else:
             guild_id = None if level == PermissionLevel.BOT_DEVELOPER else interaction.guild_id

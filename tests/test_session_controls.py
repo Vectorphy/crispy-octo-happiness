@@ -143,6 +143,7 @@ async def test_pomodoro_invites_group_members_without_auto_join():
     guild.id = 42
     guild.get_member.side_effect = {11: invited, 12: blocked}.get
     bot.get_guild.return_value = guild
+    bot.get_cog.return_value = None
     interaction = MagicMock()
     interaction.guild = guild
     interaction.guild_id = 42

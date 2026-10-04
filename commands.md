@@ -135,6 +135,9 @@ The highest applicable level wins: 4 > 3 > 2 > 1 > 0. Outside active group chann
 - `/add_bot_developer <user>`: Add a bot developer (Bot Developer only).
   - `user`: The user to promote to bot developer.
 
+- `/remove_bot_developer <user>`: Remove a bot developer (Bot Developer only).
+  - `user`: The user to remove as a bot developer. The primary bot developer cannot be removed.
+
 - `/add_guild_manager <user>`: Add a guild manager (Level 3 staff or Bot Developer).
   - `user`: The user to promote to administrator/manager.
 
