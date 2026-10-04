@@ -238,7 +238,7 @@ class TaskList(commands.Cog):
         if group_id:
             tasks = await self.bot.db.get_user_tasks(interaction.user.id, group_id=group_id)
         elif guild_id:
-            tasks = await self.bot.db.get_user_tasks(interaction.user.id, guild_id=guild_id)
+            tasks = await self.bot.db.get_user_tasks(interaction.user.id, global_only=True, guild_id=guild_id)
         else:
             tasks = await self.bot.db.get_user_tasks(interaction.user.id, global_only=True)
         choices = [dict(task) for task in tasks if action == "delete" or not task["completed"]]
@@ -281,7 +281,7 @@ class TaskList(commands.Cog):
             tasks = await self.bot.db.get_user_tasks(interaction.user.id, group_id=group_id)
             title = f"{interaction.user.display_name}'s Tasks — {group_name}"
         elif guild_id:
-            tasks = await self.bot.db.get_user_tasks(interaction.user.id, guild_id=guild_id)
+            tasks = await self.bot.db.get_user_tasks(interaction.user.id, global_only=True, guild_id=guild_id)
             title = f"{interaction.user.display_name}'s Tasks"
         else:
             tasks = await self.bot.db.get_user_tasks(interaction.user.id, global_only=True)

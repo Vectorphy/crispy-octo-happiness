@@ -411,9 +411,15 @@ class Manager(commands.Cog):
             )
             prior = self._setup_views.get(interaction.guild_id)
             if prior:
-                prior.stop()
                 if prior.has_pending_resources():
-                    await prior.recover_retained_resources()
+                    await prior._recover_retained_resources_locked()
+                    if prior.has_pending_resources():
+                        await interaction.followup.send(
+                            "Previous setup resources still need recovery. Run /setup again to retry recovery before opening another setup.",
+                            ephemeral=True,
+                        )
+                        return
+                prior.stop()
             self._setup_views[interaction.guild_id] = view
         view.message = await interaction.followup.send(embed=view.render(), view=view, ephemeral=True, wait=True)
 

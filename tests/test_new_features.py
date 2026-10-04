@@ -239,9 +239,9 @@ class TestEndGroupFallbackCleanup(unittest.TestCase):
             # Group is only in DB, not in memory
             cog.active_study_groups = {}
 
-            mock_text_ch = AsyncMock()
-            mock_vc_ch = AsyncMock()
-            mock_role = AsyncMock()
+            mock_text_ch = AsyncMock(spec=discord.TextChannel, id=777)
+            mock_vc_ch = AsyncMock(spec=discord.VoiceChannel, id=888)
+            mock_role = AsyncMock(spec=discord.Role, id=999)
 
             def get_channel_mock(cid):
                 if cid == 777:
@@ -257,6 +257,8 @@ class TestEndGroupFallbackCleanup(unittest.TestCase):
                 "id": 42,
                 "group_id": "grp-42-uuid",
                 "name": "Orphan Group",
+                "max_members": 5,
+                "active": True,
                 "text_id": 777,
                 "vc_id": 888,
                 "group_role_id": 999,

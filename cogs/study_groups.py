@@ -75,13 +75,18 @@ class GroupInvitationView(discord.ui.View):
                 content=f"You joined **{self.group.name}**.", embed=None, view=None
             )
             await self.group.group_info_embed(update=True)
-            if self.group.owner_id:
+            if self.group.owner_id and self.group.guild:
                 owner = self.group.guild.get_member(self.group.owner_id)
                 if owner:
                     try:
                         await owner.send(f"<@{self.user_id}> accepted the invitation to join **{self.group.name}**.")
                     except discord.HTTPException:
-                        pass
+                        logger.warning(
+                            "Invitation owner DM failed guild_id=%s group_id=%s user_id=%s",
+                            self.group.guild_id,
+                            self.group.group_id,
+                            self.user_id,
+                        )
 
     @discord.ui.button(label="Decline", style=discord.ButtonStyle.secondary)
     async def decline_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -93,13 +98,18 @@ class GroupInvitationView(discord.ui.View):
                 return
             self.stop()
             await interaction.edit_original_response(content="Invitation declined.", embed=None, view=None)
-            if self.group.owner_id:
+            if self.group.owner_id and self.group.guild:
                 owner = self.group.guild.get_member(self.group.owner_id)
                 if owner:
                     try:
                         await owner.send(f"<@{self.user_id}> declined the invitation to join **{self.group.name}**.")
                     except discord.HTTPException:
-                        pass
+                        logger.warning(
+                            "Invitation owner DM failed guild_id=%s group_id=%s user_id=%s",
+                            self.group.guild_id,
+                            self.group.group_id,
+                            self.user_id,
+                        )
 
 
 class StudyGroup:
@@ -153,6 +163,10 @@ class StudyGroup:
         self.guild: Optional[discord.Guild] = None
         self.view: Optional[View] = None
         self.membership_lock = asyncio.Lock()
+        self.end_lock = asyncio.Lock()
+        self.ended = False
+        self.ending = False
+        self._deleted_resources: set[int] = set()
         self.video_enforcement_tasks: dict[int, asyncio.Task[None]] = {}
 
     ## Setup - Generate Group ID
@@ -512,9 +526,16 @@ class StudyGroup:
                 success = await self.add_member(new_owner)
                 if not success:
                     if interaction.response.is_done():
-                        await send_response(interaction, f"Could not transfer ownership because {new_owner.mention} could not be added to the group.", ephemeral=True)
+                        await send_response(
+                            interaction,
+                            f"Could not transfer ownership because {new_owner.mention} could not be added to the group.",
+                            ephemeral=True,
+                        )
                     else:
-                        await interaction.response.send_message(f"Could not transfer ownership because {new_owner.mention} could not be added to the group.", ephemeral=True)
+                        await interaction.response.send_message(
+                            f"Could not transfer ownership because {new_owner.mention} could not be added to the group.",
+                            ephemeral=True,
+                        )
                     return
 
             # Transfer ownership
@@ -814,7 +835,9 @@ class StudyGroup:
                     # If the message was deleted, send a new one
                     new_message = await text_channel.send(embed=embed, view=self.view)
                     self.info_embed_id = new_message.id
-                    await self.db.update_study_group_by_id({"group_id": self.group_id, "info_embed_id": self.info_embed_id})
+                    await self.db.update_study_group_by_id(
+                        {"group_id": self.group_id, "info_embed_id": self.info_embed_id}
+                    )
                     logger.info(
                         f"Group info embed sent in channel '{text_channel.name}' for group '{self.name}' (new message)."
                     )
@@ -905,7 +928,11 @@ class StudyGroup:
             f"❗❗Attention❗❗\n{role_mention}\nThe group will be destroyed in 60 seconds.\nPlease disconnect from the VCs and wrap up your activities.",
             ephemeral=ephemeral,
         )
-        await self.end_group(actor_id=interaction.user.id)
+        if not await self.end_group(actor_id=interaction.user.id):
+            await send_response(
+                interaction, "The study group could not be ended. Run /end_group again to retry.", ephemeral=True
+            )
+            return
         logger.info(
             f"User: {interaction.user.name} has called for the closure of Group'{self.name}', End Group function has started. The group will end shortly."
         )
@@ -920,7 +947,12 @@ class StudyGroup:
 
         async def confirm(owner_interaction: discord.Interaction) -> None:
             await send_response(owner_interaction, f"Ending study group **{self.name}**...", ephemeral=True)
-            await self.end_group(delay=0, actor_id=owner_interaction.user.id)
+            if not await self.end_group(delay=0, actor_id=owner_interaction.user.id):
+                await send_response(
+                    owner_interaction,
+                    "The study group could not be ended. Run /end_group again to retry.",
+                    ephemeral=True,
+                )
 
         await request_session_end(
             interaction,
@@ -1324,29 +1356,32 @@ class StudyGroup:
 
             # Continuously check the conditions
             while True:
+                if self.ended:
+                    return
+                if self.ending:
+                    await asyncio.sleep(60)
+                    continue
                 current_time: float = datetime.now().timestamp()
 
                 # 1. Check if the group is marked inactive (active = False)
                 if not self.active:
                     logger.info(f"Group '{self.name}' is being ended by the owner or due to manual condition.")
-                    await self.end_group(delete_text_channel=False)
-                    return
+                    if await self.end_group(delete_text_channel=False):
+                        return
 
                 # 2. Check if there are no members left in the group
-                if len(self.member_ids) == 0:
+                elif len(self.member_ids) == 0:
                     logger.warning(f"Group '{self.name}' has no members left and is being ended.")
-                    self.active = False  # Mark as inactive
-                    await self.end_group(delete_text_channel=False)
-                    return
+                    if await self.end_group(delete_text_channel=False):
+                        return
 
                 # 3. Check if the group's duration has elapsed
-                if current_time >= self.end_time:
+                elif current_time >= self.end_time:
                     logger.info(
                         f"Group '{self.name}' duration of {parse_seconds_to_hms(self.duration)} has elapsed. Ending the group."
                     )
-                    self.active = False  # Mark as inactive
-                    await self.end_group(delete_text_channel=False)
-                    return
+                    if await self.end_group(delete_text_channel=False):
+                        return
 
                 # Wait for 1 minute before checking the conditions again
                 await asyncio.sleep(60)
@@ -1357,12 +1392,35 @@ class StudyGroup:
             logger.error(f"Error in checking end conditions for group '{self.name}': {e}")
 
     ## End - End Group Function
-    async def end_group(self, delete_text_channel: bool = True, delay: int = 60, actor_id: Optional[int] = None):
+    async def end_group(
+        self, delete_text_channel: bool = True, delay: int = 60, actor_id: Optional[int] = None
+    ) -> bool:
+        async with self.end_lock:
+            if self.ended:
+                return True
+            self.ending = True
+            try:
+                await self._end_group(delete_text_channel, delay, actor_id)
+            finally:
+                self.ending = False
+            return self.ended
+
+    async def _end_group(self, delete_text_channel: bool, delay: int, actor_id: Optional[int]):
         """End the study group by clearing data, deleting channels, removing roles, and clearing permissions."""
         try:
             if not self.guild:
                 logger.error("Guild is None in end_group")
                 return
+            guild, group_id, group_name = self.guild, self.group_id, self.name
+
+            # 5. Clean up associated Pomodoro and Checkin sessions
+            pomo_cog = self.bot.get_cog("Pomodoro") if self.bot else None
+            if pomo_cog:
+                sessions = {id(session): session for session in pomo_cog.sessions.values()}
+                for session in sessions.values():
+                    if str(session.group_id) == str(group_id) or session.text_id == self.text_id:
+                        await pomo_cog._remove_session(session)
+
             async with self.membership_lock:
                 self.active = False
 
@@ -1389,11 +1447,14 @@ class StudyGroup:
                 await asyncio.sleep(delay)
 
             # 1. Handle text channel deletion or permission revoking
-            if text_channel:
+            if text_channel and text_channel.id not in self._deleted_resources:
                 if delete_text_channel:
                     try:
                         await text_channel.delete(reason="Study group ended, deleting text channel.")
+                        self._deleted_resources.add(text_channel.id)
                         logger.info(f"Text channel '{text_channel.name}' deleted for group '{self.name}'.")
+                    except discord.NotFound:
+                        self._deleted_resources.add(text_channel.id)
                     except Exception as e:
                         logger.error(f"Error deleting text channel '{text_channel.name}': {e}")
                         if self.guild and self.text_id:
@@ -1416,10 +1477,13 @@ class StudyGroup:
                             logger.error(f"Error revoking permissions in text channel '{text_channel.name}': {e}")
 
             # 2. Delete the voice channel
-            if voice_channel:
+            if voice_channel and voice_channel.id not in self._deleted_resources:
                 try:
                     await voice_channel.delete(reason="Study group ended, deleting voice channel.")
+                    self._deleted_resources.add(voice_channel.id)
                     logger.info(f"Voice channel '{voice_channel.name}' deleted for group '{self.name}'.")
+                except discord.NotFound:
+                    self._deleted_resources.add(voice_channel.id)
                 except Exception as e:
                     logger.error(f"Error deleting voice channel '{voice_channel.name} from {self.name}': {e}")
                     if self.guild and self.vc_id:
@@ -1432,9 +1496,9 @@ class StudyGroup:
                         )
 
             # 3. De-assign the role from all members
-            if role:
+            if role and role.id not in self._deleted_resources:
                 try:
-                    for member in self.guild.members:
+                    for member in guild.members:
                         if role in member.roles:
                             await member.remove_roles(role, reason="Study group ended, removing group role.")
                     logger.info(f"Role '{role.name}' removed from all members of group '{self.name}'.")
@@ -1444,7 +1508,10 @@ class StudyGroup:
                 # 4. Delete the role
                 try:
                     await role.delete(reason="Study group ended, deleting group role.")
+                    self._deleted_resources.add(role.id)
                     logger.info(f"Role '{role.name}' deleted for group '{self.name}'.")
+                except discord.NotFound:
+                    self._deleted_resources.add(role.id)
                 except Exception as e:
                     logger.error(f"Error deleting role '{role.name}': {e}")
                     if self.guild and self.group_role_id:
@@ -1456,19 +1523,6 @@ class StudyGroup:
                             last_error=str(e),
                         )
 
-            # 5. Clean up associated Pomodoro and Checkin sessions
-            pomo_cog = self.bot.get_cog("Pomodoro") if self.bot else None
-            if pomo_cog:
-                for key, session in list(pomo_cog.sessions.items()):
-                    if (
-                        key == self.group_id
-                        or str(getattr(session, "group_id", "")) == self.group_id
-                        or getattr(session, "text_id", None) == self.text_id
-                    ):
-                        pomo_cog.sessions.pop(key, None)
-                if not pomo_cog.sessions and pomo_cog.run_timer.is_running():
-                    pomo_cog.run_timer.stop()
-
             checkin_cog = self.bot.get_cog("CheckinCog") if self.bot else None
             if checkin_cog and self.text_id:
                 for sid, s in list(checkin_cog.active_sessions.items()):
@@ -1479,14 +1533,15 @@ class StudyGroup:
             if self.group_id:
                 await self.db.delete_study_group(self.group_id)
 
-            await self.cog.log_mod_action(self.guild, "Study group ended", self.group_id, self.name, actor_id)
+            await self.cog.log_mod_action(guild, "Study group ended", group_id, group_name, actor_id)
 
             # 7. Clear group data
             self.clear_group_data()
-            logger.info(f"Data cleared for group '{self.name}'.")
+            self.ended = True
+            logger.info("Data cleared guild_id=%s group_id=%s name=%s", guild.id, group_id, group_name)
 
-        except Exception as e:
-            logger.critical(f"Unexpected error while ending group {self.group_id}: {e}")
+        except Exception:
+            logger.exception("Failed to end study group guild_id=%s group_id=%s", self.guild_id, self.group_id)
 
     ## End - Clear Class Variables / Attributes and Trackers
     def clear_group_data(self):
@@ -1633,6 +1688,12 @@ class StudyGroupCog(commands.Cog):
             await self.bot.wait_until_ready()
 
     async def process_pending_cleanups(self, guild: Optional[discord.Guild] = None) -> dict[str, int]:
+        if not hasattr(self, "_cleanup_lock"):
+            self._cleanup_lock = asyncio.Lock()
+        async with self._cleanup_lock:
+            return await self._process_pending_cleanups_locked(guild)
+
+    async def _process_pending_cleanups_locked(self, guild: Optional[discord.Guild] = None) -> dict[str, int]:
         """
         Scan pending_resource_cleanups in the database and retry deletion of
         channels or roles that failed during earlier group cleanup.
@@ -1662,6 +1723,32 @@ class StudyGroupCog(commands.Cog):
                 continue
 
             try:
+                group = await self.bot.db.fetch_study_group_by_id(item["group_id"])
+                groups = await self.bot.db.get_all_study_groups(target_guild_id)
+                setting_ids = (
+                    await self.bot.db.get_group_category(target_guild_id),
+                    await self.bot.db.get_commands_channel(target_guild_id),
+                    await self.bot.db.get_mod_log_channel(target_guild_id),
+                    await self.bot.db.get_default_vc(target_guild_id),
+                )
+                if isinstance(group, dict) and (
+                    group.get("active") or str(group.get("guild_id")) != str(target_guild_id)
+                ):
+                    raise ValueError("Cleanup group is active or belongs to another guild")
+                resource_key = {"text_channel": "text_id", "voice_channel": "vc_id", "role": "group_role_id"}.get(
+                    resource_type
+                )
+                if resource_key is None:
+                    raise ValueError("Unknown cleanup resource type")
+                if isinstance(group, dict) and group.get(resource_key) != resource_id:
+                    raise ValueError("Cleanup resource does not match its recorded group")
+                if resource_id in setting_ids or any(
+                    row.get("active")
+                    and resource_id
+                    in (row.get("text_id"), row.get("vc_id"), row.get("group_role_id"), row.get("category_id"))
+                    for row in groups
+                ):
+                    raise ValueError("Cleanup resource is in active use")
                 if resource_type in ("text_channel", "voice_channel"):
                     channel = target_guild.get_channel(resource_id)
                     if channel is None and hasattr(self.bot, "fetch_channel"):
@@ -1677,8 +1764,10 @@ class StudyGroupCog(commands.Cog):
                             )
                             summary["failed"] += 1
                             continue
-                        except Exception as e:
-                            logger.debug("fetch_channel failed for %s: %s", resource_id, e)
+                        except discord.HTTPException as e:
+                            await self.bot.db.update_cleanup_retry(item_id, last_error=str(e))
+                            summary["failed"] += 1
+                            continue
 
                     if channel is None:
                         await self.bot.db.delete_pending_cleanup(item_id)
@@ -1686,6 +1775,9 @@ class StudyGroupCog(commands.Cog):
                         logger.info("Channel %s already gone, resolved cleanup %s", resource_id, item_id)
                         continue
 
+                    expected_type = discord.TextChannel if resource_type == "text_channel" else discord.VoiceChannel
+                    if not isinstance(channel, expected_type) or channel.guild.id != target_guild_id:
+                        raise ValueError("Cleanup channel guild or type mismatch")
                     me = getattr(target_guild, "me", None)
                     if me:
                         perms = channel.permissions_for(me)
@@ -1711,6 +1803,8 @@ class StudyGroupCog(commands.Cog):
                         logger.info("Role %s already gone, resolved cleanup %s", resource_id, item_id)
                         continue
 
+                    if not isinstance(role, discord.Role) or role.guild.id != target_guild_id:
+                        raise ValueError("Cleanup role guild or type mismatch")
                     me = getattr(target_guild, "me", None)
                     if me:
                         guild_perms = getattr(me, "guild_permissions", None)
@@ -1901,12 +1995,12 @@ class StudyGroupCog(commands.Cog):
         ephemeral: bool,
     ) -> None:
         assert interaction.guild is not None
-        
+
         created_count = await self.bot.db.get_user_created_group_count(interaction.user.id)
         if created_count >= 3:
             await send_response(interaction, "You can only create a maximum of 3 groups.", ephemeral=True)
             return
-            
+
         if name is not None and (not name.strip() or len(name.strip()) > 100):
             await send_response(interaction, "Choose a group name between 1 and 100 characters.", ephemeral=True)
             return
@@ -2041,11 +2135,17 @@ class StudyGroupCog(commands.Cog):
                 group.text_id = current.get("text_id", 0)
                 group.vc_id = current.get("vc_id", 0)
                 group.group_role_id = current.get("group_role_id", 0)
+                self.active_study_groups[group_id] = group
             if not group.active or group.owner_id != owner_id:
                 await send_response(owner_interaction, "This request is no longer active.", ephemeral=True)
                 return
             await send_response(owner_interaction, f"Ending study group **{group.name}**...", ephemeral=True)
-            await group.end_group(delay=0, actor_id=owner_id)
+            if not await group.end_group(delay=0, actor_id=owner_id):
+                await send_response(
+                    owner_interaction,
+                    "The study group could not be ended. Run /end_group again to retry.",
+                    ephemeral=True,
+                )
 
         await request_session_end(
             interaction,
@@ -2231,7 +2331,10 @@ class StudyGroupCog(commands.Cog):
                 await target_group.request_end(interaction)
                 return
             await send_response(interaction, f"Ending study group **{target_group.name}**...", ephemeral=ephemeral)
-            await target_group.end_group(delay=0, actor_id=interaction.user.id)
+            if not await target_group.end_group(delay=0, actor_id=interaction.user.id):
+                await send_response(
+                    interaction, "The study group could not be ended. Run /end_group again to retry.", ephemeral=True
+                )
             return
 
         db_grp = None
@@ -2254,85 +2357,35 @@ class StudyGroupCog(commands.Cog):
             await self._request_persisted_end(interaction, db_grp)
             return
 
-        grp_id = db_grp.get("group_id") or db_grp.get("id")
-        text_id = db_grp.get("text_id")
-        vc_id = db_grp.get("vc_id")
-        role_id = db_grp.get("group_role_id")
-
-        # Clean up text channel
-        if text_id:
-            ch_text = interaction.guild.get_channel(text_id)
-            if ch_text:
-                try:
-                    await ch_text.delete(reason="Study group ended from DB fallback")
-                    logger.info(f"Deleted text channel {text_id} for group {grp_id}")
-                except Exception as e:
-                    logger.error(f"Error deleting text channel {text_id}: {e}")
-                    if interaction.guild:
-                        await self.bot.db.record_pending_cleanup(
-                            guild_id=interaction.guild.id,
-                            group_id=str(grp_id),
-                            resource_type="text_channel",
-                            resource_id=text_id,
-                            last_error=str(e),
-                        )
-
-        # Clean up voice channel
-        if vc_id:
-            ch_vc = interaction.guild.get_channel(vc_id)
-            if ch_vc:
-                try:
-                    await ch_vc.delete(reason="Study group ended from DB fallback")
-                    logger.info(f"Deleted voice channel {vc_id} for group {grp_id}")
-                except Exception as e:
-                    logger.error(f"Error deleting voice channel {vc_id}: {e}")
-                    if interaction.guild:
-                        await self.bot.db.record_pending_cleanup(
-                            guild_id=interaction.guild.id,
-                            group_id=str(grp_id),
-                            resource_type="voice_channel",
-                            resource_id=vc_id,
-                            last_error=str(e),
-                        )
-
-        # Clean up role
-        if role_id:
-            role = interaction.guild.get_role(role_id)
-            if role:
-                try:
-                    await role.delete(reason="Study group ended from DB fallback")
-                    logger.info(f"Deleted role {role_id} for group {grp_id}")
-                except Exception as e:
-                    logger.error(f"Error deleting role {role_id}: {e}")
-                    if interaction.guild:
-                        await self.bot.db.record_pending_cleanup(
-                            guild_id=interaction.guild.id,
-                            group_id=str(grp_id),
-                            resource_type="role",
-                            resource_id=role_id,
-                            last_error=str(e),
-                        )
-
-        # Clean up active Pomodoro & Checkin sessions if any
-        pomo_cog = self.bot.get_cog("Pomodoro") if self.bot else None
-        if pomo_cog:
-            pomo_cog.sessions.pop(grp_id, None)
-            pomo_cog.sessions.pop(db_grp.get("id"), None)
-            pomo_cog.sessions.pop(db_grp.get("group_id"), None)
-            if not pomo_cog.sessions and pomo_cog.run_timer.is_running():
-                pomo_cog.run_timer.stop()
-
-        checkin_cog = self.bot.get_cog("CheckinCog") if self.bot else None
-        if checkin_cog and text_id:
-            for sid, s in list(checkin_cog.active_sessions.items()):
-                if s.text_id == text_id:
-                    await s.clear_session_data()
-
-        await self.bot.db.delete_study_group(grp_id)
-        await self.log_mod_action(interaction.guild, "Study group ended", grp_id, db_grp["name"], interaction.user.id)
+        grp_id = str(db_grp.get("group_id") or db_grp["id"])
+        target_group = self.active_study_groups.get(grp_id)
+        if target_group is None:
+            target_group = StudyGroup(
+                self.bot.db,
+                self,
+                interaction.guild.id,
+                db_grp["name"],
+                db_grp["creator_id"],
+                db_grp.get("category_id", 0),
+                db_grp["max_members"],
+                [],
+            )
+            target_group.group_id = grp_id
+            target_group.owner_id = db_grp.get("owner_id")
+            target_group.guild = interaction.guild
+            target_group.active = bool(db_grp.get("active"))
+            target_group.text_id = db_grp.get("text_id")
+            target_group.vc_id = db_grp.get("vc_id")
+            target_group.group_role_id = db_grp.get("group_role_id")
+            self.active_study_groups[grp_id] = target_group
+        if not await target_group.end_group(delay=0, actor_id=interaction.user.id):
+            await send_response(
+                interaction, "The study group could not be ended. Run /end_group again to retry.", ephemeral=True
+            )
+            return
         await self._send_cleanup_result(
             interaction,
-            f"Study group **{db_grp['name']}** and its associated channels have been ended.",
+            f"Study group **{db_grp['name']}** cleanup processed.",
             ephemeral=ephemeral,
         )
 

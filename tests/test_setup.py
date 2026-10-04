@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -80,6 +81,7 @@ def make_setup(category_id: int | None = 10, channel_id: int | None = 20):
     bot.db.get_default_group_duration.return_value = 86400
     bot.db.get_default_pomodoro_duration.return_value = 86400
     bot.db.get_default_vc.return_value = None
+    bot.db.get_all_study_groups.return_value = []
     manager = Manager(bot)
     setattr(manager, "get_permission_level", AsyncMock(return_value=PermissionLevel.MODERATOR))
     return manager, guild, category, channel
@@ -609,6 +611,7 @@ async def test_setup_recover_button_cleans_created_and_reverts_moved():
     view.created_vc_id = 103
     view.moved_channel_id = 20
     view.previous_category_id = 99
+    view.previous_channel_overwrites = {}
 
     assert view.has_pending_resources() is True
 
@@ -619,9 +622,7 @@ async def test_setup_recover_button_cleans_created_and_reverts_moved():
     log_ch.delete.assert_awaited_once()
     vc.delete.assert_awaited_once()
     cat.delete.assert_awaited_once()
-    moved_cmd.edit.assert_awaited_once_with(
-        category=old_cat, sync_permissions=True, reason="CPO setup rollback: revert moved channel"
-    )
+    moved_cmd.edit.assert_awaited_once_with(category=old_cat, overwrites={}, reason="CPO setup rollback")
 
     assert view.has_pending_resources() is False
     assert view.created_category_id is None
@@ -746,3 +747,82 @@ async def test_setup_superseded_session_recovers_uncommitted_resources():
 
     cmd.delete.assert_awaited_once()
     assert first_view.created_channel_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["settings", "group", "delete", "authority", "guild"])
+async def test_setup_recovery_retains_handles_on_lookup_or_delete_failure(failure):
+    import sqlite3
+
+    manager, guild, _, channel = make_setup()
+    channel.guild = guild
+    channel.delete = AsyncMock()
+    manager.bot.db.get_study_group_by_channel.return_value = None
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30)
+    view.created_channel_id = 20
+    manager.bot.db.get_commands_channel.return_value = None
+    actor = make_interaction(guild)
+    if failure == "settings":
+        manager.bot.db.get_group_category.side_effect = sqlite3.OperationalError("busy")
+    elif failure == "group":
+        manager.bot.db.get_study_group_by_channel.side_effect = sqlite3.OperationalError("busy")
+    elif failure == "delete":
+        channel.delete.side_effect = discord.Forbidden(MagicMock(status=403), "denied")
+    elif failure == "authority":
+        manager.get_permission_level.return_value = 0
+    else:
+        actor.guild_id = 2
+    await view.recover_retained_resources(actor)
+    assert view.created_channel_id == 20
+    if failure != "delete":
+        channel.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_setup_recovery_restores_exact_acl_in_same_category():
+    manager, guild, _, channel = make_setup()
+    channel.guild = guild
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30)
+    view.moved_channel_id = 20
+    view.previous_category_id = 10
+    original = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
+    view.previous_channel_overwrites = original
+    await view.recover_retained_resources(make_interaction(guild))
+    channel.edit.assert_awaited_once_with(
+        category=guild.get_channel(10), overwrites=original, reason="CPO setup rollback"
+    )
+    assert view.moved_channel_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closed_by", ["cancel", "timeout"])
+async def test_closed_setup_recovers_after_failed_setup_retry(closed_by):
+    manager, guild, category, channel = make_setup()
+    retained = MagicMock(spec=discord.TextChannel, id=101, guild=guild)
+    retained.delete = AsyncMock()
+    guild.get_channel.side_effect = lambda identifier: {10: category, 20: channel, 101: retained}.get(identifier)
+    manager.bot.db.get_study_group_by_channel.return_value = None
+    await Manager.setup.callback(manager, make_interaction(guild))
+    prior = manager._setup_views[guild.id]
+    prior.created_channel_id = retained.id
+    if closed_by == "cancel":
+        await button(prior, "Cancel").callback(make_interaction(guild))
+    else:
+        await prior.on_timeout()
+    assert all(getattr(item, "disabled", False) for item in prior.children)
+
+    manager.bot.db.get_study_group_by_channel.side_effect = sqlite3.OperationalError("busy")
+    failed = make_interaction(guild)
+    await Manager.setup.callback(manager, failed)
+    assert manager._setup_views[guild.id] is prior
+    assert prior.created_channel_id == retained.id
+    retained.delete.assert_not_awaited()
+    assert "Run /setup again" in failed.followup.send.call_args.args[0]
+    assert failed.followup.send.call_args.kwargs["ephemeral"] is True
+
+    manager.bot.db.get_study_group_by_channel.side_effect = None
+    await Manager.setup.callback(manager, make_interaction(guild))
+    retained.delete.assert_awaited_once()
+    assert prior.created_channel_id is None
+    assert manager._setup_views[guild.id] is not prior
+    manager._setup_views[guild.id].stop()

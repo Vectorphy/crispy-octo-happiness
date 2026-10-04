@@ -1,6 +1,6 @@
 # Known Issues and Debt (Audit Scope)
 
-Verification (2026-10-04 antigravity-fix): all 281 offline tests pass, including Pomodoro recovery, default VC selection/relocation, focus-time DAL, help/setup regression suites, and session-controls AsyncMock fix. Mypy reports zero errors; Ruff lint and formatting pass. Live Discord provisioning has not been exercised. The existing `audioop` deprecation warning remains.
+Verification (2026-10-05 antigravity-fix): all 402 offline tests pass. Mypy reports zero errors across 34 files; Ruff lint, formatting, and whitespace checks pass. Live Discord provisioning has not been exercised. The existing `audioop` deprecation warning remains.
 
 ## 1. Functional & Technical Deficiencies
 
@@ -35,8 +35,9 @@ Verification (2026-10-04 antigravity-fix): all 281 offline tests pass, including
 
 ### ARC-01: Blocking Synchronous SQLite I/O in Async Event Loop
 - **Severity**: High (P1)
-- **Status**: **OPEN**
+- **Status**: **RESOLVED (2026-10-05 offline QA)**
 - **Affected File**: `database.py`
+- **Details**: SQLite work runs through `asyncio.to_thread` under the database lock. Cancelled callers drain workers before releasing that lock, including repeated cancellation; connection opening and closing share the lock. Legacy test connections use `check_same_thread=False` rather than synchronous fallback. Regression checks cover thread execution, cancellation, and concurrent close.
 
 ### ARC-02: Monolithic Functions with Extreme Cyclomatic Complexity (C901)
 - **Severity**: Medium (P2)
@@ -47,9 +48,10 @@ Verification (2026-10-04 antigravity-fix): all 281 offline tests pass, including
 
 ### ARC-03: Orphaned Scratch Artifacts and Duplicate Backups in Tree
 - **Severity**: Low (P2)
-- **Status**: **OPEN**
+- **Status**: **RESOLVED (2026-10-05)**
 - **Affected Files**:
   - `cogs/study_groups.txt`
+- **Details**: Removed the inactive duplicate. Release packages use an allowlist and exclude development/test artifacts while retaining regression tests in Git.
 
 ### ARC-04: Test Suite Bifurcation (`tests/` vs `test_file.py`)
 - **Severity**: Medium (P1)
@@ -66,7 +68,7 @@ Verification (2026-10-04 antigravity-fix): all 281 offline tests pass, including
 - **Severity**: Low (P2)
 - **Status**: **RESOLVED (2026-10-04)**
 - **Affected File**: `cogs/_setup_view.py`, `cogs/manager.py`
-- **Details**: Added explicit setup resource recovery via interactive `Recover` button on `SetupView` and programmatic `recover_retained_resources` method. Enforces strict explicit ownership checks before resource deletion: verifies resources were created in the active session, verifies IDs are not saved in active database settings (`group_category_id`, `commands_channel_id`, `mod_log_channel_id`, `default_vc_id`), verifies channels do not belong to active study groups, checks that created categories are empty before deletion, reverts moved channels back to their previous categories without deletion, and restricts interactive recovery to session owners or Tier 3+ managers. Superseded setup sessions in `Manager.setup` automatically recover uncommitted resources. Covered by 6 dedicated unit tests in `tests/test_setup.py`.
+- **Details**: Added explicit setup resource recovery via interactive `Recover` button on `SetupView` and programmatic `recover_retained_resources` method. Enforces strict explicit ownership checks before resource deletion: verifies resources were created in the active session, verifies IDs are not saved in active database settings (`group_category_id`, `commands_channel_id`, `mod_log_channel_id`, `default_vc_id`), verifies channels do not belong to active study groups, checks that created categories are empty before deletion, reverts moved channels back to their previous categories without deletion, and requires current staff authority in the same guild. Superseded setup sessions in `Manager.setup` automatically recover uncommitted resources. Covered by 6 dedicated unit tests in `tests/test_setup.py`.
 
 ---
 
@@ -74,8 +76,9 @@ Verification (2026-10-04 antigravity-fix): all 281 offline tests pass, including
 
 ### SEC-01: Default Superuser ID in Configuration Template
 - **Severity**: Medium (P1)
-- **Status**: **OPEN**
+- **Status**: **RESOLVED (configuration validation)**
 - **Affected Files**: `.env.example`, `cogs/manager.py`
+- **Details**: Startup validates `BOT_DEVELOPER_ID` and rejects the template placeholder, malformed values, and invalid bounds. An invalid value yields no configured developer authority. Offline validation tests cover these cases.
 
 ### SEC-02: Missing Timeout Wrappers on Discord API Calls
 - **Severity**: Medium (P1)
@@ -124,7 +127,7 @@ Verification (2026-10-04 antigravity-fix): all 281 offline tests pass, including
 - **Severity**: Medium (P2)
 - **Status**: **RESOLVED**
 - **Affected Files**: `cogs/study_groups.py`, `tests/test_release_fixes.py`
-- **Details**: Force Video warns members after 30 seconds and gives them a 60-second grace period before disconnecting members with neither camera nor screen sharing, while Speak updates both `@everyone` and group-role microphone permissions with transactional rollback.
+- **Details**: Force Video uses a default 60-second total wait, warns for the final 30 seconds, and relocates members with neither camera nor screen sharing, while Speak updates both `@everyone` and group-role microphone permissions with transactional rollback.
 
 ### AD-12: Study-group voice channels were deleted when empty
 - **Severity**: Medium (P2)
@@ -161,7 +164,7 @@ The rc3 candidate builds on `c7bdca3`. On bundled Python 3.12.14 with the origin
 - **Severity**: Medium (P2)
 - **Status**: **RESOLVED (2026-10-04)**
 - **Affected Files**: `cogs/pomodoro.py`, `database.py`
-- **Details**: Implemented backward-compatible `pomodoro_runtime` table (`session_key`, `group_id`, `guild_id`, `state` JSON, `active`). `save_pomodoro_runtime` / `retire_pomodoro_runtime` / `retire_group_pomodoro_runtime` persist and clean up snapshots under the asyncio lock. `load_active_sessions_from_db` hydrates deadlines, stage, cycles, timer, pause state, consent roster, dropout list, absence counts, and focus-second accumulators on `on_ready`. Offline-elapsed time advances stages without attendance or focus credit; malformed or cross-guild/cross-UUID records are retired. Concurrent save/retire is serialized via `_runtime_lock`. Crash-loss window is at most one snapshot interval (≤15 s). Group deletion retires all group runtimes atomically. Covered by `tests/test_pomodoro_recovery.py` (9 tests).
+- **Details**: Implemented backward-compatible `pomodoro_runtime` table (`session_key`, `group_id`, `guild_id`, `state_json` JSON, `active`). `save_pomodoro_runtime` / `retire_pomodoro_runtime` / `retire_group_pomodoro_runtime` persist and clean up snapshots under the asyncio lock. `load_active_sessions_from_db` hydrates deadlines, stage, cycles, timer, pause state, consent roster, dropout list, absence counts, and focus-second accumulators on `on_ready`. Offline-elapsed time advances stages without attendance or focus credit; malformed or cross-guild/cross-UUID records are retired. Concurrent save/retire is serialized via `_runtime_lock`. Snapshots target a 15-second interval when writes succeed; failed writes can widen the crash-loss window. Group deletion retires all group runtimes atomically. Covered by recovery, timing, downtime, and final-write regressions in `tests/test_pomodoro_recovery.py`.
 
 ### SEC-06: Auto-synced staff grants can outlive Discord permissions
 - **Severity**: Medium (P2)
@@ -182,3 +185,19 @@ Owner-approval controls, invitation consent, group naming, dashboard delegation,
 - **Status**: **RESOLVED (2026-10-04)**
 - **Affected Files**: `utils.py`, `cogs/productivity_tracker.py`, `database.py`
 - **Details**: Random hours replaced with DB-measured attended Pomodoro focus time. A new `productivity_focus_time` table accumulates per-session per-user seconds with a monotonic MAX upsert; `save_productivity_focus_time` validates finite non-negative values and rejects partial writes. `get_productivity_focus_seconds` aggregates cumulative seconds by user. `ProductivityService` computes exact unrounded efficiency from measured seconds and returns zero when no focus time is recorded. The embed is labelled "measured-focus". Focus is counted only for consented + present + not-dropped-out members during active focus stages; breaks, pauses, dropout, and bot downtime are excluded. Covered by `tests/test_productivity_time.py` and `tests/test_productivity_tracker.py`.
+
+## QA corrections (2026-10-05)
+
+### AD-17: Concurrent group teardown repeats cleanup after state is cleared
+- **Severity**: High (P1)
+- **Status**: **RESOLVED in offline regressions**
+- **Affected Files**: `cogs/study_groups.py`, `cogs/pomodoro.py`
+- **Details**: Manual teardown and the background monitor could both enter cleanup, causing repeated Unknown Channel/Role errors and dereferences of cleared guild state. An end lock and ending/ended states prevent duplicate cleanup. Final focus persistence runs before deleting resources. A failed final write reports failure privately, leaves the group active for retry, and keeps the monitor running. Real SQLite-backed failure, retry, and duplicate-end regressions pass.
+
+### ARC-08: Setup recovery provenance remains in memory
+- **Severity**: Low (P2)
+- **Status**: **OPEN limitation**
+- **Affected Files**: `cogs/_setup_view.py`, `cogs/manager.py`
+- **Details**: Cancelled, expired, or failed setup drafts retain resource IDs and original channel permissions for retry through `/setup`. Restarting the bot loses those handles, so retained resources may need manual review. Staff role, membership, and permission changes made during a failed Save are also outside channel/category rollback. No persistent recovery schema was added during QA.
+
+Legacy runtime snapshots cannot distinguish historical Present and Absent responses. Recovery preserves consent but starts explicit Present tracking empty for such snapshots, so members must mark Present again. Snapshot intervals target 15 seconds when persistence succeeds; write failures can widen crash loss.

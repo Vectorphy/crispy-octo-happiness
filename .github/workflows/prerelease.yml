@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release Tag (e.g. v1.0.0-rc.1)'
+        description: 'Release Tag (e.g. v1.0.0-rc.5)'
         required: false
-        default: 'v1.0.0-rc.1'
+        default: 'v1.0.0-rc.5'
         type: string
       prerelease:
         description: 'Mark as Prerelease'
@@ -23,7 +23,7 @@ on:
       title:
         description: 'Release Title'
         required: false
-        default: 'Release Candidate 1.0.0-rc.1: Autonomous Operations & Pomodoro Overhaul'
+        default: 'Release Candidate 1.0.0-rc.5: Autonomous Operations & Pomodoro Overhaul'
         type: string
 
 permissions:
@@ -80,9 +80,10 @@ jobs:
       run: |
         python -m pip install --upgrade pip build
 
-    - name: Build Python Wheel and Source Distribution
+    - name: Build and validate deployment packages
       run: |
         python -m build
+        python .github/scripts/package_runtime.py
 
     - name: Resolve Release Metadata
       id: release_meta
@@ -136,7 +137,9 @@ jobs:
         draft: false
         generate_release_notes: true
         files: |
-          dist/*
+          dist/*.whl
+          dist/*.tar.gz
+          dist/*-runtime.zip
           commands.md
           readme.md
       env:
@@ -146,4 +149,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: release-distribution-packages
-        path: dist/*
+        path: |
+          dist/*.whl
+          dist/*.tar.gz
+          dist/*-runtime.zip

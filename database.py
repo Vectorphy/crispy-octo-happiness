@@ -19,12 +19,29 @@ class DBHandler:
         logger.info(f"Database initialized with name: {db_name}")
 
     async def _run_in_thread(self, func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
-        try:
-            return await asyncio.to_thread(func, *args, **kwargs)
-        except sqlite3.ProgrammingError as e:
-            if "same thread" in str(e):
-                return func(*args, **kwargs)
-            raise
+        worker = asyncio.create_task(asyncio.to_thread(func, *args, **kwargs))
+        cancelled = False
+        while True:
+            try:
+                result = await asyncio.shield(worker)
+                break
+            except asyncio.CancelledError:
+                cancelled = True
+                if worker.done():
+                    break
+            except BaseException:
+                if cancelled:
+                    logger.exception("SQLite worker failed while draining cancellation")
+                    raise asyncio.CancelledError from None
+                raise
+        if cancelled:
+            # The caller still owns the DAL lock until the SQLite worker finishes.
+            if worker.done() and not worker.cancelled():
+                error = worker.exception()
+                if error is not None:
+                    logger.error("SQLite worker failed while draining cancellation", exc_info=error)
+            raise asyncio.CancelledError
+        return result
 
     def _fetchone_sync(self, query: str, params: tuple[Any, ...] = ()) -> Optional[sqlite3.Row]:
         cursor = self.conn.cursor()
@@ -54,7 +71,12 @@ class DBHandler:
             conn.row_factory = sqlite3.Row
             return conn
 
-        self.conn = await self._run_in_thread(_open)
+        async with self.lock:
+
+            def _connect() -> None:
+                self.conn = _open()
+
+            await self._run_in_thread(_connect)
         logger.info(f"Connected to database: {self.db_name}")
         await self.create_tables()
 
@@ -394,9 +416,10 @@ class DBHandler:
 
     async def close(self) -> None:
         """Close the database connection."""
-        if self.conn:
-            await self._run_in_thread(self.conn.close)
-            logger.info("Database connection closed.")
+        async with self.lock:
+            if self.conn:
+                await self._run_in_thread(self.conn.close)
+                logger.info("Database connection closed.")
 
     async def set_mod_log_channel(self, guild_id: int, channel_id: Optional[int]) -> None:
         async with self.lock:
@@ -513,6 +536,15 @@ class DBHandler:
                 "MAX(productivity_focus_time.focus_seconds, excluded.focus_seconds)",
                 values,
             )
+
+    async def get_session_productivity_focus_seconds(self, tracking_id: str) -> dict[int, float]:
+        async with self.lock:
+            rows = await self._run_in_thread(
+                self._fetchall_sync,
+                "SELECT user_id, focus_seconds FROM productivity_focus_time WHERE session_id = ?",
+                (tracking_id,),
+            )
+            return {int(row[0]): float(row[1]) for row in rows}
 
     async def get_productivity_focus_seconds(self, user_id: int) -> float:
         async with self.lock:
@@ -890,13 +922,10 @@ class DBHandler:
     async def get_user_created_group_count(self, user_id: int) -> int:
         def _sync() -> int:
             cursor = self.conn.cursor()
-            cursor.execute(
-                "SELECT COUNT(*) FROM study_groups WHERE creator_id = ? AND active = 1",
-                (user_id,)
-            )
+            cursor.execute("SELECT COUNT(*) FROM study_groups WHERE creator_id = ? AND active = 1", (user_id,))
             row = cursor.fetchone()
             return row[0] if row else 0
-        
+
         async with self.lock:
             return await self._run_in_thread(_sync)
 
@@ -910,11 +939,11 @@ class DBHandler:
                 JOIN study_groups_members ON study_groups.group_id = study_groups_members.group_id
                 WHERE study_groups_members.user_id = ? AND study_groups.active = 1
                 """,
-                (user_id,)
+                (user_id,),
             )
             row = cursor.fetchone()
             return row[0] if row else 0
-        
+
         async with self.lock:
             return await self._run_in_thread(_sync)
 
@@ -1564,6 +1593,9 @@ class DBHandler:
         if group_id:
             query = "SELECT * FROM tasks WHERE user_id = ? AND group_id = ? ORDER BY id ASC"
             params: tuple[Any, ...] = (user_id, str(group_id))
+        elif guild_id is not None and global_only:
+            query = "SELECT * FROM tasks WHERE user_id = ? AND guild_id = ? AND group_id IS NULL ORDER BY id ASC"
+            params = (user_id, guild_id)
         elif guild_id is not None:
             query = "SELECT * FROM tasks WHERE user_id = ? AND guild_id = ? ORDER BY id ASC"
             params = (user_id, guild_id)

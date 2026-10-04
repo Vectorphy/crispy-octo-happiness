@@ -1,6 +1,6 @@
 # TODO
 
-Updated on 2026-10-04 for the antigravity-fix / codex/default-vc-pomodoro-recovery branch. Checked items have implementation and offline regression evidence; historical verification counts describe earlier checkpoints.
+Updated on 2026-10-05 for the antigravity-fix branch. Historical verification counts describe earlier checkpoints.
 
 ## Immediate refactoring (Phase 1)
 
@@ -17,22 +17,22 @@ Updated on 2026-10-04 for the antigravity-fix / codex/default-vc-pomodoro-recove
 - [x] Batch task purges and clean matching bot task messages owned by the invoker among the latest 100 messages in the current channel.
 - [x] Provide owner-checked Select menus for completion and deletion, with exact row and group checks.
 - [x] Send recipient-only invitation DMs with Join/Decline controls, expiry, lifecycle and capacity checks, and serialized admission.
-- [x] Keep task commands usable in DMs.
-- [x] Make task results and `/create_group` results public.
+- [ ] Keep all task commands usable in DMs. Add/list/action menus work, and `/task_purge all_tasks:true` works; default DM purge still requires a server or group.
+- [x] Make ordinary task and `/create_group` success results public in active group channels and the saved commands channel. Errors, menus, DMs, and cross-group results stay private.
 - [x] Combine initial group mentions, status, and controls in one dashboard message.
 - [x] Persist `/set_mod_log_channel` and send group creation, ending, and purge event embeds without mentions.
-- [x] Implement forced video participation with a 30-second warning and 60-second grace period; members without a camera or screen sharing are disconnected.
+- [x] Implement forced video participation with a default 60-second total wait and a warning for the final 30 seconds; members without a camera or screen sharing are relocated to the saved default VC. Microphone enforcement remains off.
 
 ## Technical debt
 
 - [x] Move SQLite I/O off the event loop using `asyncio.to_thread` or an approved async driver.
-- [x] Replace placeholder productivity hours with measured, persisted session/voice time before presenting efficiency as real analytics.
+- [x] Replace placeholder productivity hours with measured, persisted attended Pomodoro focus time. Arbitrary study-group or voice-channel time is not measured.
 - [ ] Decompose complex group and Pomodoro handlers into services.
 - [x] Include the standalone command matrix in pytest discovery.
 - [ ] Add explicit timeouts around external resource provisioning calls.
 - [x] Validate `BOT_DEVELOPER_ID` and reject placeholder or invalid values.
 - [x] Add persistent retry tracking for Discord resources left behind when group cleanup lacks permissions.
-- [x] Add recovery for setup resources retained after failed saves, with explicit ownership checks before resource deletion.
+- [x] Recover retained setup channels/categories within the current process, with ownership checks and exact channel-permission rollback. Restart loses recovery handles; staff-role and membership changes remain outside rollback (ARC-08).
 
 ## Release audit findings
 
@@ -50,7 +50,6 @@ Updated on 2026-10-04 for the antigravity-fix / codex/default-vc-pomodoro-recove
 - [x] Create or reuse `#cpo-commands` and `#cpo-logs` in the chosen category and save their IDs with the category and default member limit.
 - [x] Synchronize new and reused logs channels with category permissions and use the existing moderator activity log destination.
 - [x] Make normal slash success replies public in active study-group channels and the exact stored commands channel; keep threads, other channels, DMs, errors, and sensitive results private.
-- [x] Verify wizard ownership, persistence failures, legacy migration, exact-channel visibility, and unchanged operational message destinations with offline regressions (107 tests; mypy and Ruff pass on 2026-10-04).
 
 - [x] Show newly added guild managers and bot developers immediately in `/list_managers`, without duplicate people or truncating large lists.
 
@@ -75,14 +74,17 @@ Updated on 2026-10-04 for the antigravity-fix / codex/default-vc-pomodoro-recove
 
 ## Release verification
 
-- [x] Verify the 2026-10-04 combined implementation: 224 offline tests, full Mypy, Ruff lint/format, and whitespace checks. Live Discord behavior still requires staging validation.
-- [x] Verify the 2026-10-04 antigravity-fix batch: 281 offline tests pass (includes Pomodoro recovery, full default VC selection/relocation, focus-time DAL, help/setup regression suites, and session-controls AsyncMock fix). No new dependencies.
+- [x] Verify the 2026-10-05 QA fixes: 402 offline tests, zero Mypy errors, Ruff lint/format, and whitespace checks. Independent scoped QA passes; live Discord behavior still requires staging validation.
 
 - [x] Prevent default task-list results from exposing group tasks; require `all_groups: true` for cross-group listing and make cross-group results ephemeral.
 - [x] Scope task persistence and default listings by `guild_id`, preventing cross-server task leaks.
-- [x] Implement the rc4 category-based response visibility policy. The active-group/commands-channel policy above supersedes it.
 - [x] Keep study-group voice channels when the last member leaves; retain explicit deletion paths.
 - [x] Provide a `main.py` compatibility launcher for hosting panels whose default startup command targets `python3 main.py`.
-- [x] Verify the candidate: 68 pytest tests, the asserted 54-flow standalone runner, mypy, Ruff lint, and Ruff formatting on Python 3.12.
 - [x] Correct unsupported completion claims and synchronize commands, architecture, and issue documentation.
-- [ ] Publish the verified commit, move the existing tag with an explicit lease, refresh the prerelease, and verify downloaded packages. This automation's GitHub network access is blocked.
+- [ ] Publish `v1.0.0-rc.5` as a prerelease on `Vectorphy/Chief-Productivity-Officer` and verify downloaded packages. User authorized this deployment on 2026-10-05; do not move existing tags or merge release/main.
+
+## Verification history
+
+The current checked-TODO audit covers 53 supported items with corrected scopes. Code and database maps are in `docs/`. The unused study-group backup was removed; rc.5 wheel, source distribution, and runtime ZIP contents were validated with tests retained in Git and excluded from deployment packages.
+
+Earlier handoffs report checkpoints of 68, 107, 224, and 281 tests. These describe past branches or test selections and are not current verification evidence. The rc4 category-based visibility policy was superseded by exact commands-channel and active-group matching. The current evidence audit is in `docs/TODO_AUDIT.md`.

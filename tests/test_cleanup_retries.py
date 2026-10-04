@@ -207,6 +207,7 @@ class TestProcessPendingCleanups:
         # Channel now has manage_channels permission
         channel = MagicMock(spec=discord.TextChannel)
         channel.id = 4444
+        channel.guild = guild
         channel.delete = AsyncMock()
 
         me = MagicMock(spec=discord.Member)
@@ -218,6 +219,7 @@ class TestProcessPendingCleanups:
         # Role now has manage_roles permission and top_role > role
         role = MagicMock(spec=discord.Role)
         role.id = 5555
+        role.guild = guild
         role.delete = AsyncMock()
         me.guild_permissions = MagicMock(manage_roles=True)
         me.top_role.__gt__ = MagicMock(return_value=True)
@@ -257,6 +259,7 @@ class TestProcessPendingCleanups:
         # Channel still lacks manage_channels
         channel = MagicMock(spec=discord.TextChannel)
         channel.id = 6666
+        channel.guild = guild
         perms = MagicMock()
         perms.manage_channels = False
         channel.permissions_for = MagicMock(return_value=perms)
@@ -321,8 +324,11 @@ class TestProcessPendingCleanups:
 
         # Manager check passes
         with (
-            patch("cogs.study_groups.check_manager", AsyncMock(return_value=True)),
-            patch("cogs.study_groups.should_use_ephemeral", AsyncMock(return_value=True)),
+            patch.dict(
+                cog.retry_cleanups.callback.__globals__,
+                check_manager=AsyncMock(return_value=True),
+                should_use_ephemeral=AsyncMock(return_value=True),
+            ),
             patch.object(cog, "process_pending_cleanups", AsyncMock(return_value={"resolved": 3, "failed": 1})),
         ):
             await cog.retry_cleanups.callback(cog, interaction)

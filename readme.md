@@ -16,7 +16,7 @@ Chief Productivity Officer (CPO) is a Discord bot designed to enhance productivi
 
 1. Clone the repository:
     ```bash
-    git clone https://github.com/Vectorphy/Chief-Productivity-Officer.git
+    git clone https://github.com/Vectorphy/crispy-octo-happiness.git CPO
     cd CPO
     ```
 
@@ -42,9 +42,17 @@ Chief Productivity Officer (CPO) is a Discord bot designed to enhance productivi
     ```
     Hosting panels configured to run `python3 main.py` are also supported; `main.py` delegates to the same startup logic.
 
+## Deployment packages
+
+Use the `*-runtime.zip` release asset for hosting panels. It contains the Python entrypoints, cogs, runtime requirements, safe configuration template, and usage documentation. Extract it, install `requirements.txt`, copy `.env.example` to `.env`, configure your token and developer ID, and run `python main.py`. Keep the SQLite database on persistent storage.
+
+Tests remain in Git for development. Release wheel, source distribution, and runtime ZIP contents are checked against explicit file lists before upload; tests, caches, local databases, secrets, audit reports, and development automation are excluded. The runtime ZIP is the deployment artifact; GitHub's automatically generated source downloads are separate archives.
+
+Maintainers build and validate packages with `python -m build` followed by `python .github/scripts/package_runtime.py`. Validation rejects missing or unexpected package files.
+
 ## Usage
 
-For a full list of available commands and their usage, please refer to the [COMMANDS.md](COMMANDS.md) file. Here are some key command categories:
+For a full list of available commands and their usage, please refer to [commands.md](commands.md). Here are some key command categories:
 
 - Study Group Management: Create, join, leave, and manage study groups.
 - Pomodoro Sessions: Start, end, pause, and resume Pomodoro sessions.
@@ -88,7 +96,7 @@ The bot uses Python's built-in `logging` module for comprehensive logging across
 
 ## Support
 
-If you encounter any problems or have any questions, please open an issue on this repository. For more detailed information on usage and commands, refer to the [COMMANDS.md](COMMANDS.md) file.
+If you encounter any problems or have any questions, please open an issue on this repository. For more detailed information on usage and commands, refer to [commands.md](commands.md).
 
 
 

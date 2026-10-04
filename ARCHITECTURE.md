@@ -2,6 +2,8 @@
 
 ## 1. System Context & C4 Architecture Visualization
 
+Source-based references: [code walkthrough](docs/CODE_WALKTHROUGH.md), [database map](docs/DATABASE_MAP.md), and [checked-TODO audit](docs/TODO_AUDIT.md). Deployment wheel, source distribution, and runtime ZIP are validated against allowlists by `.github/scripts/package_runtime.py`; QA tests and audit documentation remain in Git but are excluded from deployment packages.
+
 The **Chief Productivity Officer (CPO)** is an asynchronous, event-driven Discord application built on `discord.py` 2.4.x and Python 3.10+. It orchestrates productivity tools, collaborative study environments, Pomodoro focus cycles, standup check-ins, and personal task management across Discord guilds.
 
 ### rc3 lifecycle and persistence changes
@@ -10,13 +12,23 @@ Study group startup migrates legacy records with additive columns and identifier
 
 Each group owns a membership lock shared by direct joins, invitation admission, voice-setting changes, and the transition into teardown. Invitations arrive by DM with recipient-only Join/Decline controls and five-minute expiry. Admission grants the role and persists the roster before changing memory; failed persistence attempts to remove the newly granted role. Teardown blocks further admission, marks the persisted group inactive, removes current roster entries and related session aliases, and stops the dashboard controls. When Discord API deletions (text channels, voice channels, or roles) fail due to missing bot permissions or transient API errors, the uncleaned resources are recorded in the `pending_resource_cleanups` table. A background task (`cleanup_retry_loop` every 10 minutes) and startup sweep in `bot.py:on_ready` automatically re-attempt deletion when permissions are granted or prune records when the resources are confirmed gone on Discord. Server managers can also trigger `/retry_cleanups` for immediate execution and status inspection.
 
-The initial group dashboard combines mentions, the status embed, and controls. Speak and Video preserve unrelated voice permission overwrites. A failed settings write triggers a Discord rollback; a failed rollback is logged for manual recovery. Force Video warns members after 30 seconds and allows a 60-second grace period before relocating members without camera or screen sharing to the configured default voice channel (`CPO Lobby`, `guild_settings.default_vc_id`) via `cogs/_voice_relocation.py`. If relocation is unavailable or fails, an error is logged and a private notification is sent via DM without disconnecting the member.
+The initial group dashboard combines mentions, the status embed, and controls. Speak and Video preserve unrelated voice permission overwrites. A failed settings write triggers a Discord rollback; a failed rollback is logged for manual recovery. With the default 60-second wait, Force Video warns members for the final 30 seconds before relocating members without camera or screen sharing to the configured default voice channel (`CPO Lobby`, `guild_settings.default_vc_id`) via `cogs/_voice_relocation.py`. If relocation is unavailable or fails, an error is logged and a private notification is sent via DM without disconnecting the member.
 
 Task Select menus carry primary row IDs and pass the owner and exact group to `DBHandler.apply_task_action`. This prevents a legacy task number from affecting multiple rows. Task command acknowledgements follow the group/commands-channel visibility policy. Purges batch database deletion, then inspect only the current channel's latest 100 messages for bot task messages attributed to the requesting user. A Discord cleanup failure is reported privately without undoing successful database deletion.
 
 `guild_settings.mod_log_channel_id` stores the optional destination for group lifecycle embeds. Event logs include the actor and group, suppress mentions, and tolerate missing channels or logging failures. If cleanup deletes the invocation channel and Discord returns error 10003, the final command result is sent by DM. If that DM also fails, the result is logged.
 
 Offline verification covers these flows in pytest and executes the standalone 54-command matrix against an in-memory database. API calls are mocked; live Discord provisioning remains outside these checks.
+
+### QA corrections, 2026-10-05
+
+Group teardown has a separate ending state and a lock around the full operation. The background lifetime monitor waits while teardown is in progress and survives failed final persistence; duplicate calls cannot repeat deletion after the group is cleared. Discord NotFound responses count as completed cleanup. Pending deletion retries serialize and check guild, resource type, active group references, and saved setup resources. Lookup failures retain the retry record.
+
+SQLite operations run in workers while the database lock is held. Cancellation waits for the worker to finish before releasing the lock, including repeated cancellation. Connection opening and closing use the same lock.
+
+Pomodoro attendance responses and explicit Present status use separate sets. Focus credit requires consent, Present status, and, in voice mode, current presence in the session VC. Gateway downtime, breaks, pauses, and dropout do not earn credit. Recovery reconciles cumulative counters with saved analytics by tracking ID. A failed final accounting write pauses the session and keeps its counters for retry; group teardown does not finish until that write succeeds.
+
+Setup recovery shares the Save lock, requires current staff authority in the correct guild, and fails closed when ownership queries fail. Original categories and permission overwrites are captured once and restored exactly. Failed recovery retains its resource IDs, including after Cancel or expiry; another `/setup` retries recovery before replacing the draft. These recovery handles are held in memory and do not survive a process restart. Changes to staff roles and memberships made during a failed Save still require review.
 
 ### Server setup and reply visibility
 
@@ -48,7 +60,7 @@ Current group/session owners and guild staff end directly. Other current partici
 
 Pomodoros use UTC deadlines. The timer checks expiry before pause state, offers renewal with one hour left, and offers a new prompt for each renewed deadline. Renew adds 24 hours to the existing deadline. Each stage and check-in reminder interval is 2–240 minutes. Auto-calculated Pomodoro breaks use the 5:1:3 ratio with a two-minute minimum.
 
-Pomodoro runtime state is persisted in SQLite (`pomodoro_runtime`) via periodic JSON snapshots (bounded by a ≤15-second crash-loss window) serialized through `_runtime_lock`. Upon bot reboot, `load_active_sessions_from_db()` hydrates active sessions, advances stages offline if deadlines elapsed during bot downtime (without granting unearned focus credit), restores paused/running states, and resumes background tick loops. Ending or group teardown retires runtime records, preventing zombie session resurrection. Attended focus time is tracked in `productivity_focus_time` with monotonic cumulative seconds for opted-in participants present in voice during active focus stages, powering real unrounded efficiency metrics.
+Pomodoro runtime state is persisted in SQLite (`pomodoro_runtime`) via periodic JSON snapshots (a 15-second target interval when writes succeed) serialized through `_runtime_lock`. Upon bot reboot, `load_active_sessions_from_db()` hydrates active sessions, advances stages offline if deadlines elapsed during bot downtime (without granting unearned focus credit), restores paused/running states, and resumes background tick loops. Ending or group teardown retires runtime records, preventing zombie session resurrection. Attended focus time is tracked in `productivity_focus_time` with monotonic cumulative seconds for opted-in participants present in voice during active focus stages, powering real unrounded efficiency metrics.
 
 ### 1.1 C4 Container Diagram
 

@@ -1,5 +1,7 @@
 # Chief Productivity Officer (CPO) — Knowledge Graph & Semantic Architecture
 
+Current source evidence: [code walkthrough](docs/CODE_WALKTHROUGH.md), [database map](docs/DATABASE_MAP.md), and [checked-TODO audit](docs/TODO_AUDIT.md). Package version `1.0.0rc5` targets `v1.0.0-rc.5`; `.github/scripts/package_runtime.py` validates wheel/source-distribution members and creates the allowlisted hosting ZIP. Development tests stay in Git and are excluded from deployment archives.
+
 This document provides a formal, comprehensive Knowledge Graph and architectural mapping of the **Chief Productivity Officer (CPO)** Discord bot repository. It maps directory boundaries, component topologies, execution lifecycles, state invariants, database schemas, and external dependencies to enable autonomous AI agents and engineers to navigate, reason about, and modify the codebase with precision.
 
 ---
@@ -313,14 +315,14 @@ erDiagram
         text session_key PK "Group UUID string used as lookup key"
         text group_id "Study group UUID"
         int guild_id "Discord Guild Snowflake ID"
-        text state "JSON snapshot: stage, timer, cycles, pause, participants, focus_seconds, tracking_id, etc."
+        text state_json "JSON snapshot: stage, timer, cycles, pause, participants, focus_seconds, tracking_id, etc."
         int active "1 = live runtime; 0 = retired"
     }
 
     PRODUCTIVITY_FOCUS_TIME {
-        text tracking_id PK "Unique per-Pomodoro session UUID"
-        int guild_id PK "Discord Guild Snowflake ID"
-        text group_id PK "Study group UUID string"
+        text session_id PK "Unique per-Pomodoro tracking UUID"
+        int guild_id "Discord Guild Snowflake ID"
+        text group_id "Study group UUID string"
         int user_id PK "Discord User Snowflake ID"
         real focus_seconds "Cumulative attended focus seconds (monotonic MAX upsert)"
     }
@@ -330,7 +332,11 @@ erDiagram
 
 ## 4. State & Invariants
 
-- **Application command visibility**: `bot.py:setup_hook` syncs the global command tree, then `on_ready` replaces each guild's command set with a copy of the global commands and syncs it for immediate visibility. Standalone resource maintenance commands are excluded from the tree. Registered staff commands rely on handler guards and omit default permission restrictions so explicit bot-granted staff can access them.
+- **Cancellation and teardown**: Database workers finish before cancellation releases the database lock. Group teardown holds an end lock and tracks ending/ended separately from active status. Retry cleanup checks ownership and active references before deletion and retains uncertain failures.
+- **Measured attendance**: Pomodoro response tracking is separate from Present status. Credit requires opted-in Present participants in the session VC for voice mode; text-only sessions require explicit Present. Gateway downtime earns no credit. Recovery reconciles saved cumulative totals by tracking ID, and failed final writes retain counters for retry.
+- **Setup rollback**: Save and recovery share the per-guild setup lock. Recovery checks current guild/staff authority and database ownership, restores captured categories and overwrites, and retains unresolved handles. Handles survive wizard cancellation/expiry in memory, but not bot restart.
+
+- **Application command visibility**: `bot.py:setup_hook` syncs the global command tree. `on_ready` clears guild-specific registrations so Discord uses the global commands. Standalone resource maintenance commands are excluded from the tree. Registered staff commands rely on handler guards and omit default permission restrictions so explicit bot-granted staff can access them.
 - **Study group lookups**: `DBHandler.get_user_group`, `get_study_group_by_channel`, and `get_study_group` return dictionaries so cogs can consistently read records with `.get()` and map database IDs to in-memory sessions.
 - **Study group membership**: `save_study_group` writes only the consented initial roster (the creator at creation) to `study_groups_members` under the group UUID. Group roster reads and `/list_groups` use that same UUID.
 - **Invitations and admission**: `GroupInvitationView` sends recipient-only Join/Decline controls by DM. A group membership lock serializes invitations and direct joins, enforces capacity, and prevents admission during teardown. Memory membership follows successful role assignment and persistence; a failed database write triggers role rollback.
@@ -354,7 +360,7 @@ erDiagram
 | Component | State Medium | Concurrency & Sync Mechanism | Invariant Rules |
 |---|---|---|---|
 | **Study Groups** | In-Memory (`StudyGroupCog.sessions`) & SQLite (`study_groups`) | Synchronized during lifecycle events; hydrated from SQLite on startup. | An active study group must hold valid `text_id`, `vc_id`, and `group_role_id`. When terminated, channels and roles must be deleted, `active` set to `0`, and memory references popped. |
-| **Pomodoro Engine** | In-memory (`Pomodoro.sessions`) + SQLite (`pomodoro_runtime`) | Tick evaluation checks UTC expiry even while paused; reminders go to the group channel. `_runtime_lock` serializes concurrent persist/retire; `load_active_sessions_from_db` hydrates on `on_ready`. | Each stage is 2–240 minutes; automatic breaks use the 5:1:3 ratio with a two-minute minimum. Every fourth cycle has a long break. Renew adds 24 hours; crash-loss window is ≤15 s (one snapshot interval). Offline-elapsed time advances stages but does not count focus credit. |
+| **Pomodoro Engine** | In-memory (`Pomodoro.sessions`) + SQLite (`pomodoro_runtime`) | Tick evaluation checks UTC expiry even while paused; reminders go to the group channel. `_runtime_lock` serializes concurrent persist/retire; `load_active_sessions_from_db` hydrates on `on_ready`. | Each stage is 2–240 minutes; automatic breaks use the 5:1:3 ratio with a two-minute minimum. Every fourth cycle has a long break. Renew adds 24 hours; snapshots target 15-second intervals when writes succeed; persistence failures can widen crash loss. Offline-elapsed time advances stages but does not count focus credit. |
 | **Check-in Standups** | In-Memory (`CheckinCog.active_sessions`) & SQLite (`checkin_sessions`) | Periodic `asyncio.sleep` reminder loop with member state dict. | Member absences cannot be negative. If absences exceed `max_absences`, member status transitions to `exited` or is kicked from group. |
 | **Task Lists** | SQLite (`tasks`) | Atomic parameterized SQL queries under `async with self.lock:`. | If invoked inside a study group channel (`channel_id`), tasks are strictly scoped to `group_id`. Global tasks are isolated from group tasks. |
 | **Permission Controls** | Memory Cache & SQLite (`managers`) | Dynamic permission resolution cascading across 5 tiers. | Superuser `BOT_DEVELOPER` (ID in `.env`) unconditionally overrides all guild-level and group-level permissions. |

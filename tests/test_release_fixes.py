@@ -52,7 +52,7 @@ def group_fixture():
 @pytest.mark.parametrize("schema", ["missing_id", "partial", "legacy_names"])
 async def test_legacy_migration_preserves_groups_and_rosters(schema):
     db = DBHandler(":memory:")
-    db.conn = sqlite3.connect(":memory:")
+    db.conn = sqlite3.connect(":memory:", check_same_thread=False)
     db.conn.row_factory = sqlite3.Row
     async with db.lock:
         db.conn.execute(
@@ -267,7 +267,7 @@ async def test_task_list_defaults_to_global_scope_and_true_lists_all_groups():
 
     # In the commands channel, all_groups=False limits tasks to guild and is public
     await cog.list_tasks.callback(cog, request, all_groups="false")
-    bot.db.get_user_tasks.assert_awaited_once_with(123, guild_id=99)
+    bot.db.get_user_tasks.assert_awaited_once_with(123, global_only=True, guild_id=99)
     request.response.send_message.assert_awaited_once_with("Processing your request…", ephemeral=True)
 
     # In other categories outside the group category, all_groups=False is ephemeral
@@ -400,7 +400,7 @@ async def test_standalone_command_matrix_asserts_all_54_flows():
 @pytest.mark.asyncio
 async def test_earliest_schema_retains_legacy_roles_rosters_and_allows_new_groups():
     db = DBHandler(":memory:")
-    db.conn = sqlite3.connect(":memory:")
+    db.conn = sqlite3.connect(":memory:", check_same_thread=False)
     db.conn.row_factory = sqlite3.Row
     async with db.lock:
         db.conn.execute(
@@ -531,6 +531,13 @@ async def test_group_cleanup_blocks_join_and_removes_every_pomodoro_alias():
     unrelated = MagicMock(group_id=8, text_id=31)
     pomo = MagicMock()
     pomo.sessions = {7: session, group_id: session, 8: unrelated}
+
+    async def remove_session(current):
+        for key, item in list(pomo.sessions.items()):
+            if item is current:
+                pomo.sessions.pop(key)
+
+    pomo._remove_session = AsyncMock(side_effect=remove_session)
     group.bot.get_cog.side_effect = lambda name: pomo if name == "Pomodoro" else None
     view = GroupInvitationView(group, 456)
 
@@ -692,3 +699,82 @@ async def test_database_admission_is_atomic_and_rejects_ended_groups():
         assert await db.fetch_members_of_group("limited") == []
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_group_end_concurrent_and_repeated_after_clear_runs_once():
+    group, channel, role = group_fixture()
+    group.cog.log_mod_action = AsyncMock()
+    group.bot.get_cog.return_value = None
+    group.guild.members = []
+    role.delete = AsyncMock()
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def blocked_delete(**kwargs):
+        entered.set()
+        await release.wait()
+
+    channel.delete.side_effect = blocked_delete
+    first = asyncio.create_task(group.end_group(delay=0))
+    await entered.wait()
+    second = asyncio.create_task(group.end_group(delay=0))
+    await asyncio.sleep(0)
+    assert not second.done()
+    release.set()
+    await asyncio.gather(first, second)
+    await group.end_group(delay=0)
+    channel.delete.assert_awaited_once()
+    role.delete.assert_awaited_once()
+    group.db.delete_study_group.assert_awaited_once()
+    assert group.ended and group.guild is None
+
+
+@pytest.mark.asyncio
+async def test_group_end_missing_resources_are_already_deleted():
+    group, channel, role = group_fixture()
+    group.cog.log_mod_action = AsyncMock()
+    group.bot.get_cog.return_value = None
+    group.guild.members = []
+    missing = discord.NotFound(MagicMock(status=404), "Unknown resource")
+    channel.delete.side_effect = missing
+    role.delete = AsyncMock(side_effect=missing)
+    await group.end_group(delay=0)
+    group.db.record_pending_cleanup.assert_not_awaited()
+    assert group.ended
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "problem", ["active_group", "reassigned", "settings", "lookup_error", "fetch_error", "wrong_guild", "wrong_type"]
+)
+async def test_cleanup_retry_retains_resources_when_ownership_is_uncertain(problem):
+    group, channel, _ = group_fixture()
+    db, cog, guild = group.db, group.cog, group.guild
+    db.get_pending_cleanups.return_value = [
+        {"id": 1, "guild_id": 99, "group_id": "old", "resource_type": "voice_channel", "resource_id": 40}
+    ]
+    db.fetch_study_group_by_id.return_value = None
+    db.get_all_study_groups.return_value = []
+    for getter in (db.get_group_category, db.get_commands_channel, db.get_mod_log_channel, db.get_default_vc):
+        getter.return_value = None
+    channel.guild = guild
+    if problem == "active_group":
+        db.fetch_study_group_by_id.return_value = {"active": 1, "guild_id": 99}
+    elif problem == "reassigned":
+        db.get_all_study_groups.return_value = [{"active": 1, "vc_id": 40}]
+    elif problem == "settings":
+        db.get_default_vc.return_value = 40
+    elif problem == "lookup_error":
+        db.fetch_study_group_by_id.side_effect = sqlite3.OperationalError("busy")
+    elif problem == "fetch_error":
+        guild.get_channel.return_value = None
+        group.bot.fetch_channel = AsyncMock(side_effect=discord.HTTPException(MagicMock(status=503), "offline"))
+    elif problem == "wrong_guild":
+        channel.guild = MagicMock(id=100)
+    else:
+        guild.get_channel.return_value = AsyncMock(spec=discord.TextChannel, guild=guild)
+    result = await cog.process_pending_cleanups(guild)
+    assert result["failed"] == 1
+    channel.delete.assert_not_awaited()
+    db.delete_pending_cleanup.assert_not_awaited()
+    db.update_cleanup_retry.assert_awaited_once()

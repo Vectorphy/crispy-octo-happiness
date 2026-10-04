@@ -189,14 +189,21 @@ class TestDBHandler(unittest.TestCase):
             await self.db.add_task(123, "Global task")
             await self.db.add_task(123, "Group task", group_id="group-1")
             await self.db.add_task(123, "Server task", guild_id=99)
+            await self.db.add_task(123, "Server group task", group_id="group-2", guild_id=99)
+            await self.db.add_task(123, "Foreign server task", guild_id=101)
 
             global_tasks = await self.db.get_user_tasks(123, global_only=True)
             server_tasks = await self.db.get_user_tasks(123, guild_id=99)
+            server_personal_tasks = await self.db.get_user_tasks(123, global_only=True, guild_id=99)
             all_tasks = await self.db.get_user_tasks(123)
 
             self.assertEqual([task["description"] for task in global_tasks], ["Global task"])
-            self.assertEqual([task["description"] for task in server_tasks], ["Server task"])
-            self.assertEqual([task["description"] for task in all_tasks], ["Global task", "Group task", "Server task"])
+            self.assertEqual([task["description"] for task in server_tasks], ["Server task", "Server group task"])
+            self.assertEqual([task["description"] for task in server_personal_tasks], ["Server task"])
+            self.assertEqual(
+                [task["description"] for task in all_tasks],
+                ["Global task", "Group task", "Server task", "Server group task", "Foreign server task"],
+            )
 
         asyncio.run(run_test())
 
@@ -484,21 +491,47 @@ class TestDBHandler(unittest.TestCase):
 
         asyncio.run(run_test())
 
-    def test_run_in_thread_fallback_on_same_thread_connection(self):
+    def test_run_in_thread_rejects_same_thread_connection(self):
         async def run_test():
-            # Create a DBHandler with check_same_thread=True explicitly
-            fallback_db = DBHandler(db_name=":memory:")
-            fallback_db.conn = sqlite3.connect(":memory:")  # check_same_thread=True by default
-            fallback_db.conn.row_factory = sqlite3.Row
-            await fallback_db.create_tables()
+            db = DBHandler(db_name=":memory:")
+            db.conn = sqlite3.connect(":memory:")
+            try:
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    await db.create_tables()
+            finally:
+                db.conn.close()
 
-            # Verify that fallback handles queries without raising ProgrammingError
-            task_id = await fallback_db.add_task(user_id=456, description="Fallback test")
-            self.assertIsNotNone(task_id)
-            tasks = await fallback_db.get_user_tasks(user_id=456)
-            self.assertEqual(len(tasks), 1)
-            self.assertEqual(tasks[0]["description"], "Fallback test")
-            await fallback_db.close()
+        asyncio.run(run_test())
+
+    def test_cancellation_keeps_sqlite_worker_locked_until_finished(self):
+        import threading
+
+        async def run_test():
+            db = DBHandler(":memory:")
+            await db.connect()
+            entered, release = threading.Event(), threading.Event()
+
+            def worker():
+                entered.set()
+                release.wait(5)
+                db.conn.execute("SELECT 1").fetchone()
+
+            async def operation():
+                async with db.lock:
+                    await db._run_in_thread(worker)
+
+            task = asyncio.create_task(operation())
+            await asyncio.to_thread(entered.wait, 2)
+            close = asyncio.create_task(db.close())
+            for _ in range(3):
+                task.cancel()
+                await asyncio.sleep(0)
+                self.assertTrue(db.lock.locked())
+                self.assertFalse(close.done())
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            await close
 
         asyncio.run(run_test())
 

@@ -23,7 +23,7 @@
 - `/purge_groups`: End all active groups in this server (Moderator or higher).
   - Uses persisted records after a restart. If cleanup deletes the invocation channel, the final result is sent by DM.
 
-The dashboard's Speak and Force Video controls change the voice permissions and save the settings. Speak controls microphone access for the channel. Force Video allows camera and screen sharing, warns members after 30 seconds, and disconnects members who still have neither camera nor screen sharing enabled after 60 seconds.
+The dashboard's Speak and Force Video controls change the voice permissions and save the settings. Speak controls microphone access for the channel. Force Video accepts camera or screen sharing. With the default 60-second wait, it warns members for the final 30 seconds, then moves noncompliant members to the saved default VC. Microphone participation is not required.
 
 - `/transfer_group <new_owner> [group_name]`: Transfer study group ownership
   - `new_owner`: The server member to transfer ownership to
@@ -44,7 +44,7 @@ The dashboard's Speak and Force Video controls change the voice permissions and 
   - `short_break`: (Optional) Duration of short breaks in minutes (default is 5)
   - `long_break`: (Optional) Duration of long breaks in minutes (default is 15)
   - Each stage must be 2–240 minutes. Omitted timings are calculated using the 5:1:3 ratio, with a two-minute minimum. `require_vc: False` enables text-only use. The creator joins automatically; other group members receive DM Join/Decline invitations. Entering voice alone does not start or join a session.
-  - The lifetime defaults to 24 hours, or the server setting saved in `/setup`. With one hour left, participants receive a remaining-time message and Renew control. Renew adds 24 hours to the current deadline. Pausing does not stop lifetime expiry. Runtime state (stage, timer, pause state, participants, focus seconds) is persisted to SQLite and recovered on bot restart; offline-elapsed time advances stages without awarding focus credit. Crash-loss window is at most one snapshot interval (≤15 s).
+  - The lifetime defaults to 24 hours, or the server setting saved in `/setup`. With one hour left, participants receive a remaining-time message and Renew control. Renew adds 24 hours to the current deadline. Pausing does not stop lifetime expiry. Runtime state (stage, timer, pause state, participants, focus seconds) is persisted to SQLite and recovered on bot restart; offline-elapsed time advances stages without awarding focus credit. Snapshots target a 15-second interval when writes succeed; failed writes can widen the crash-loss window.
 
 - `/end_pomodoro`: End the current Pomodoro session
   - The current session owner or guild staff can stop it directly. Participants request the owner's approval by DM; outsiders cannot request an end.
