@@ -82,6 +82,7 @@ Updated on 2026-10-05 for the antigravity-fix branch. Historical verification co
 - [x] Provide a `main.py` compatibility launcher for hosting panels whose default startup command targets `python3 main.py`.
 - [x] Correct unsupported completion claims and synchronize commands, architecture, and issue documentation.
 - [ ] Publish `v1.0.0-rc.5` as a prerelease on `Vectorphy/Chief-Productivity-Officer` and verify downloaded packages. User authorized this deployment on 2026-10-05; do not move existing tags or merge release/main.
+  - Both authorized repositories contain `antigravity-fix` at `a01656c`; the rc.5 tag exists only on Chief-Productivity-Officer. Initial CI passed Mypy/Ruff but failed test imports; recovery uses `python -m pytest` and checks out the unchanged release tag.
 
 ## Verification history
 

@@ -188,6 +188,12 @@ Owner-approval controls, invitation consent, group naming, dashboard delegation,
 
 ## QA corrections (2026-10-05)
 
+### CI-01: Prerelease test launcher omits repository imports
+- **Severity**: Medium (P2)
+- **Status**: **RESOLVED in workflow; recovery run pending**
+- **Affected File**: `.github/workflows/prerelease.yml`
+- **Details**: The initial rc.5 tag run passed Mypy and Ruff but the `pytest` console entrypoint failed collection for `bot` and `cogs`. The workflow now uses `python -m pytest`, matching local verification. Both checkout steps use the requested release tag on manual recovery; `v1.0.0-rc.5` remains at `a01656c`.
+
 ### AD-17: Concurrent group teardown repeats cleanup after state is cleared
 - **Severity**: High (P1)
 - **Status**: **RESOLVED in offline regressions**

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### QA and packaging, 2026-10-05
+- Release verification invokes `python -m pytest` so repository imports resolve under the configured importlib test mode. Manual release recovery checks out the requested tag for both verification and packaging, preserving its immutable source commit.
 - Package version is `1.0.0rc5` for `v1.0.0-rc.5`. Wheel, source distribution, and hosting runtime ZIP exclude tests, caches, databases, secrets, governance reports, and development automation; release builds validate exact archive contents before upload. Git retains regression tests. Removed the unused `cogs/study_groups.txt` backup.
 - Added source-based code and database maps and a checked-TODO evidence audit. Corrected unsupported completion claims; 53 current checked items are supported within their documented offline scope. Default server task lists and action menus now select only that server's global tasks outside a group.
 

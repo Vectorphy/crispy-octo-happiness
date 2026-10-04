@@ -2,6 +2,8 @@
 
 Current source evidence: [code walkthrough](docs/CODE_WALKTHROUGH.md), [database map](docs/DATABASE_MAP.md), and [checked-TODO audit](docs/TODO_AUDIT.md). Package version `1.0.0rc5` targets `v1.0.0-rc.5`; `.github/scripts/package_runtime.py` validates wheel/source-distribution members and creates the allowlisted hosting ZIP. Development tests stay in Git and are excluded from deployment archives.
 
+Prerelease verification runs through `python -m pytest` to keep source imports available. Manual release recovery uses the requested tag for verification and packaging, even when the workflow is dispatched from a newer branch revision.
+
 This document provides a formal, comprehensive Knowledge Graph and architectural mapping of the **Chief Productivity Officer (CPO)** Discord bot repository. It maps directory boundaries, component topologies, execution lifecycles, state invariants, database schemas, and external dependencies to enable autonomous AI agents and engineers to navigate, reason about, and modify the codebase with precision.
 
 ---
