@@ -26,7 +26,8 @@ The current branch starts from that commit. New work is dirty and not committed 
 - bot.py: on_ready invokes Pomodoro hydration.
 - cogs/help.py: private immediate defer, runtime-level filtering of setup/staff descriptions, report-to-staff wording. Regular members retain ordinary session/task guidance. Staff see elevated descriptions but execution permissions remain unchanged.
 - utils.py and cogs/productivity_tracker.py: design agent replaced random hours with DB-measured attended focus, exact unrounded efficiency calculation, zero when untracked, labelled measured-focus embed.
-- Tests: setup/relocation/helper/help fixtures updated; tests/test_default_vc.py, tests/test_setup.py, tests/test_productivity_time.py, and tests/test_database.py added/extended (283 tests passing).
+- utils.py, bot.py, and main.py: design and security update added validate_bot_developer_id rejecting known placeholder values ('123456789012345678', 'your_discord_user_id_here', 'placeholder', 'none', 'null', etc.), invalid formats (booleans, non-integer/floats, negatives, 0), repetitive sequences, non-digits, and out-of-range snowflakes (> 64-bit). CPO constructor supports allow_mock=True for test suites.
+- Tests: setup/relocation/helper/help fixtures updated; tests/test_bot_developer_id.py (46 tests), tests/test_default_vc.py, tests/test_setup.py, tests/test_productivity_time.py, and tests/test_database.py added/extended (329 tests passing).
 
 ## Agents and ownership
 
@@ -39,9 +40,10 @@ The current branch starts from that commit. New work is dirty and not committed 
 
 1. [COMPLETED] Review real-DB recovery and analytics tests: unique tracking ID survives restart, cumulative focus seconds counted once for opted-in voice-present members, no offline focus time awarded, final counters persisted before retirement, group cleanup retires snapshots.
 2. [COMPLETED] Inspect bot.py on_ready hydration and timer/group lifecycle: foreign/inactive group rejection, channel permissions, paused state, stage advancement, reconnect idempotence, and retirement verified.
-3. [COMPLETED] Update documentation: CHANGELOG.md [Unreleased], KNOWN_ISSUES.md (ARC-07, DATA-01, and UX-01 resolved), TODO.md, KNOWLEDGE_GRAPH.md, commands.md, ARCHITECTURE.md, and knowledge_graph.json updated with pomodoro_runtime, full default VC selection/relocation, and measured focus metrics.
-4. [COMPLETED] Run full verification: 283/283 offline tests pass (zero failures), Mypy static typing 0 errors across 31 source files, Ruff lint and format check clean, git diff --check clean.
-5. [PENDING USER APPROVAL] Commit/push new branch: local atomic commits complete; remote push deferred awaiting user orders (no push on remote per user instruction). Remote origin: https://github.com/Vectorphy/crispy-octo-happiness.git.
+3. [COMPLETED] Validate BOT_DEVELOPER_ID: added strict snowflake validation, dummy/placeholder rejection, and 46 unit tests.
+4. [COMPLETED] Update documentation: CHANGELOG.md [Unreleased], KNOWN_ISSUES.md, TODO.md, ARCHITECTURE.md, and HANDOFF.md updated with BOT_DEVELOPER_ID validation and 329 passing tests.
+5. [COMPLETED] Run full verification: 329/329 offline tests pass (zero failures), Mypy static typing 0 errors across 32 source files, Ruff lint and format check clean, git diff --check clean.
+6. [PENDING USER APPROVAL] Commit/push new branch: local atomic commits complete; remote push deferred awaiting user orders (no push on remote per user instruction). Remote origin: https://github.com/Vectorphy/crispy-octo-happiness.git.
 
 ## Commands and constraints
 

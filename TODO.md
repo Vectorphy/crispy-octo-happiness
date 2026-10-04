@@ -30,7 +30,7 @@ Updated on 2026-10-04 for the antigravity-fix / codex/default-vc-pomodoro-recove
 - [ ] Decompose complex group and Pomodoro handlers into services.
 - [x] Include the standalone command matrix in pytest discovery.
 - [ ] Add explicit timeouts around external resource provisioning calls.
-- [ ] Validate `BOT_DEVELOPER_ID` and reject placeholder or invalid values.
+- [x] Validate `BOT_DEVELOPER_ID` and reject placeholder or invalid values.
 - [ ] Add persistent retry tracking for Discord resources left behind when group cleanup lacks permissions.
 - [ ] Add recovery for setup resources retained after failed saves, with explicit ownership checks before resource deletion.
 
