@@ -125,7 +125,7 @@ async def test_voice_toggle_preserves_connect_and_persists(permission):
 
 
 @pytest.mark.asyncio
-async def test_force_video_disconnects_member_after_timer():
+async def test_force_video_relocates_member_after_timer(monkeypatch):
     group, channel, _ = group_fixture()
     group.active = True
     group.video_mode = "force"
@@ -134,6 +134,8 @@ async def test_force_video_disconnects_member_after_timer():
     member = MagicMock(spec=discord.Member)
     member.id = 456
     member.voice = MagicMock(channel=channel, self_video=False)
+    relocation = AsyncMock()
+    monkeypatch.setitem(group._enforce_video.__globals__, "relocate_to_default_vc", relocation)
 
     with patch("cogs.study_groups.asyncio.sleep", new=AsyncMock()) as sleep:
         await group._enforce_video(member)
@@ -142,9 +144,9 @@ async def test_force_video_disconnects_member_after_timer():
     assert sleep.await_args_list[1].args == (30,)
     member.send.assert_awaited_once_with(
         f"Please turn on your camera or screen sharing in **{group.name}** within 30 seconds, "
-        "or you will be disconnected from the study voice channel."
+        "or you will be moved to the server's default voice channel."
     )
-    member.move_to.assert_awaited_once_with(None, reason=f"Video required in study group {group.group_id}")
+    relocation.assert_awaited_once_with(member, group.db, group.vc_id, group.group_id)
     assert member.id not in group.video_enforcement_tasks
 
 

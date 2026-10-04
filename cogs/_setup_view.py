@@ -132,6 +132,7 @@ class SetupView(discord.ui.View):
         log_channel_id: int | None = None,
         group_duration: int = DEFAULT_SESSION_DURATION,
         pomodoro_duration: int = DEFAULT_SESSION_DURATION,
+        default_vc_id: int | None = None,
     ) -> None:
         super().__init__(timeout=300)
         self.manager = manager
@@ -144,7 +145,12 @@ class SetupView(discord.ui.View):
             max_members,
             group_duration,
             pomodoro_duration,
+            default_vc_id,
         )
+        self.default_vc_id = default_vc_id
+        self.created_vc_id: int | None = None
+        self.moved_vc_id: int | None = None
+        self.previous_vc_category_id: int | None = None
         self.group_duration = group_duration
         self.pomodoro_duration = pomodoro_duration
         self.category_id = category_id
@@ -181,9 +187,19 @@ class SetupView(discord.ui.View):
         embed.add_field(name="Study group category", value=category, inline=False)
         embed.add_field(name="Commands channel", value=channel, inline=False)
         embed.add_field(name="Moderator logs", value=logs, inline=False)
+        embed.add_field(
+            name="Default voice channel",
+            value=f"<#{self.default_vc_id}>" if self.default_vc_id else "Create **CPO Lobby**",
+            inline=False,
+        )
         embed.add_field(name="Default group size", value=str(self.max_members), inline=True)
         embed.add_field(name="Group lifetime", value=parse_seconds_to_hms(self.group_duration), inline=True)
         embed.add_field(name="Pomodoro lifetime", value=parse_seconds_to_hms(self.pomodoro_duration), inline=True)
+        embed.add_field(
+            name="Who sees your replies?",
+            value="Normal replies are visible in active study-group channels and the bot commands channel. Replies elsewhere, help, errors, and private task menus are visible only to you to avoid cluttering the server. Report malicious or unintended bot behavior to server staff immediately.",
+            inline=False,
+        )
         if self.commands_channel_id and self.category_id:
             channel_obj = self.guild.get_channel(self.commands_channel_id)
             if isinstance(channel_obj, discord.TextChannel) and channel_obj.category_id != self.category_id:
@@ -225,6 +241,8 @@ class SetupView(discord.ui.View):
                 self.created_log_channel_id,
                 self.moved_channel_id,
                 self.moved_log_channel_id,
+                self.created_vc_id,
+                self.moved_vc_id,
             )
         )
 
@@ -299,6 +317,7 @@ class SetupView(discord.ui.View):
                     await db.get_default_max_members(self.guild.id),
                     await db.get_default_group_duration(self.guild.id),
                     await db.get_default_pomodoro_duration(self.guild.id),
+                    await db.get_default_vc(self.guild.id),
                 )
             except (discord.HTTPException, sqlite3.Error, OSError, RuntimeError, ValueError):
                 logger.exception("Could not read setup settings guild_id=%s", self.guild.id)
@@ -408,6 +427,24 @@ class SetupView(discord.ui.View):
                         ephemeral=True,
                     )
                     return
+                voice_id = self.created_vc_id or self.default_vc_id
+                voice = self.guild.get_channel(voice_id) if voice_id is not None else None
+                if not isinstance(voice, discord.VoiceChannel):
+                    voice = await self.guild.create_voice_channel(
+                        "CPO Lobby",
+                        category=category,
+                        overwrites=category.overwrites,
+                        reason="CPO default voice destination",
+                    )
+                    self.created_vc_id = voice.id
+                elif voice.category_id != category.id or not voice.permissions_synced:
+                    self.previous_vc_category_id = voice.category_id
+                    self.moved_vc_id = voice.id
+                    updated_voice = await voice.edit(
+                        category=category, sync_permissions=True, reason="CPO default voice destination"
+                    )
+                    if updated_voice is not None:
+                        voice = updated_voice
                 await db.save_setup(
                     self.guild.id,
                     category.id,
@@ -416,6 +453,7 @@ class SetupView(discord.ui.View):
                     log_channel.id,
                     default_group_duration=self.group_duration,
                     default_pomodoro_duration=self.pomodoro_duration,
+                    default_vc_id=voice.id,
                 )
             except StaffRoleSyncError as error:
                 logger.exception("Setup staff-role sync failed guild_id=%s", self.guild.id)
@@ -431,6 +469,10 @@ class SetupView(discord.ui.View):
             self.category_id = category.id
             self.commands_channel_id = channel.id
             self.log_channel_id = log_channel.id
+            self.default_vc_id = voice.id
+            self.created_vc_id = None
+            self.moved_vc_id = None
+            self.previous_vc_category_id = None
             self.new_category_name = None
             self.created_category_id = None
             self.created_channel_id = None
@@ -449,7 +491,7 @@ class SetupView(discord.ui.View):
                     logger.warning("Could not close saved setup view guild_id=%s", self.guild.id)
             await interaction.followup.send(
                 f"Setup saved. Study groups: <#{category.id}>. Commands: <#{channel.id}>."
-                f" Logs: <#{log_channel.id}>. Default group size: {self.max_members}.",
+                f" Logs: <#{log_channel.id}>. Default VC: <#{voice.id}>. Default group size: {self.max_members}.",
                 ephemeral=True,
             )
             logger.info(
@@ -515,6 +557,8 @@ class SetupView(discord.ui.View):
             and self.created_log_channel_id is None
             and self.moved_channel_id is None
             and self.moved_log_channel_id is None
+            and self.created_vc_id is None
+            and self.moved_vc_id is None
         ):
             return ""
         details = ""
@@ -538,4 +582,8 @@ class SetupView(discord.ui.View):
                 f" Log channel ID {self.moved_log_channel_id} was moved from category"
                 f" ID {self.previous_log_category_id}; Save will finish recording the change."
             )
+        if self.created_vc_id is not None:
+            details += f" Default VC ID {self.created_vc_id} remains for review; retry Save to record it."
+        if self.moved_vc_id is not None:
+            details += f" Default VC ID {self.moved_vc_id} was moved from category ID {self.previous_vc_category_id}."
         return details

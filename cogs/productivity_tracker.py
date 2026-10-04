@@ -28,8 +28,8 @@ class ProductivityTracker(commands.Cog):
         )
         embed.add_field(name="Tasks Completed", value=str(metrics["tasks_completed"]), inline=False)
         embed.add_field(
-            name="Time Spent (hours, mock)",
-            value=str(metrics["time_spent"]),
+            name="Attended Focus Time (hours)",
+            value=f"{metrics['time_spent']:.4f}".rstrip("0").rstrip("."),
             inline=False,
         )
         embed.add_field(

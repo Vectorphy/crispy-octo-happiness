@@ -55,7 +55,16 @@ def make_setup(category_id: int | None = 10, channel_id: int | None = 20):
     log_channel.permissions_synced = True
     log_channel.permissions_for.return_value = perms
     log_channel.edit = AsyncMock(return_value=None)
-    guild.get_channel.side_effect = lambda identifier: {10: category, 20: channel, 30: log_channel}.get(identifier)
+    voice = MagicMock(spec=discord.VoiceChannel)
+    voice.id = 50
+    voice.guild = guild
+    voice.category_id = category_id
+    voice.permissions_synced = True
+    voice.edit = AsyncMock(return_value=None)
+    guild.get_channel.side_effect = lambda identifier: {10: category, 20: channel, 30: log_channel, 50: voice}.get(
+        identifier
+    )
+    guild.create_voice_channel = AsyncMock(return_value=voice)
     guild.create_category = AsyncMock(return_value=category)
     guild.create_text_channel = AsyncMock(return_value=channel)
     guild.default_role = MagicMock(spec=discord.Role)
@@ -70,6 +79,7 @@ def make_setup(category_id: int | None = 10, channel_id: int | None = 20):
     bot.db.get_default_max_members.return_value = 10
     bot.db.get_default_group_duration.return_value = 86400
     bot.db.get_default_pomodoro_duration.return_value = 86400
+    bot.db.get_default_vc.return_value = None
     manager = Manager(bot)
     setattr(manager, "get_permission_level", AsyncMock(return_value=PermissionLevel.MODERATOR))
     return manager, guild, category, channel
@@ -92,7 +102,7 @@ async def test_setup_duration_editor_stages_and_saves_defaults():
     manager.bot.db.save_setup.assert_not_awaited()
     await button(view, "Save").callback(make_interaction(guild))
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 10, 20, 10, 30, default_group_duration=129600, default_pomodoro_duration=172800
+        1, 10, 20, 10, 30, default_group_duration=129600, default_pomodoro_duration=172800, default_vc_id=50
     )
 
 
@@ -139,7 +149,7 @@ async def test_setup_stages_options_without_writing_until_save():
     view = manager._setup_views[guild.id]
     assert view.max_members == 25
     assert view.category_id == category.id
-    assert view.snapshot == (10, 20, 30, 10, 86400, 86400)
+    assert view.snapshot == (10, 20, 30, 10, 86400, 86400, None)
     manager.bot.db.save_setup.assert_not_awaited()
     guild.create_text_channel.assert_not_awaited()
 
@@ -147,7 +157,7 @@ async def test_setup_stages_options_without_writing_until_save():
     await button(view, "Save").callback(save_interaction)
 
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 10, 20, 25, 30, default_group_duration=86400, default_pomodoro_duration=86400
+        1, 10, 20, 25, 30, default_group_duration=86400, default_pomodoro_duration=86400, default_vc_id=50
     )
     assert guild.id not in manager._setup_views
     assert all(item.disabled for item in view.children)
@@ -213,6 +223,46 @@ async def test_failed_save_reuses_created_channel_and_reports_its_id():
 
     guild.create_text_channel.assert_awaited_once()
     assert manager.bot.db.save_setup.await_count == 2
+    guild.create_voice_channel.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_default_vc_is_created_with_category_permissions():
+    manager, guild, category, _ = make_setup()
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30)
+    manager._setup_views[guild.id] = view
+    await button(view, "Save").callback(make_interaction(guild))
+    guild.create_voice_channel.assert_awaited_once_with(
+        "CPO Lobby", category=category, overwrites=category.overwrites, reason="CPO default voice destination"
+    )
+    assert view.default_vc_id == 50
+
+
+@pytest.mark.asyncio
+async def test_recorded_default_vc_moves_and_syncs_without_duplicate_creation():
+    manager, guild, category, _ = make_setup()
+    manager.bot.db.get_default_vc.return_value = 50
+    voice = guild.get_channel(50)
+    voice.category_id = 99
+    voice.permissions_synced = False
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30, default_vc_id=50)
+    manager._setup_views[guild.id] = view
+    await button(view, "Save").callback(make_interaction(guild))
+    voice.edit.assert_awaited_once_with(
+        category=category, sync_permissions=True, reason="CPO default voice destination"
+    )
+    guild.create_voice_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stale_default_vc_setting_prevents_discord_changes():
+    manager, guild, _, _ = make_setup()
+    manager.bot.db.get_default_vc.return_value = 60
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30)
+    manager._setup_views[guild.id] = view
+    await button(view, "Save").callback(make_interaction(guild))
+    manager.bot.db.save_setup.assert_not_awaited()
+    guild.create_voice_channel.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -227,7 +277,7 @@ async def test_recorded_channel_move_syncs_category_permissions():
     channel.edit.assert_awaited_once()
     assert channel.edit.call_args.kwargs["sync_permissions"] is True
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400
+        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400, default_vc_id=50
     )
 
 
@@ -251,7 +301,7 @@ async def test_setup_creates_synced_log_channel_and_reuses_it_on_retry():
     assert options["category"].id == 10
     assert overwrites == options["category"].overwrites
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400
+        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400, default_vc_id=50
     )
 
     await button(view, "Save").callback(make_interaction(guild))
@@ -287,7 +337,7 @@ async def test_cancel_during_save_cannot_claim_no_settings_changed():
     release.set()
     await asyncio.wait_for(save, timeout=2)
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400
+        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400, default_vc_id=50
     )
 
 
@@ -341,7 +391,7 @@ async def test_recorded_log_channel_move_syncs_category_permissions():
     assert log_channel.edit.call_args.kwargs["sync_permissions"] is True
     guild.create_text_channel.assert_not_awaited()
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400
+        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400, default_vc_id=50
     )
 
 
@@ -378,7 +428,7 @@ async def test_new_category_modal_stages_then_creates_category_and_both_channels
     guild.create_category.assert_awaited_once_with("Study rooms", reason="CPO server setup")
     assert [call.args[0] for call in guild.create_text_channel.await_args_list] == ["cpo-commands", "cpo-logs"]
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 40, 21, 10, 31, default_group_duration=86400, default_pomodoro_duration=86400
+        1, 40, 21, 10, 31, default_group_duration=86400, default_pomodoro_duration=86400, default_vc_id=50
     )
     assert view.new_category_name is None
 

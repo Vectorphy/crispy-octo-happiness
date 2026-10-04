@@ -1,5 +1,4 @@
 import logging
-import random
 import re
 import sqlite3
 from typing import List, Optional
@@ -396,12 +395,13 @@ class ProductivityService:
 
     async def get_productivity_metrics(self, user_id):
         tasks_completed = await self.get_tasks_completed(user_id)
-        time_spent = self.get_mock_time_spent()
-        efficiency_score = self.calculate_efficiency(tasks_completed, time_spent)
+        focus_seconds = await self.db.get_productivity_focus_seconds(user_id)
+        focus_hours = max(0.0, float(focus_seconds)) / 3600
+        efficiency_score = self.calculate_efficiency(tasks_completed, focus_hours)
 
         return {
             "tasks_completed": tasks_completed,
-            "time_spent": time_spent,
+            "time_spent": round(focus_hours, 4),
             "efficiency_score": efficiency_score,
         }
 
@@ -410,11 +410,7 @@ class ProductivityService:
         completed_tasks = [task for task in tasks if task["completed"]]
         return len(completed_tasks)
 
-    def get_mock_time_spent(self):
-        # Generate a random number of hours between 1 and 40
-        return random.randint(1, 40)
-
     def calculate_efficiency(self, tasks, time):
-        if time == 0:
+        if time <= 0:
             return 0.0
         return round(tasks / time, 2)

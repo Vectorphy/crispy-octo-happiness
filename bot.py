@@ -48,6 +48,9 @@ class CPO(commands.Bot):
         logger.info(f"{self.user} has connected to Discord!")
         logger.info(f"Guilds: {len(self.guilds)}")
         logger.info(f"Users: {len(set(self.get_all_members()))}")
+        pomodoro = self.get_cog("Pomodoro")
+        if pomodoro is not None:
+            await pomodoro.load_active_sessions_from_db()
         # Clear any guild-specific command registrations so only global commands remain
         for guild in self.guilds:
             try:

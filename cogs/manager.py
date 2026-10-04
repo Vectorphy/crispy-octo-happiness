@@ -379,6 +379,7 @@ class Manager(commands.Cog):
             current_max = await self.bot.db.get_default_max_members(interaction.guild_id)
             current_group_duration = await self.bot.db.get_default_group_duration(interaction.guild_id)
             current_pomodoro_duration = await self.bot.db.get_default_pomodoro_duration(interaction.guild_id)
+            current_default_vc_id = await self.bot.db.get_default_vc(interaction.guild_id)
             view = SetupView(
                 self,
                 interaction.guild,
@@ -389,6 +390,7 @@ class Manager(commands.Cog):
                 current_log_channel_id,
                 current_group_duration,
                 current_pomodoro_duration,
+                current_default_vc_id,
             )
             view.snapshot = (
                 current_cat_id,
@@ -397,6 +399,7 @@ class Manager(commands.Cog):
                 current_max,
                 current_group_duration,
                 current_pomodoro_duration,
+                current_default_vc_id,
             )
             prior = self._setup_views.get(interaction.guild_id)
             if prior:

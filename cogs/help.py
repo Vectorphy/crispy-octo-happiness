@@ -1,11 +1,18 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
+from utils import send_response
 
 
 class Help(commands.Cog):
+    def __init__(self, bot=None):
+        self.bot = bot
+
     @app_commands.command(name="help", description="Learn how to use study groups, timers, and tasks")
     async def help_command(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        manager = self.bot.get_cog("Manager") if self.bot else None
+        level = await manager.get_permission_level(interaction.guild_id, interaction.user.id) if manager else 0
         embed = discord.Embed(
             title="How to use CPO",
             description="Type `/` and choose a command. Discord will show the details you can fill in.",
@@ -42,13 +49,28 @@ class Help(commands.Cog):
             ),
             (
                 "Who sees your replies?",
-                "Normal replies are visible in study-group channels and the bot commands channel. Replies elsewhere, this help message, errors, and private task menus are visible only to you.",
+                "Normal replies are visible in study-group channels and the bot commands channel. Replies elsewhere, this help message, errors, and private task menus are visible only to you to avoid cluttering the server. Report malicious or unintended bot behavior to server staff immediately.",
             ),
         )
         for title, description in sections:
+            if title == "Set up your server" and level < 3:
+                continue
+            if title == "End a session" and level < 3:
+                description = "The session owner or server staff can end it. A participating member can ask to end it; the owner receives a private approval request and decides."
             embed.add_field(name=title, value=description, inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if level >= 3:
+            embed.add_field(
+                name="Staff commands",
+                value="`/setup`: configure channels and defaults. `/settings_checkin`: configure check-ins. `/purge_groups`: end server groups. `/list_managers`: view staff. `/add_guild_manager`, `/remove_guild_manager`: manage grants. `/sync_managers`: import native staff. `/sync_commands`: refresh slash commands. `/set_mod_log_channel`: configure logs. `/set_group_category`: choose group placement.",
+                inline=False,
+            )
+            embed.add_field(
+                name="Bot developer commands",
+                value="`/add_bot_developer`: grant global developer access. `/set_permission_level`: remove a server grant or grant Manager/Developer. These operations require Level 4.",
+                inline=False,
+            )
+        await send_response(interaction, embed=embed, ephemeral=True)
 
 
 async def setup(bot):
-    await bot.add_cog(Help())
+    await bot.add_cog(Help(bot))

@@ -414,7 +414,7 @@ async def test_video_requirement_accepts_camera_or_screen_share(monkeypatch, cam
 
 
 @pytest.mark.asyncio
-async def test_video_requirement_disconnects_only_when_both_are_off(monkeypatch):
+async def test_video_requirement_relocates_only_when_both_are_off(monkeypatch):
     group, people = existing_group()
     group.video_mode = "force"
     participant = people[6]
@@ -424,6 +424,8 @@ async def test_video_requirement_disconnects_only_when_both_are_off(monkeypatch)
     participant.voice.self_stream = False
     participant.move_to = AsyncMock()
     monkeypatch.setattr("cogs.study_groups.asyncio.sleep", AsyncMock())
+    relocation = AsyncMock()
+    monkeypatch.setitem(group._enforce_video.__globals__, "relocate_to_default_vc", relocation)
     await group._enforce_video(participant)
-    participant.move_to.assert_awaited_once_with(None, reason=f"Video required in study group {group.group_id}")
+    relocation.assert_awaited_once_with(participant, group.db, group.vc_id, group.group_id)
     assert "camera or screen sharing" in participant.send.call_args.args[0]

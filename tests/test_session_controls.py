@@ -175,7 +175,7 @@ async def test_pomodoro_invites_group_members_without_auto_join():
         click.user.id = 12
         await decline.decline.callback(click)
         assert 12 not in session.participants
-        cog._remove_session(session)
+        await cog._remove_session(session)
         await PomodoroInvitationView(cog, session, 12).join.callback(click)
         assert 12 not in session.participants
     finally:

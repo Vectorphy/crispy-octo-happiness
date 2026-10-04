@@ -12,6 +12,7 @@ from discord.ext import commands
 from discord.ui import Button, Modal, TextInput, View
 
 from cogs._session_controls import request_session_end
+from cogs._voice_relocation import relocate_to_default_vc
 from database import DBHandler
 from utils import (
     DEFAULT_SESSION_DURATION,
@@ -1191,7 +1192,7 @@ class StudyGroup:
             try:
                 await member.send(
                     f"Please turn on your camera or screen sharing in **{self.name}** within 30 seconds, "
-                    "or you will be disconnected from the study voice channel."
+                    "or you will be moved to the server's default voice channel."
                 )
             except discord.HTTPException:
                 logger.warning(
@@ -1208,13 +1209,7 @@ class StudyGroup:
                 return
             if self.has_video(voice_state):
                 return
-            await member.move_to(None, reason=f"Video required in study group {self.group_id}")
-            logger.info(
-                "Disconnected member without video guild_id=%s group_id=%s user_id=%s",
-                self.guild_id,
-                self.group_id,
-                user_id,
-            )
+            await relocate_to_default_vc(member, self.db, self.vc_id, self.group_id)
         except asyncio.CancelledError:
             return
         except discord.HTTPException:

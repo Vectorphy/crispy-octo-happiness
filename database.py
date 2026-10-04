@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+import math
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, Union
@@ -191,6 +193,7 @@ class DBHandler:
                 vc_category_id INTEGER,
                 group_category_id INTEGER,
                 commands_channel_id INTEGER,
+                default_vc_id INTEGER,
                 default_group_duration INTEGER NOT NULL DEFAULT 86400,
                 default_pomodoro_duration INTEGER NOT NULL DEFAULT 86400
             )
@@ -206,6 +209,27 @@ class DBHandler:
             if "commands_channel_id" not in guild_settings_columns:
                 cursor.execute("ALTER TABLE guild_settings ADD COLUMN commands_channel_id INTEGER DEFAULT NULL;")
                 logger.info("Added 'commands_channel_id' column to 'guild_settings' table.")
+            if "default_vc_id" not in guild_settings_columns:
+                cursor.execute("ALTER TABLE guild_settings ADD COLUMN default_vc_id INTEGER DEFAULT NULL")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pomodoro_runtime (
+                    session_key TEXT PRIMARY KEY,
+                    group_id TEXT NOT NULL,
+                    guild_id INTEGER NOT NULL,
+                    state_json TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS productivity_focus_time (
+                    session_id TEXT NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    guild_id INTEGER NOT NULL,
+                    group_id TEXT NOT NULL,
+                    focus_seconds REAL NOT NULL CHECK (focus_seconds >= 0),
+                    PRIMARY KEY (session_id, user_id)
+                )
+            """)
             if "default_max_members" not in guild_settings_columns:
                 cursor.execute("ALTER TABLE guild_settings ADD COLUMN default_max_members INTEGER DEFAULT 10;")
                 logger.info("Added 'default_max_members' column to 'guild_settings' table.")
@@ -339,6 +363,86 @@ class DBHandler:
             ).fetchone()
             return row[0] if row else None
 
+    async def get_default_vc(self, guild_id: int) -> Optional[int]:
+        async with self.lock:
+            row = self.conn.execute(
+                "SELECT default_vc_id FROM guild_settings WHERE guild_id = ?", (guild_id,)
+            ).fetchone()
+            return row[0] if row else None
+
+    async def save_pomodoro_runtime(self, session_key: str, group_id: str, guild_id: int, state: dict) -> None:
+        payload = json.dumps(state, allow_nan=False)
+        async with self.lock:
+            with self.conn:
+                group = self.conn.execute(
+                    "SELECT active FROM study_groups WHERE group_id = ? AND guild_id = ?", (str(group_id), guild_id)
+                ).fetchone()
+                if group is None or not group[0]:
+                    raise ValueError("Cannot persist Pomodoro runtime for an inactive or missing group")
+                self.conn.execute(
+                    "INSERT INTO pomodoro_runtime (session_key, group_id, guild_id, state_json, active) "
+                    "VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_key) DO UPDATE SET "
+                    "group_id = excluded.group_id, guild_id = excluded.guild_id, "
+                    "state_json = excluded.state_json, active = excluded.active",
+                    (str(session_key), str(group_id), guild_id, payload, 1),
+                )
+
+    async def get_active_pomodoro_runtime(self) -> list[dict]:
+        async with self.lock:
+            rows = self.conn.execute("SELECT * FROM pomodoro_runtime WHERE active = ?", (1,)).fetchall()
+        result = []
+        for row in rows:
+            record = dict(row)
+            try:
+                record["state"] = json.loads(record.pop("state_json"))
+            except (ValueError, TypeError):
+                logger.exception(
+                    "Invalid Pomodoro snapshot session_id=%s guild_id=%s", record["session_key"], record["guild_id"]
+                )
+                await self.retire_pomodoro_runtime(record["session_key"])
+                continue
+            result.append(record)
+        return result
+
+    async def retire_pomodoro_runtime(self, session_key: str) -> None:
+        async with self.lock:
+            with self.conn:
+                self.conn.execute("UPDATE pomodoro_runtime SET active = ? WHERE session_key = ?", (0, str(session_key)))
+
+    async def retire_group_pomodoro_runtime(self, group_id: str) -> None:
+        async with self.lock:
+            with self.conn:
+                self.conn.execute("UPDATE pomodoro_runtime SET active = ? WHERE group_id = ?", (0, str(group_id)))
+
+    async def save_productivity_focus_time(
+        self, session_id: str, guild_id: int, group_id: str, focus_seconds: Mapping[int, float]
+    ) -> None:
+        values = []
+        for user_id, seconds in focus_seconds.items():
+            if isinstance(user_id, bool) or isinstance(seconds, bool) or not isinstance(user_id, int):
+                raise ValueError("Invalid productivity focus identity")
+            if not isinstance(seconds, (int, float)) or seconds < 0 or not math.isfinite(seconds):
+                raise ValueError("Focus seconds must be finite and non-negative")
+            values.append((str(session_id), user_id, guild_id, str(group_id), float(seconds)))
+        if not values:
+            return
+        async with self.lock:
+            with self.conn:
+                self.conn.executemany(
+                    "INSERT INTO productivity_focus_time "
+                    "(session_id, user_id, guild_id, group_id, focus_seconds) VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(session_id, user_id) DO UPDATE SET focus_seconds = "
+                    "MAX(productivity_focus_time.focus_seconds, excluded.focus_seconds)", values
+                )
+
+    async def get_productivity_focus_seconds(self, user_id: int) -> float:
+        async with self.lock:
+            row = self.conn.execute(
+                "SELECT COALESCE(SUM(focus_seconds), 0) FROM productivity_focus_time WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            return float(row[0]) if row else 0.0
+
     async def get_default_group_duration(self, guild_id: int) -> int:
         async with self.lock:
             row = self.conn.execute(
@@ -363,6 +467,7 @@ class DBHandler:
         *,
         default_group_duration: Optional[int] = None,
         default_pomodoro_duration: Optional[int] = None,
+        default_vc_id: Optional[int] = None,
     ) -> None:
         for name, duration in (
             ("default_group_duration", default_group_duration),
@@ -382,15 +487,16 @@ class DBHandler:
                     """
                     INSERT INTO guild_settings (
                         guild_id, group_category_id, commands_channel_id, default_max_members,
-                        mod_log_channel_id, default_group_duration, default_pomodoro_duration
-                    ) VALUES (?, ?, ?, ?, ?, COALESCE(?, 86400), COALESCE(?, 86400))
+                        mod_log_channel_id, default_group_duration, default_pomodoro_duration, default_vc_id
+                    ) VALUES (?, ?, ?, ?, ?, COALESCE(?, 86400), COALESCE(?, 86400), ?)
                     ON CONFLICT(guild_id) DO UPDATE SET
                         group_category_id = excluded.group_category_id,
                         commands_channel_id = excluded.commands_channel_id,
                         default_max_members = excluded.default_max_members,
                         mod_log_channel_id = COALESCE(excluded.mod_log_channel_id, guild_settings.mod_log_channel_id),
                         default_group_duration = COALESCE(?, guild_settings.default_group_duration),
-                        default_pomodoro_duration = COALESCE(?, guild_settings.default_pomodoro_duration)
+                        default_pomodoro_duration = COALESCE(?, guild_settings.default_pomodoro_duration),
+                        default_vc_id = COALESCE(excluded.default_vc_id, guild_settings.default_vc_id)
                     """,
                     (
                         guild_id,
@@ -400,6 +506,7 @@ class DBHandler:
                         log_channel_id,
                         default_group_duration,
                         default_pomodoro_duration,
+                        default_vc_id,
                         default_group_duration,
                         default_pomodoro_duration,
                     ),
@@ -753,6 +860,11 @@ class DBHandler:
                 ),
             )
             cursor.execute("DELETE FROM study_groups_members WHERE group_id = ?", (str(group_id),))
+            cursor.execute(
+                "UPDATE pomodoro_runtime SET active = ? WHERE group_id IN "
+                "(SELECT group_id FROM study_groups WHERE id = ? OR group_id = ?)",
+                (0, int(group_id) if str(group_id).isdigit() else -1, str(group_id)),
+            )
             self.conn.commit()
             logger.info("Study group marked inactive group_id=%s", group_id)
 

@@ -127,12 +127,31 @@ async def test_blocked_owner_dm_reports_private_failure():
 @pytest.mark.asyncio
 async def test_help_is_private_and_within_discord_limits():
     request = interaction()
+    request.response.defer = AsyncMock()
     await Help.help_command.callback(Help(), request)
-    reply = request.response.send_message.call_args.kwargs
+    reply = request.followup.send.call_args.kwargs
     assert reply["ephemeral"] is True
     embed = reply["embed"]
     assert len(embed.fields) <= 25 and len(embed) <= 6000
     assert "reminder interval" in " ".join(field.value for field in embed.fields)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("level", [0, 1, 2, 3, 4])
+async def test_help_descriptions_follow_staff_level(level):
+    request = interaction()
+    request.response.defer = AsyncMock()
+    manager = MagicMock(get_permission_level=AsyncMock(return_value=level))
+    bot = MagicMock()
+    bot.get_cog.return_value = manager
+    await Help.help_command.callback(Help(bot), request)
+    embed = request.followup.send.call_args.kwargs["embed"]
+    descriptions = " ".join(field.value for field in embed.fields)
+    assert ("/setup" in descriptions) == (level >= 3)
+    assert ("/add_bot_developer" in descriptions) == (level >= 3)
+    assert ("/purge_groups" in descriptions) == (level >= 3)
+    assert "Report malicious or unintended bot behavior to server staff immediately" in descriptions
+    assert len(embed) <= 6000
 
 
 @pytest.mark.asyncio

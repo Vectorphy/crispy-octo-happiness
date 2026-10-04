@@ -1,6 +1,11 @@
 import asyncio
+import json
 import logging
+import math
 import random
+import sqlite3
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Set, Tuple
 
@@ -261,6 +266,11 @@ class PomodoroSession:
         self.absent_counts: Dict[int, int] = {}
         self.dropped_out_members: Set[int] = set()
         self.current_session_marked: Set[int] = set()
+        self.timer_updated_at = datetime.now(timezone.utc)
+        self.runtime_active = True
+        self.tracking_id = str(uuid.uuid4())
+        self.focus_seconds: Dict[int, float] = {}
+        self.last_tick_at = time.monotonic()
         logger.info(
             f"Pomodoro session created for group {group_id} with focus: {focus}m, "
             f"short break: {short_break}m, long break: {long_break}m, require_vc={require_vc}"
@@ -289,6 +299,7 @@ class PomodoroPresenceView(discord.ui.View):
         self.session.current_session_marked.add(interaction.user.id)
         self.session.absent_counts[interaction.user.id] = 0
         await interaction.response.send_message("You are marked as Present for this focus block!", ephemeral=True)
+        await self.cog._persist_session(self.session)
 
     @discord.ui.button(label="Absent", style=discord.ButtonStyle.red, custom_id="pomo_absent")
     async def absent_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -313,6 +324,7 @@ class PomodoroPresenceView(discord.ui.View):
             await interaction.response.send_message(
                 f"You have been marked Absent. ({count}/3 absences)", ephemeral=True
             )
+        await self.cog._persist_session(self.session)
 
 
 class PomodoroInvitationView(discord.ui.View):
@@ -349,6 +361,7 @@ class PomodoroInvitationView(discord.ui.View):
             await send_response(interaction, "You already joined this Pomodoro session.", ephemeral=True)
             return
         session.participants.add(interaction.user.id)
+        await self.cog._persist_session(session)
         member = guild.get_member(interaction.user.id)
         destination = guild.get_channel(session.vc_id) if session.vc_id else None
         if (
@@ -409,6 +422,7 @@ class PomodoroRenewView(discord.ui.View):
                 return
             session.expires_at += timedelta(hours=24)
             session.warned_deadline = None
+            await self.cog._persist_session(session)
         await send_response(interaction, "Pomodoro session renewed for 24 hours.", ephemeral=True)
         self.stop()
 
@@ -417,12 +431,273 @@ class Pomodoro(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.sessions: Dict[Any, PomodoroSession] = {}
+        self._last_runtime_save: Dict[int, datetime] = {}
+        self._runtime_lock = asyncio.Lock()
+        self._recovery_lock = asyncio.Lock()
         logger.info("Pomodoro cog initialized")
 
-    def _remove_session(self, session: PomodoroSession) -> None:
-        for key, existing in list(self.sessions.items()):
-            if existing is session:
-                self.sessions.pop(key, None)
+    def _runtime_key(self, session: PomodoroSession) -> str:
+        return str(session.group_id)
+
+    def _runtime_state(self, session: PomodoroSession) -> Dict[str, Any]:
+        return {
+            "owner_id": session.owner_id,
+            "text_id": session.text_id,
+            "vc_id": session.vc_id,
+            "require_vc": session.require_vc,
+            "focus": session.focus,
+            "short_break": session.short_break,
+            "long_break": session.long_break,
+            "current_stage": session.current_stage,
+            "timer": session.timer,
+            "cycles": session.cycles,
+            "is_paused": session.is_paused,
+            "expires_at": session.expires_at.isoformat(),
+            "warned_deadline": session.warned_deadline.isoformat() if session.warned_deadline else None,
+            "participants": sorted(session.participants),
+            "absent_counts": session.absent_counts,
+            "dropped_out_members": sorted(session.dropped_out_members),
+            "current_session_marked": sorted(session.current_session_marked),
+            "saved_at": session.timer_updated_at.isoformat(),
+            "tracking_id": session.tracking_id,
+            "focus_seconds": session.focus_seconds,
+        }
+
+    async def _persist_session(self, session: PomodoroSession) -> None:
+        saver = getattr(self.bot.db, "save_pomodoro_runtime", None)
+        if not callable(saver):
+            return
+        async with self._runtime_lock:
+            if not session.runtime_active or not any(existing is session for existing in self.sessions.values()):
+                return
+            try:
+                await saver(
+                    self._runtime_key(session), str(session.group_id), session.guild_id, self._runtime_state(session)
+                )
+                self._last_runtime_save[id(session)] = datetime.now(timezone.utc)
+            except (sqlite3.Error, OSError, RuntimeError, ValueError, TypeError):
+                logger.exception(
+                    "Failed to persist Pomodoro runtime guild_id=%s group_id=%s", session.guild_id, session.group_id
+                )
+            await self._persist_productivity(session)
+
+    async def _persist_productivity(self, session: PomodoroSession) -> None:
+        saver = getattr(self.bot.db, "save_productivity_focus_time", None)
+        if not callable(saver) or not session.focus_seconds:
+            return
+        try:
+            await saver(session.tracking_id, session.guild_id, str(session.group_id), dict(session.focus_seconds))
+        except (sqlite3.Error, OSError, RuntimeError, ValueError, TypeError):
+            logger.exception("Failed to persist focus time guild_id=%s group_id=%s", session.guild_id, session.group_id)
+
+    @staticmethod
+    def _snapshot_time(value: Any) -> datetime:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError("snapshot timestamps must include a timezone")
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _snapshot_int(value: Any, minimum: int = 0) -> int:
+        if type(value) is not int or value < minimum:
+            raise ValueError("invalid snapshot integer")
+        return value
+
+    @staticmethod
+    def _advance_stages(session: PomodoroSession, elapsed: int) -> bool:
+        """Advance elapsed stages without assigning attendance to unobserved blocks."""
+        crossed = False
+        while elapsed >= session.timer:
+            elapsed -= session.timer
+            crossed = True
+            if session.current_stage == "focus":
+                session.cycles += 1
+                session.current_stage = "long_break" if session.cycles % 4 == 0 else "short_break"
+                session.timer = getattr(session, session.current_stage) * 60
+            else:
+                session.current_stage = "focus"
+                session.timer = session.focus * 60
+                if session.cycles % 4 == 0:
+                    block_seconds = (session.focus * 4 + session.short_break * 3 + session.long_break) * 60
+                    blocks, elapsed = divmod(elapsed, block_seconds)
+                    session.cycles += blocks * 4
+        session.timer -= elapsed
+        if crossed:
+            session.current_session_marked.clear()
+        return crossed
+
+    def _restore_session(self, row: Dict[str, Any], group: Dict[str, Any], guild: discord.Guild) -> PomodoroSession:
+        state = row["state"]
+        if isinstance(state, str):
+            state = json.loads(state)
+        if not isinstance(state, dict):
+            raise ValueError("invalid snapshot state")
+        group_id = group["group_id"]
+        if (
+            not isinstance(group_id, str)
+            or row["group_id"] != group_id
+            or row["session_key"] != group_id
+            or group.get("active") != 1
+            or group["guild_id"] != guild.id
+            or row["guild_id"] != guild.id
+        ):
+            raise ValueError("snapshot group or guild does not match")
+        focus, short, long = (
+            self._snapshot_int(state[name], MIN_STAGE_MINUTES) for name in ("focus", "short_break", "long_break")
+        )
+        if max(focus, short, long) > MAX_STAGE_MINUTES:
+            raise ValueError("invalid stage duration")
+        stage = state["current_stage"]
+        if stage not in ("focus", "short_break", "long_break"):
+            raise ValueError("invalid current stage")
+        timer = self._snapshot_int(state["timer"], 1)
+        if timer > {"focus": focus, "short_break": short, "long_break": long}[stage] * 60:
+            raise ValueError("timer exceeds stage duration")
+        if type(state["is_paused"]) is not bool or type(state["require_vc"]) is not bool:
+            raise ValueError("invalid pause or voice setting")
+        text_id = self._snapshot_int(state["text_id"], 1)
+        text = guild.get_channel(text_id)
+        if (
+            text_id != group.get("text_id")
+            or not isinstance(text, discord.TextChannel)
+            or text.guild.id != guild.id
+            or guild.me is None
+            or not text.permissions_for(guild.me).view_channel
+            or not text.permissions_for(guild.me).send_messages
+        ):
+            raise ValueError("group text channel is unavailable")
+        vc_id = state["vc_id"]
+        if vc_id is not None:
+            self._snapshot_int(vc_id, 1)
+        voice = guild.get_channel(vc_id) if vc_id else None
+        valid_voice = (
+            vc_id == group.get("vc_id")
+            and isinstance(voice, discord.VoiceChannel)
+            and voice.guild.id == guild.id
+            and voice.permissions_for(guild.me).connect
+        )
+        if state["require_vc"] and not valid_voice:
+            raise ValueError("group voice channel is unavailable")
+        session = PomodoroSession(
+            group_id,
+            focus,
+            short,
+            long,
+            guild_id=guild.id,
+            text_id=text_id,
+            vc_id=vc_id if valid_voice else None,
+            require_vc=state["require_vc"],
+            owner_id=self._snapshot_int(state["owner_id"], 1),
+        )
+        session.expires_at = self._snapshot_time(state["expires_at"])
+        session.warned_deadline = (
+            self._snapshot_time(state["warned_deadline"]) if state.get("warned_deadline") else None
+        )
+        session.current_stage = stage
+        session.timer = timer
+        session.cycles = self._snapshot_int(state["cycles"])
+        session.is_paused = state["is_paused"]
+        if "tracking_id" in state:
+            session.tracking_id = str(uuid.UUID(state["tracking_id"]))
+        focus_seconds = state.get("focus_seconds", {})
+        if not isinstance(focus_seconds, dict):
+            raise ValueError("invalid measured focus time")
+        for key, seconds in focus_seconds.items():
+            user_id = int(key)
+            if user_id < 1 or type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0:
+                raise ValueError("invalid measured focus time")
+            session.focus_seconds[user_id] = float(seconds)
+        roster = state["participants"]
+        if not isinstance(roster, list):
+            raise ValueError("invalid consented roster")
+        session.participants = set()
+        for value in roster:
+            user_id = self._snapshot_int(value, 1)
+            member = guild.get_member(user_id)
+            if member is not None and member.guild.id == guild.id:
+                session.participants.add(user_id)
+        counts = state["absent_counts"]
+        if not isinstance(counts, dict):
+            raise ValueError("invalid absence counts")
+        session.absent_counts = {}
+        for key, count in counts.items():
+            user_id = int(key)
+            count = self._snapshot_int(count)
+            if user_id in session.participants:
+                session.absent_counts[user_id] = count
+        for name in ("dropped_out_members", "current_session_marked"):
+            values = state[name]
+            if not isinstance(values, list):
+                raise ValueError("invalid attendance roster")
+            setattr(session, name, {self._snapshot_int(value, 1) for value in values} & session.participants)
+        saved_at = self._snapshot_time(state["saved_at"])
+        now = datetime.now(timezone.utc)
+        if not session.is_paused:
+            self._advance_stages(session, max(0, int((now - saved_at).total_seconds())))
+        session.timer_updated_at = now
+        return session
+
+    async def load_active_sessions_from_db(self) -> None:
+        loader = getattr(self.bot.db, "get_active_pomodoro_runtime", None)
+        if not callable(loader):
+            return
+        async with self._recovery_lock:
+            try:
+                rows = await loader()
+            except (sqlite3.Error, OSError, RuntimeError):
+                logger.exception("Failed to load persisted Pomodoro runtimes")
+                return
+            for row in rows or []:
+                key = row.get("session_key")
+                try:
+                    guild_id = self._snapshot_int(row["guild_id"], 1)
+                    guild = self.bot.get_guild(guild_id)
+                    if guild is None:
+                        continue
+                    group = await self.bot.db.fetch_study_group_by_id(row["group_id"])
+                    if not isinstance(group, dict):
+                        raise ValueError("snapshot group is missing")
+                    if self._get_session(group):
+                        continue
+                    session = self._restore_session(row, group, guild)
+                    if session.expires_at <= datetime.now(timezone.utc):
+                        await self._retire_runtime(key)
+                        continue
+                    async with self._runtime_lock:
+                        self.sessions.update(
+                            {session.group_id: session, group["id"]: session, str(group["id"]): session}
+                        )
+                    await self._persist_session(session)
+                except (KeyError, ValueError, TypeError):
+                    logger.exception("Invalid Pomodoro snapshot guild_id=%s session_key=%s", row.get("guild_id"), key)
+                    await self._retire_runtime(key)
+                except (sqlite3.Error, OSError, RuntimeError):
+                    logger.exception("Could not recover Pomodoro runtime session_key=%s", key)
+            if self.sessions and not self.run_timer.is_running():
+                self.run_timer.start()
+
+    async def _retire_runtime(self, key: Any) -> None:
+        retire = getattr(self.bot.db, "retire_pomodoro_runtime", None)
+        if callable(retire):
+            try:
+                await retire(str(key))
+            except (sqlite3.Error, OSError, RuntimeError):
+                logger.exception("Failed to retire Pomodoro runtime key=%s", key)
+                raise
+
+    async def _remove_session(self, session: PomodoroSession) -> None:
+        session.runtime_active = False
+        async with self._runtime_lock:
+            await self._persist_productivity(session)
+            try:
+                await self._retire_runtime(self._runtime_key(session))
+            except (sqlite3.Error, OSError, RuntimeError):
+                session.runtime_active = True
+                raise
+            for key, existing in list(self.sessions.items()):
+                if existing is session:
+                    self.sessions.pop(key, None)
+            self._last_runtime_save.pop(id(session), None)
         if not self.sessions and self.run_timer.is_running():
             self.run_timer.stop()
 
@@ -433,6 +708,9 @@ class Pomodoro(commands.Cog):
         if datetime.now(timezone.utc) >= session.expires_at:
             return False
         session.is_paused = paused
+        session.timer_updated_at = datetime.now(timezone.utc)
+        session.last_tick_at = time.monotonic()
+        await self._persist_session(session)
         await self._update_group_gui(session.group_id)
         return True
 
@@ -668,6 +946,8 @@ class Pomodoro(commands.Cog):
         for k in keys_to_set:
             self.sessions[k] = session
 
+        await self._persist_session(session)
+
         if not self.run_timer.is_running():
             self.run_timer.start()
 
@@ -796,6 +1076,8 @@ class Pomodoro(commands.Cog):
         if require_vc is not None:
             session.require_vc = require_vc
 
+        await self._persist_session(session)
+
         embed = discord.Embed(title="⚙️ Pomodoro Settings Updated", color=discord.Color.green())
         embed.add_field(name="Focus Duration", value=f"{session.focus} minutes", inline=True)
         embed.add_field(name="Short Break", value=f"{session.short_break} minutes", inline=True)
@@ -860,7 +1142,7 @@ class Pomodoro(commands.Cog):
         if not any(existing is session for existing in self.sessions.values()):
             await send_response(interaction, "This Pomodoro session has already ended.", ephemeral=True)
             return
-        self._remove_session(session)
+        await self._remove_session(session)
         logger.info(f"Ended Pomodoro session for group {group['id']}")
         await send_response(interaction, "Pomodoro session ended.", ephemeral=True)
 
@@ -893,6 +1175,9 @@ class Pomodoro(commands.Cog):
             return
 
         session.is_paused = True
+        session.timer_updated_at = datetime.now(timezone.utc)
+        session.last_tick_at = time.monotonic()
+        await self._persist_session(session)
         logger.info(f"Paused Pomodoro session for group {group['id']}")
         if interaction.response.is_done():
             await send_response(interaction, "Pomodoro session paused.", ephemeral=ephemeral)
@@ -928,10 +1213,14 @@ class Pomodoro(commands.Cog):
             return
 
         session.is_paused = False
+        session.timer_updated_at = datetime.now(timezone.utc)
+        session.last_tick_at = time.monotonic()
         # Remove the user who resumed from dropped_out_members
         if hasattr(session, "dropped_out_members") and interaction.user.id in session.dropped_out_members:
             session.dropped_out_members.remove(interaction.user.id)
             session.absent_counts[interaction.user.id] = 0
+
+        await self._persist_session(session)
 
         logger.info(f"Resumed Pomodoro session for group {group['id']}")
         if interaction.response.is_done():
@@ -961,10 +1250,12 @@ class Pomodoro(commands.Cog):
             if id(session) in seen_sessions:
                 continue
             seen_sessions.add(id(session))
+            if not session.runtime_active or not any(existing is session for existing in self.sessions.values()):
+                continue
 
             now = datetime.now(timezone.utc)
             if now >= session.expires_at:
-                self._remove_session(session)
+                await self._remove_session(session)
                 await self.send_notification(session.guild_id, session.group_id, "Pomodoro session expired.")
                 await self._update_group_gui(session.group_id)
                 continue
@@ -974,6 +1265,7 @@ class Pomodoro(commands.Cog):
             ):
                 deadline = session.expires_at
                 session.warned_deadline = deadline
+                await self._persist_session(session)
                 await self.send_notification(
                     session.guild_id,
                     session.group_id,
@@ -982,12 +1274,21 @@ class Pomodoro(commands.Cog):
                 )
 
             if session.is_paused:
+                session.last_tick_at = time.monotonic()
                 continue
 
             if session.timer is None:
                 session.timer = session.focus * 60
 
-            session.timer -= 1
+            tick_at = time.monotonic()
+            elapsed = max(0.0, tick_at - session.last_tick_at)
+            session.last_tick_at = tick_at
+            session.timer_updated_at = now
+            if session.current_stage == "focus":
+                observed = min(elapsed, max(0, session.timer))
+                for user_id in session.participants & session.current_session_marked - session.dropped_out_members:
+                    session.focus_seconds[user_id] = session.focus_seconds.get(user_id, 0.0) + observed
+            session.timer -= max(1, int(elapsed))
 
             if session.timer <= 0:
                 guild_id = session.guild_id
@@ -1005,6 +1306,8 @@ class Pomodoro(commands.Cog):
                     active = [m for m in group_members_all if m not in session.dropped_out_members]
                     if not active and group_members_all:
                         session.is_paused = True
+                        session.timer = session.focus * 60
+                        await self._persist_session(session)
                         msg = "All members have dropped out or are absent! Pomodoro session paused."
                         await self.send_notification(guild_id, group_id, msg, send_ui=False, ping_group=True)
                         await self._update_group_gui(session.group_id)
@@ -1014,6 +1317,7 @@ class Pomodoro(commands.Cog):
                     if session.cycles % 4 == 0:
                         session.current_stage = "long_break"
                         session.timer = session.long_break * 60
+                        await self._persist_session(session)
                         logger.info(f"Group {group_id} starting long break")
                         msg = random.choice(FOCUS_END_LONG_BREAK_MESSAGES).format(m=session.long_break)
                         msg = f"**Cycle {session.cycles} complete!**\n" + msg
@@ -1021,6 +1325,7 @@ class Pomodoro(commands.Cog):
                     else:
                         session.current_stage = "short_break"
                         session.timer = session.short_break * 60
+                        await self._persist_session(session)
                         logger.info(f"Group {group_id} starting short break")
                         msg = random.choice(FOCUS_END_SHORT_BREAK_MESSAGES).format(m=session.short_break)
                         msg = f"**Cycle {session.cycles} complete!**\n" + msg
@@ -1028,12 +1333,18 @@ class Pomodoro(commands.Cog):
                 else:
                     session.current_stage = "focus"
                     session.timer = session.focus * 60
+                    await self._persist_session(session)
                     logger.info(f"Group {group_id} starting focus session")
                     msg = random.choice(BREAK_END_FOCUS_MESSAGES).format(m=session.focus)
                     msg = f"**Cycle {session.cycles + 1} starting!**\n" + msg
                     await self.send_notification(guild_id, group_id, msg, send_ui=True)
 
                 await self._update_group_gui(session.group_id)
+
+            now_saved = datetime.now(timezone.utc)
+            last_saved = self._last_runtime_save.get(id(session))
+            if last_saved is None or (now_saved - last_saved).total_seconds() >= 15:
+                await self._persist_session(session)
 
     async def send_notification(self, guild_id, group_id, message, send_ui=False, ping_group=False, view=None):
         """Strictly route Pomodoro notifications to the group's text or VC channel."""

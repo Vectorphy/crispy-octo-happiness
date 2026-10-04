@@ -21,6 +21,9 @@ class MockDBHandler:
             ]
         return []
 
+    async def get_productivity_focus_seconds(self, user_id):
+        return 3600.0 if user_id == 1 else 0.0
+
 
 class TestProductivityService(unittest.TestCase):
     def setUp(self):
@@ -31,9 +34,29 @@ class TestProductivityService(unittest.TestCase):
         self.assertEqual(self.service.calculate_efficiency(10, 2), 5.0)
         self.assertEqual(self.service.calculate_efficiency(10, 0), 0.0)
 
-    def test_get_mock_time_spent(self):
-        time_spent = self.service.get_mock_time_spent()
-        self.assertTrue(1 <= time_spent <= 40)
+    def test_metrics_use_attended_focus_and_zero_when_untracked(self):
+        async def run_test():
+            measured = await self.service.get_productivity_metrics(1)
+            self.assertEqual(measured["tasks_completed"], 2)
+            self.assertEqual(measured["time_spent"], 1.0)
+            self.assertEqual(measured["efficiency_score"], 2.0)
+
+            untracked = await self.service.get_productivity_metrics(2)
+            self.assertEqual(untracked["time_spent"], 0.0)
+            self.assertEqual(untracked["efficiency_score"], 0.0)
+
+        asyncio.run(run_test())
+
+    def test_efficiency_uses_unrounded_focus_hours(self):
+        async def run_test():
+            db = AsyncMock()
+            db.get_user_tasks.return_value = [{"completed": True}]
+            db.get_productivity_focus_seconds.return_value = 1.0
+            metrics = await ProductivityService(db).get_productivity_metrics(1)
+            self.assertEqual(metrics["time_spent"], 0.0003)
+            self.assertEqual(metrics["efficiency_score"], 3600.0)
+
+        asyncio.run(run_test())
 
     def test_get_tasks_completed(self):
         async def run_test():
@@ -66,6 +89,9 @@ class TestProductivityTrackerCog(unittest.TestCase):
             self.assertEqual(len(embed.fields), 3)
             self.assertEqual(embed.fields[0].name, "Tasks Completed")
             self.assertEqual(embed.fields[0].value, "2")
+            self.assertEqual(embed.fields[1].name, "Attended Focus Time (hours)")
+            self.assertEqual(embed.fields[1].value, "1")
+            self.assertEqual(embed.fields[2].value, "2.0")
 
         asyncio.run(run_test())
 
