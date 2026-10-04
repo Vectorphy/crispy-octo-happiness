@@ -45,6 +45,7 @@ async def relocate_to_default_vc(member: discord.Member, db, source_id: int, gro
             return False
         if not member.voice or not member.voice.channel or member.voice.channel.id != source_id:
             return False
+        assert isinstance(destination, discord.VoiceChannel)  # narrowed by isinstance guard above
         await member.move_to(destination, reason=f"Video required in study group {group_id}")
         logger.info(
             "Voice member relocated guild_id=%s group_id=%s user_id=%s destination_id=%s",

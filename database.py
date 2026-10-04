@@ -432,7 +432,8 @@ class DBHandler:
                     "INSERT INTO productivity_focus_time "
                     "(session_id, user_id, guild_id, group_id, focus_seconds) VALUES (?, ?, ?, ?, ?) "
                     "ON CONFLICT(session_id, user_id) DO UPDATE SET focus_seconds = "
-                    "MAX(productivity_focus_time.focus_seconds, excluded.focus_seconds)", values
+                    "MAX(productivity_focus_time.focus_seconds, excluded.focus_seconds)",
+                    values,
                 )
 
     async def get_productivity_focus_seconds(self, user_id: int) -> float:
