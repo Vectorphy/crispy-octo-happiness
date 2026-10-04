@@ -44,7 +44,7 @@ The dashboard's Speak and Force Video controls change the voice permissions and 
   - `short_break`: (Optional) Duration of short breaks in minutes (default is 5)
   - `long_break`: (Optional) Duration of long breaks in minutes (default is 15)
   - Each stage must be 2–240 minutes. Omitted timings are calculated using the 5:1:3 ratio, with a two-minute minimum. `require_vc: False` enables text-only use. The creator joins automatically; other group members receive DM Join/Decline invitations. Entering voice alone does not start or join a session.
-  - The lifetime defaults to 24 hours, or the server setting saved in `/setup`. With one hour left, participants receive a remaining-time message and Renew control. Renew adds 24 hours to the current deadline. Pausing does not stop lifetime expiry. Running Pomodoros do not survive a bot restart.
+  - The lifetime defaults to 24 hours, or the server setting saved in `/setup`. With one hour left, participants receive a remaining-time message and Renew control. Renew adds 24 hours to the current deadline. Pausing does not stop lifetime expiry. Runtime state (stage, timer, pause state, participants, focus seconds) is persisted to SQLite and recovered on bot restart; offline-elapsed time advances stages without awarding focus credit. Crash-loss window is at most one snapshot interval (≤15 s).
 
 - `/end_pomodoro`: End the current Pomodoro session
   - The current session owner or guild staff can stop it directly. Participants request the owner's approval by DM; outsiders cannot request an end.
@@ -88,7 +88,7 @@ Task command results follow the response visibility rules below and work in DMs.
 ## Productivity
 
 - `/productivity`: Display your personal productivity metrics
-  - Returns an embed showing completed tasks, time spent, and efficiency score. Task counts use stored tasks, but time spent currently uses a random placeholder value; efficiency is therefore not measured productivity.
+  - Returns an embed showing completed tasks, measured focus time, and efficiency score. Task counts use stored tasks; focus time is the cumulative attended Pomodoro focus seconds recorded in the `productivity_focus_time` table (consented + present + not dropped out, focus stages only; breaks, pauses, dropout, and bot downtime excluded). Efficiency is computed as an exact unrounded ratio of focus time to group membership time; zero is returned when no focus time is recorded. The embed is labelled "measured-focus" to distinguish it from general voice or session time.
 
 ## Check-in
 
