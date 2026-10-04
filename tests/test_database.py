@@ -1,7 +1,11 @@
 import asyncio
 import os
+import sqlite3
 import sys
+import tempfile
 import unittest
+from contextlib import closing
+from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from database import DBHandler
@@ -129,6 +133,118 @@ class TestDBHandler(unittest.TestCase):
             self.assertIsNotNone(transferred)
             assert transferred is not None
             self.assertEqual(transferred["owner_id"], 999)
+
+        asyncio.run(run_test())
+
+    def test_commands_channel_migration_preserves_legacy_settings_on_restart(self):
+        async def run_test(db_path):
+            db = DBHandler(db_name=str(db_path))
+            await db.connect()
+            self.assertIsNone(await db.get_commands_channel(101))
+            self.assertIsNone(await db.get_commands_channel(999))
+            self.assertEqual(await db.get_group_category(101), 201)
+            self.assertEqual(await db.get_vc_cleanup_time(101), 900)
+            await db.save_setup(101, 202, 303, 12, log_channel_id=601)
+            await db.close()
+
+            reopened = DBHandler(db_name=str(db_path))
+            await reopened.connect()
+            self.assertEqual(await reopened.get_commands_channel(101), 303)
+            self.assertEqual(await reopened.get_group_category(101), 202)
+            self.assertEqual(await reopened.get_default_max_members(101), 12)
+            self.assertEqual(await reopened.get_vc_cleanup_time(101), 900)
+            self.assertEqual(await reopened.get_vc_category(101), 501)
+            self.assertEqual(await reopened.get_mod_log_channel(101), 601)
+            await reopened.create_tables()
+            self.assertEqual(await reopened.get_commands_channel(101), 303)
+            await reopened.save_setup(101, 203, 304, 13)
+            self.assertEqual(await reopened.get_mod_log_channel(101), 601)
+            await reopened.close()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "legacy.sqlite"
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.execute(
+                    "CREATE TABLE guild_settings (guild_id INTEGER PRIMARY KEY, "
+                    "vc_cleanup_time INTEGER DEFAULT 600, vc_category_id INTEGER, "
+                    "group_category_id INTEGER)"
+                )
+                conn.execute(
+                    "INSERT INTO guild_settings (guild_id, vc_cleanup_time, vc_category_id, "
+                    "group_category_id) VALUES (?, ?, ?, ?)",
+                    (101, 900, 501, 201),
+                )
+                conn.commit()
+            asyncio.run(run_test(db_path))
+
+    def test_setup_and_vc_setters_preserve_other_settings(self):
+        async def run_test():
+            await self.db.connect()
+            await self.db.update_vc_cleanup_time(101, 900)
+            await self.db.update_vc_category(101, 501)
+            self.assertIsNone(await self.db.get_commands_channel(101))
+            self.assertEqual(await self.db.get_default_max_members(101), 10)
+            await self.db.set_mod_log_channel(101, 601)
+
+            await self.db.save_setup(101, 201, 301, 15)
+            self.assertEqual(await self.db.get_vc_cleanup_time(101), 900)
+            self.assertEqual(await self.db.get_vc_category(101), 501)
+            self.assertEqual(await self.db.get_mod_log_channel(101), 601)
+
+            await self.db.update_vc_cleanup_time(101, 901)
+            await self.db.update_vc_category(101, 502)
+            self.assertEqual(await self.db.get_group_category(101), 201)
+            self.assertEqual(await self.db.get_commands_channel(101), 301)
+            self.assertEqual(await self.db.get_default_max_members(101), 15)
+            self.assertEqual(await self.db.get_mod_log_channel(101), 601)
+
+            await self.db.save_setup(101, 202, 302, 16, log_channel_id=602)
+            self.assertEqual(await self.db.get_group_category(101), 202)
+            self.assertEqual(await self.db.get_commands_channel(101), 302)
+            self.assertEqual(await self.db.get_default_max_members(101), 16)
+            self.assertEqual(await self.db.get_vc_cleanup_time(101), 901)
+            self.assertEqual(await self.db.get_vc_category(101), 502)
+            self.assertEqual(await self.db.get_mod_log_channel(101), 602)
+
+            await self.db.save_setup(102, 203, 303, 17, log_channel_id=603)
+            self.assertEqual(await self.db.get_mod_log_channel(102), 603)
+            self.assertEqual(await self.db.get_vc_cleanup_time(102), 600)
+
+        asyncio.run(run_test())
+
+    def test_failed_setup_commit_rolls_back_before_retry(self):
+        async def run_test():
+            await self.db.connect()
+            await self.db.save_setup(101, 201, 301, 15, log_channel_id=601)
+            async with self.db.lock:
+                self.db.conn.execute("PRAGMA foreign_keys = ON")
+                self.db.conn.execute("CREATE TABLE allowed_setup (id INTEGER PRIMARY KEY)")
+                self.db.conn.execute(
+                    "CREATE TABLE setup_guard (parent_id INTEGER REFERENCES allowed_setup(id) "
+                    "DEFERRABLE INITIALLY DEFERRED)"
+                )
+                self.db.conn.execute(
+                    "CREATE TRIGGER reject_setup AFTER UPDATE OF group_category_id ON guild_settings "
+                    "WHEN NEW.group_category_id = 999 BEGIN "
+                    "INSERT INTO setup_guard (parent_id) VALUES (999); END"
+                )
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                await self.db.save_setup(101, 999, 302, 16, log_channel_id=602)
+
+            self.assertFalse(self.db.conn.in_transaction)
+            self.assertEqual(await self.db.get_group_category(101), 201)
+            self.assertEqual(await self.db.get_commands_channel(101), 301)
+            self.assertEqual(await self.db.get_default_max_members(101), 15)
+            self.assertEqual(await self.db.get_mod_log_channel(101), 601)
+            async with self.db.lock:
+                self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM setup_guard").fetchone()[0], 0)
+
+            await self.db.save_setup(101, 202, 302, 16, log_channel_id=602)
+            self.assertEqual(await self.db.get_group_category(101), 202)
+            self.assertEqual(await self.db.get_commands_channel(101), 302)
+            self.assertEqual(await self.db.get_default_max_members(101), 16)
+            self.assertEqual(await self.db.get_mod_log_channel(101), 602)
 
         asyncio.run(run_test())
 

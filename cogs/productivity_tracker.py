@@ -4,7 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils import ProductivityService, should_use_ephemeral
+from utils import ProductivityService, acknowledge_interaction, send_response, should_use_ephemeral
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,8 @@ class ProductivityTracker(commands.Cog):
 
     @app_commands.command(name="productivity", description="Display your productivity metrics")
     async def productivity(self, interaction: discord.Interaction):
+        await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
         user_id = interaction.user.id
         metrics = await self.productivity_service.get_productivity_metrics(user_id)
 
@@ -38,7 +38,7 @@ class ProductivityTracker(commands.Cog):
             inline=False,
         )
 
-        await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+        await send_response(interaction, embed=embed, ephemeral=ephemeral)
 
 
 async def setup(bot):

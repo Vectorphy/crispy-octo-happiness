@@ -5,7 +5,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils import should_use_ephemeral
+from utils import acknowledge_interaction, send_response, should_use_ephemeral
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +42,10 @@ class TaskActionSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        ephemeral = await should_use_ephemeral(interaction, self.db)
-        await interaction.response.defer(ephemeral=ephemeral)
+        await interaction.response.defer(ephemeral=True, thinking=True)
         task_id = self.values[0] if self.values else None
         if task_id is None or task_id not in self.task_groups:
-            await interaction.followup.send("Choose a task from this menu.", ephemeral=ephemeral)
+            await send_response(interaction, "Choose a task from this menu.", ephemeral=True)
             return
         success = await self.db.apply_task_action(
             interaction.user.id, int(task_id), self.task_groups[task_id], self.action
@@ -144,8 +143,8 @@ class TaskList(commands.Cog):
     )
     @app_commands.describe(description="The task description")
     async def add_task(self, interaction: discord.Interaction, *, description: str):
+        await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
         group_id = None
         group_name = None
         channel_id = getattr(interaction, "channel_id", None)
@@ -165,21 +164,23 @@ class TaskList(commands.Cog):
 
         if group_id:
             task_id = await self.bot.db.add_task(interaction.user.id, description, group_id=group_id, guild_id=guild_id)
-            await interaction.followup.send(
-                f"Task #{task_id} added successfully to **{group_name}**: {description}", ephemeral=ephemeral
+            await send_response(
+                interaction,
+                f"Task #{task_id} added successfully to **{group_name}**: {description}",
+                ephemeral=ephemeral,
             )
         elif guild_id:
             task_id = await self.bot.db.add_task(interaction.user.id, description, guild_id=guild_id)
-            await interaction.followup.send(f"Task added successfully. Task ID: {task_id}", ephemeral=ephemeral)
+            await send_response(interaction, f"Task added successfully. Task ID: {task_id}", ephemeral=ephemeral)
         else:
             task_id = await self.bot.db.add_task(interaction.user.id, description)
-            await interaction.followup.send(f"Task added successfully. Task ID: {task_id}", ephemeral=ephemeral)
+            await send_response(interaction, f"Task added successfully. Task ID: {task_id}", ephemeral=ephemeral)
 
     @app_commands.command(name="task_complete", description="Mark a task as complete")
     @app_commands.describe(task_ids="The ID(s) or task number(s) to complete (comma-separated, optional if using UI)")
     async def complete_task(self, interaction: discord.Interaction, task_ids: Optional[str] = None):
+        await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
         if task_ids is not None:
             group_id = None
             channel_id = getattr(interaction, "channel_id", None)
@@ -210,15 +211,15 @@ class TaskList(commands.Cog):
                 res.append(f"Failed to find or already completed: {', '.join(failed_list)}")
 
             if res:
-                await interaction.followup.send("\n".join(res), ephemeral=ephemeral)
+                await send_response(interaction, "\n".join(res), ephemeral=True if failed_list else ephemeral)
             else:
-                await interaction.followup.send("No valid tasks were provided.", ephemeral=ephemeral)
+                await send_response(interaction, "No valid tasks were provided.", ephemeral=True)
             return
 
         await self._send_task_menu(interaction, "complete")
 
     async def _send_task_menu(self, interaction, action):
-        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
+        ephemeral = True
         group_id = None
         group_name = None
         channel_id = getattr(interaction, "channel_id", None)
@@ -244,18 +245,18 @@ class TaskList(commands.Cog):
         for task in choices:
             task["group_name"] = group_name or ("Study group" if task.get("group_id") else "Server Task")
         if not choices:
-            await interaction.followup.send(f"You have no tasks to {action}.", ephemeral=ephemeral)
+            await send_response(interaction, f"You have no tasks to {action}.", ephemeral=ephemeral)
             return
         view = TaskActionView(choices[:25], self.bot.db, interaction.user.id, action)
-        await interaction.followup.send(f"Select a task to {action}:", view=view, ephemeral=ephemeral)
+        await send_response(interaction, f"Select a task to {action}:", view=view, ephemeral=ephemeral)
 
     @app_commands.command(name="task_list", description="List your current tasks")
     @app_commands.describe(all_groups="Show tasks across all groups (default False if inside a group)")
     async def list_tasks(self, interaction: discord.Interaction, all_groups: bool = False):
         if isinstance(all_groups, str):
             all_groups = all_groups.strip().lower() in {"true", "1", "yes", "on"}
+        await acknowledge_interaction(interaction)
         ephemeral = True if all_groups else await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
         group_id = None
         group_name = None
         channel_id = getattr(interaction, "channel_id", None)
@@ -287,17 +288,17 @@ class TaskList(commands.Cog):
             title = f"{interaction.user.display_name}'s Tasks"
 
         if not tasks:
-            await interaction.followup.send("You have no tasks.", ephemeral=ephemeral)
+            await send_response(interaction, "You have no tasks.", ephemeral=ephemeral)
             return
 
         view = TaskPaginationView(tasks, title)
-        await interaction.followup.send(embed=view.get_embed(), view=view, ephemeral=ephemeral)
+        await send_response(interaction, embed=view.get_embed(), view=view, ephemeral=ephemeral)
 
     @app_commands.command(name="task_delete", description="Delete one or multiple tasks")
     @app_commands.describe(task_ids="The ID(s) to delete (comma-separated, optional if using the menu)")
     async def delete_task(self, interaction: discord.Interaction, task_ids: Optional[str] = None):
+        await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
         if task_ids is None:
             await self._send_task_menu(interaction, "delete")
             return
@@ -330,9 +331,9 @@ class TaskList(commands.Cog):
             res.append(f"Failed to find or delete: {', '.join(failed_list)}")
 
         if res:
-            await interaction.followup.send("\n".join(res), ephemeral=ephemeral)
+            await send_response(interaction, "\n".join(res), ephemeral=True if failed_list else ephemeral)
         else:
-            await interaction.followup.send("No valid tasks were provided.", ephemeral=ephemeral)
+            await send_response(interaction, "No valid tasks were provided.", ephemeral=True)
 
     @app_commands.command(
         name="task_purge",
@@ -340,13 +341,15 @@ class TaskList(commands.Cog):
     )
     @app_commands.describe(all_tasks="⚠️ CAUTION: Set to True to purge ALL your tasks globally across ALL study groups")
     async def purge_tasks(self, interaction: discord.Interaction, all_tasks: bool = False):
-        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
+        await acknowledge_interaction(interaction)
+        ephemeral = True if all_tasks else await should_use_ephemeral(interaction, self.bot.db)
         if all_tasks:
             deleted_count = await self.bot.db.purge_all_user_tasks(interaction.user.id)
             cleanup = await self._purge_task_messages(interaction)
-            await interaction.followup.send(
-                f"Purged {deleted_count} tasks globally across all your groups.{cleanup}", ephemeral=ephemeral
+            await send_response(
+                interaction,
+                f"Purged {deleted_count} tasks globally across all your groups.{cleanup}",
+                ephemeral=True if cleanup else ephemeral,
             )
             return
 
@@ -368,19 +371,24 @@ class TaskList(commands.Cog):
         if group_id:
             count = await self.bot.db.purge_group_tasks(interaction.user.id, group_id)
             cleanup = await self._purge_task_messages(interaction)
-            await interaction.followup.send(
-                f"Successfully purged {count} tasks from this group.{cleanup}", ephemeral=ephemeral
+            await send_response(
+                interaction,
+                f"Successfully purged {count} tasks from this group.{cleanup}",
+                ephemeral=True if cleanup else ephemeral,
             )
         elif guild_id:
             count = await self.bot.db.purge_guild_tasks(interaction.user.id, guild_id)
             cleanup = await self._purge_task_messages(interaction)
-            await interaction.followup.send(
-                f"Successfully purged {count} tasks from this server.{cleanup}", ephemeral=ephemeral
+            await send_response(
+                interaction,
+                f"Successfully purged {count} tasks from this server.{cleanup}",
+                ephemeral=True if cleanup else ephemeral,
             )
         else:
-            await interaction.followup.send(
+            await send_response(
+                interaction,
                 "You must use this command inside a study group channel or server to purge its tasks.",
-                ephemeral=ephemeral,
+                ephemeral=True,
             )
 
     async def _purge_task_messages(self, interaction):

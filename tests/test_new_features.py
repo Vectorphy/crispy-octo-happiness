@@ -13,6 +13,13 @@ from cogs.study_groups import StudyGroup, StudyGroupCog
 from cogs.tasklist import TaskList
 
 
+def track_response(interaction):
+    async def sent(*args, **kwargs):
+        interaction.response.is_done.return_value = True
+
+    interaction.response.send_message.side_effect = sent
+
+
 class TestPomodoroRatioAndFeatures(unittest.TestCase):
     def test_ratio_calculations(self):
         # Default (none provided) -> (25, 5, 15)
@@ -81,6 +88,7 @@ class TestPomodoroRatioAndFeatures(unittest.TestCase):
             interaction.user.id = 12345
             interaction.channel_id = 555
             interaction.response.is_done = MagicMock(return_value=False)
+            track_response(interaction)
 
             # Mock group
             mock_group = {
@@ -116,7 +124,7 @@ class TestPomodoroRatioAndFeatures(unittest.TestCase):
 
         asyncio.run(run_test())
 
-    def test_start_pomodoro_defers_fresh_interaction_before_followup(self):
+    def test_start_pomodoro_acknowledges_privately_before_followup(self):
         async def run_test():
             bot = MagicMock()
             bot.db = AsyncMock()
@@ -144,9 +152,9 @@ class TestPomodoroRatioAndFeatures(unittest.TestCase):
             await cog.start_pomodoro.callback(cog, interaction, focus=25, require_vc=False)
 
             self.assertEqual(interaction.response.is_done.call_count, 2)
-            interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+            interaction.response.send_message.assert_awaited_once_with("Processing your request…", ephemeral=True)
             interaction.followup.send.assert_awaited_once()
-            interaction.response.send_message.assert_not_awaited()
+            interaction.response.defer.assert_not_awaited()
 
         asyncio.run(run_test())
 
@@ -161,6 +169,7 @@ class TestPomodoroRatioAndFeatures(unittest.TestCase):
             interaction.user.id = 12345
             interaction.channel_id = 555
             interaction.response.is_done = MagicMock(return_value=False)
+            track_response(interaction)
 
             mock_group = {
                 "id": 1,
@@ -341,6 +350,7 @@ class TestListGroupsMemberSync(unittest.TestCase):
             interaction = AsyncMock()
             interaction.guild.id = 999
             interaction.response.is_done = MagicMock(return_value=False)
+            track_response(interaction)
             bot.db.get_all_study_groups_of_guild.return_value = [
                 {
                     "id": 42,

@@ -6,7 +6,7 @@
   - `mentions`: Users or roles to include in the initial roster, alongside the creator.
   - `name`: Optional group name; omitted names are generated.
   - `max_members`: Optional member limit; defaults to the server's `/setup` setting.
-  - Posts one dashboard with member mentions, channel links, and controls. The command result is public.
+  - Posts one dashboard with member mentions, channel links, and controls in the group's text channel. The command acknowledgement follows the response visibility rules below.
 
 - `/join_group <name>`: Join an existing study group
   - `name`: The name of the study group you want to join
@@ -79,19 +79,19 @@ The dashboard's Speak and Force Video controls change the voice permissions and 
   - Adds a new task to your personal task list, scoped to the current server (and study group if invoked within one).
 
 - `/task_complete [task_ids]`: Complete tasks by comma-separated IDs or numbers. Omit IDs to use a Select menu.
-  - Inside a study group, choices and operations are scoped to that group. Only the task owner can use the menu.
+  - Inside a study group, choices and operations are scoped to that group. The menu and its acknowledgements are always private, and only the task owner can use it.
 
 - `/task_delete [task_ids]`: Delete tasks by comma-separated IDs or numbers. Omit IDs to use the same owner-checked menu.
 
 - `/task_list [all_groups]`: List tasks, including completed ones, with 15 tasks per page.
-  - By default, tasks are scoped to the current server and active group (or global server tasks outside groups). Set `all_groups:True` to list all tasks across groups.
+  - By default, tasks are scoped to the current server and active group (or global server tasks outside groups). Set `all_groups:True` to list your tasks across all groups and servers.
   - Note: `all_groups:True` results are always sent ephemerally to prevent channel clutter.
 
 - `/task_purge [all_tasks]`: Delete your tasks in the current group with one database operation.
-  - Set `all_tasks:True` to delete your tasks across every group in this server and global scope.
+  - Set `all_tasks:True` to delete your tasks across every group and server, including global tasks. Its result is always private.
   - Also checks the latest 100 messages in the current text channel and removes matching bot task messages attributed to you. Cleanup failure is reported after the task records are deleted.
 
-Task command results follow category-based visibility and work in DMs. Menus show up to 25 choices; use typed IDs for additional tasks. Menu actions use the database row ID internally to avoid ambiguous legacy task numbers.
+Task command results follow the response visibility rules below and work in DMs. Menus show up to 25 choices; use typed IDs for additional tasks. Menu actions use the database row ID internally to avoid ambiguous legacy task numbers.
 
 ## Productivity
 
@@ -118,9 +118,14 @@ Task command results follow category-based visibility and work in DMs. Menus sho
 
 ### Management Commands
 
-- `/setup [max_members] [category]`: View or update server-wide study group defaults (Manage Server permission required)
-  - `max_members`: Optional default member limit for new groups (1–50).
-  - `category`: Optional category for new study group channels.
+- `/setup [max_members] [category]`: Open a private setup wizard for server-wide study group defaults (Manage Server permission required).
+  - Every invocation opens the wizard, including servers that already have saved settings. Only the person who opened it can use its controls.
+  - Choose an existing server category or enter a name for a new category. The selected category holds new study group channels, a dedicated `#cpo-commands` text channel, and a `#cpo-logs` channel for group activity logs.
+  - `max_members`: Optional starting value for the default group limit (1–50).
+  - `category`: Optional starting selection for an existing category.
+  - Category choices and settings remain staged until Save. Save creates the commands and logs channels or reuses their recorded channels in the chosen category, then stores the category, channel IDs, and member limit together. Cancel or expiry leaves saved settings unchanged; controls reject changes and cancellation while Save is in progress.
+  - New logs channels are private to staff: the bot, setup invoker, and roles with Administrator or Manage Server permissions. Logs record group creation, ending, and purges. They do not stream the bot's runtime output.
+  - Reusing recorded channels can move them into a newly selected category while preserving their permission overwrites. If a Save attempt changes Discord resources but cannot store the settings, retry Save or review the retained or moved resource IDs shown on cancellation or expiry. Created resources are not automatically deleted, and moved channels are not automatically restored.
 - `/set_group_category <category>`: Set the category used by `/create_group` (Moderator or higher).
 - `/set_mod_log_channel [channel]`: Save a channel for group creation, ending, and purge event embeds (server manager).
   - Omit `channel` to disable logging. Event embeds identify the group and actor without sending mentions. Missing channels or Discord send failures are logged locally.
@@ -151,10 +156,12 @@ Task command results follow category-based visibility and work in DMs. Menus sho
 
 Note: All commands use slash command syntax (`/`). Commands requiring elevated permissions use Discord's native `default_permissions` to remain hidden from unauthorized members in the Discord client interface.
 
-### Response Visibility & Privacy Rules
+### Response visibility and privacy
 
-- **Category-Based Contextual Visibility**: Commands invoked inside the configured study group category send public responses so group members can collaborate and view session updates in the channel.
-- **Outside-Category Ephemeral Fallback**: Commands invoked outside the study group category (such as general channels or DMs) default to ephemeral responses to prevent channel clutter.
-- **Strict Privacy for Errors & Cross-Group Lists**: Permission denials, authorization rejections, missing server context, input validation errors, and cross-group task lists (`/task_list all_groups:True`) are strictly sent as ephemeral responses regardless of channel context.
+Normal slash command success replies are public only when the command runs in the exact commands channel saved by `/setup`. Other channels, including study group channels and threads beneath `#cpo-commands`, receive private replies. DMs and servers without a saved commands channel also use private replies. Channel names alone do not enable public replies.
+
+The setup wizard, permission denials, validation failures, and sensitive results remain private everywhere. Task action menus, cross-group task lists (`/task_list all_groups:True`), and global task purges (`/task_purge all_tasks:True`) are always private. Ordinary productivity metric replies follow the commands-channel rule.
+
+This rule applies to command replies. Group dashboards, check-in reminders, Pomodoro announcements, moderator logs, and invitation DMs continue to use their existing destinations.
 
 ---

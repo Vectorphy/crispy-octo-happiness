@@ -6,6 +6,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from database import DBHandler as Database
+from utils import send_response
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -93,12 +94,12 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
 
     try:
         if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
+            await send_response(interaction, message, ephemeral=True)
         else:
             try:
                 await interaction.response.send_message(message, ephemeral=True)
             except (discord.InteractionResponded, discord.HTTPException):
-                await interaction.followup.send(message, ephemeral=True)
+                await send_response(interaction, message, ephemeral=True)
     except Exception as exc:
         logger.exception(f"Failed to send error response to interaction: {exc}")
 

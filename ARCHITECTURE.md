@@ -10,13 +10,27 @@ Study group startup migrates legacy records with additive columns and identifier
 
 Each group owns a membership lock shared by direct joins, invitation admission, voice-setting changes, and the transition into teardown. Invitations arrive by DM with recipient-only Join/Decline controls and five-minute expiry. Admission grants the role and persists the roster before changing memory; failed persistence attempts to remove the newly granted role. Teardown blocks further admission, marks the persisted group inactive, removes current roster entries and related session aliases, and stops the dashboard controls.
 
-The initial group dashboard combines mentions, the status embed, and controls. Speak and Video update one voice permission while preserving the rest of the overwrite. A failed settings write triggers a Discord rollback; a failed rollback is logged for manual recovery. Camera enforcement is still deferred.
+The initial group dashboard combines mentions, the status embed, and controls. Speak and Video preserve unrelated voice permission overwrites. A failed settings write triggers a Discord rollback; a failed rollback is logged for manual recovery. Force Video warns members after 30 seconds and allows a 60-second camera grace period before disconnecting members who remain camera-off.
 
-Task Select menus carry primary row IDs and pass the owner and exact group to `DBHandler.apply_task_action`. This prevents a legacy task number from affecting multiple rows. Task results are public. Purges batch database deletion, then inspect only the current channel's latest 100 messages for bot task messages attributed to the requesting user. A Discord cleanup failure is reported without undoing successful database deletion.
+Task Select menus carry primary row IDs and pass the owner and exact group to `DBHandler.apply_task_action`. This prevents a legacy task number from affecting multiple rows. Task command acknowledgements follow the commands-channel visibility policy. Purges batch database deletion, then inspect only the current channel's latest 100 messages for bot task messages attributed to the requesting user. A Discord cleanup failure is reported privately without undoing successful database deletion.
 
 `guild_settings.mod_log_channel_id` stores the optional destination for group lifecycle embeds. Event logs include the actor and group, suppress mentions, and tolerate missing channels or logging failures. If cleanup deletes the invocation channel and Discord returns error 10003, the final command result is sent by DM. If that DM also fails, the result is logged.
 
 Offline verification covers these flows in pytest and executes the standalone 54-command matrix against an in-memory database. API calls are mocked; live Discord provisioning remains outside these checks.
+
+### Server setup and reply visibility
+
+`/setup` opens an ephemeral wizard on every invocation. Its existing `max_members` and `category` options seed a draft. The invoker can select an existing guild category or enter a new category name, then review the draft before Save. Controls belong to the invoker. Cancel and expiry discard the draft.
+
+Save resolves the chosen category and creates `cpo-commands` and `cpo-logs` text channels or reuses their recorded channels. Existing recorded channels can move into the selected category without synchronizing their permission overwrites. New logs channels deny access to `@everyone` and grant access to the bot, setup invoker, and roles with Administrator or Manage Server permissions. The logs channel receives existing group creation, ending, and purge events; runtime logs continue through the Python logger.
+
+The database stores the category ID, commands channel ID, moderator log channel ID, and default member limit together. The logs channel uses the existing `guild_settings.mod_log_channel_id` field. Startup adds the nullable `guild_settings.commands_channel_id` column to existing databases; its initial null value keeps replies private until setup is saved.
+
+Discord provisioning and the SQLite write are separate operations. If a Save attempt creates resources and later fails, the wizard retains their IDs for a retry and prevents switching the draft to another category. Existing recorded channels can also remain moved after a failed settings write. Cancel and expiry disclose created or moved resource IDs for review. Created resources are not automatically deleted, and moved channels are not automatically restored.
+
+Normal slash success replies are public only in the exact saved commands channel. Threads, other channels, DMs, and unconfigured servers use ephemeral replies. Errors, sensitive results, and the setup wizard are always private. The category controls study group placement; it does not grant public reply visibility. Dashboards, reminders, Pomodoro announcements, moderator logs, and invitation DMs keep their operational destinations.
+
+Commands acknowledge the interaction privately before processing. A separate follow-up carries the final success or error with its own visibility, then removes the temporary acknowledgement. This avoids Discord's first deferred follow-up inheriting an earlier public response flag.
 
 ### 1.1 C4 Container Diagram
 
@@ -136,6 +150,7 @@ sequenceDiagram
         Discord-->>User: Display limit message
     else Within Allowed Limits
         Guard->>Cog: Forward to Cog Command Callback
+        Cog->>Discord: Private interaction acknowledgement
         Cog->>Val: validate_parameters(name, max_members, ...)
         alt Validation Failure
             Val-->>Discord: Ephemeral Warning ("Invalid duration/name")

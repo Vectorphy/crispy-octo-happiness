@@ -129,7 +129,7 @@ sequenceDiagram
     User->>Discord: Enter Slash Command (/create_group "AI Squad" max_size:5)
     Discord->>Bot: Interaction Create Event
     Bot->>Cog: Route to AppCommand Callback
-    Cog->>Discord: await interaction.response.defer() (< 3s guarantee)
+    Cog->>Discord: Private interaction acknowledgement (< 3s guarantee)
     Cog->>Guard: Evaluate 5-Tier Permission & Active Session Caps
     alt Permission Denied or Cap Exceeded
         Guard-->>Cog: Raise CheckFailure / Return Error
@@ -279,6 +279,9 @@ erDiagram
         int mod_log_channel_id "Optional study group action log channel"
         int vc_cleanup_time "VC Inactivity cleanup timeout (sec)"
         int vc_category_id "Default Category ID for spawned VCs"
+        int group_category_id "Saved category for new study group resources"
+        int commands_channel_id "Nullable exact channel ID for public slash success replies"
+        int default_max_members "Default member limit for new study groups"
     }
 
     VOICE_CHANNEL_LOGS {
@@ -302,9 +305,11 @@ erDiagram
 - **Group lifecycle**: Saving a group retains its numeric primary key. Ending sets `active=0`, removes current roster entries, stops the dashboard view, and removes every matching Pomodoro alias. Active channel, name, guild, and user lookups exclude ended groups.
 - **Task menus**: Select values use database primary keys; `apply_task_action` checks the owner and exact group, including a null global scope. Typed task commands retain ID/number handling. Purges use one database deletion and remove only matching bot task messages attributed to the invoking user among the latest 100 messages in the current text channel.
 - **Server-scoped tasks**: The `tasks` table stores `guild_id`. Default `/task_list` is scoped to the user's current guild and active group (or global tasks outside groups), preventing tasks from bleeding across different Discord servers. `all_groups: True` lists cross-group tasks and is sent ephemerally.
-- **Category-based response visibility**: Commands use `utils.py:should_use_ephemeral` against `guild_settings.vc_category_id`. Responses inside the configured category are public to enhance group visibility; responses outside the category or in DMs default to ephemeral to avoid channel clutter. Permission denials, validation failures, and cross-group task listings strictly remain ephemeral.
+- **Server setup**: Every `/setup` invocation opens an ephemeral wizard owned by its invoker. Existing categories and newly named categories remain draft choices until Save. Save resolves the category, creates `cpo-commands` and `cpo-logs` text channels or reuses their recorded channels, and persists category ID, commands channel ID, moderator log channel ID, and default member limit together. New logs channels restrict visibility to the bot, invoker, and Administrator or Manage Server roles. Cancel and expiry leave saved settings unchanged. Changed resources from a failed Save remain available for retry; cancellation and expiry disclose their IDs.
+- **Commands-channel response visibility**: Normal slash success replies are public only when the invocation channel ID equals `guild_settings.commands_channel_id`. Threads, other channels, DMs, unset settings, and lookup failures keep replies private. Errors, sensitive results, and cross-group task lists remain private everywhere. Category membership and matching channel names do not enable public replies.
+- **Operational message destinations**: Group dashboards, check-in reminders, Pomodoro announcements, moderator logs, and invitation DMs continue to use their own channels or recipients. Their placement is independent of the slash reply policy.
 - **Moderator logs**: `guild_settings.mod_log_channel_id` stores the optional destination for creation, ending, and purge embeds. Logs suppress mentions. Missing channels and logging API/database failures do not abort the action.
-- **Voice controls and dashboard**: Speak and Video preserve other permission overwrites and persist their settings. Database failures trigger Discord permission rollback. The initial dashboard carries member mentions, the status embed, and controls together; forced camera participation remains unimplemented.
+- **Voice controls and dashboard**: Speak and Video preserve other permission overwrites and persist their settings. Database failures trigger Discord permission rollback. The initial dashboard carries member mentions, the status embed, and controls together. Force Video warns members after 30 seconds and allows a 60-second camera grace period before disconnecting members who remain camera-off.
 - **Regression execution**: Pytest includes `tests/test_release_fixes.py` and the standalone command matrix. The matrix uses an in-memory database and closes the bot in `finally`.
 
 | Component | State Medium | Concurrency & Sync Mechanism | Invariant Rules |

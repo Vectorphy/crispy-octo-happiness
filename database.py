@@ -179,7 +179,8 @@ class DBHandler:
                 guild_id INTEGER PRIMARY KEY,
                 vc_cleanup_time INTEGER DEFAULT 600,
                 vc_category_id INTEGER,
-                group_category_id INTEGER
+                group_category_id INTEGER,
+                commands_channel_id INTEGER
             )
             """)
             logger.info("Created 'guild_settings' table.")
@@ -190,6 +191,9 @@ class DBHandler:
             if "group_category_id" not in guild_settings_columns:
                 cursor.execute("ALTER TABLE guild_settings ADD COLUMN group_category_id INTEGER DEFAULT NULL;")
                 logger.info("Added 'group_category_id' column to 'guild_settings' table.")
+            if "commands_channel_id" not in guild_settings_columns:
+                cursor.execute("ALTER TABLE guild_settings ADD COLUMN commands_channel_id INTEGER DEFAULT NULL;")
+                logger.info("Added 'commands_channel_id' column to 'guild_settings' table.")
             if "default_max_members" not in guild_settings_columns:
                 cursor.execute("ALTER TABLE guild_settings ADD COLUMN default_max_members INTEGER DEFAULT 10;")
                 logger.info("Added 'default_max_members' column to 'guild_settings' table.")
@@ -305,6 +309,37 @@ class DBHandler:
                 "SELECT mod_log_channel_id FROM guild_settings WHERE guild_id = ?", (guild_id,)
             ).fetchone()
             return row[0] if row else None
+
+    async def get_commands_channel(self, guild_id: int) -> Optional[int]:
+        async with self.lock:
+            row = self.conn.execute(
+                "SELECT commands_channel_id FROM guild_settings WHERE guild_id = ?", (guild_id,)
+            ).fetchone()
+            return row[0] if row else None
+
+    async def save_setup(
+        self,
+        guild_id: int,
+        category_id: int,
+        commands_channel_id: int,
+        max_members: int,
+        log_channel_id: Optional[int] = None,
+    ) -> None:
+        async with self.lock:
+            with self.conn:
+                self.conn.execute(
+                    """
+                    INSERT INTO guild_settings (
+                        guild_id, group_category_id, commands_channel_id, default_max_members, mod_log_channel_id
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(guild_id) DO UPDATE SET
+                        group_category_id = excluded.group_category_id,
+                        commands_channel_id = excluded.commands_channel_id,
+                        default_max_members = excluded.default_max_members,
+                        mod_log_channel_id = COALESCE(excluded.mod_log_channel_id, guild_settings.mod_log_channel_id)
+                    """,
+                    (guild_id, category_id, commands_channel_id, max_members, log_channel_id),
+                )
 
     # TODO: saving pomodoro sessions
     async def save_pomodoro_session(self, session) -> None:
@@ -920,8 +955,9 @@ class DBHandler:
             cursor = self.conn.cursor()
             cursor.execute(
                 """
-            INSERT OR REPLACE INTO guild_settings (guild_id, vc_cleanup_time)
+            INSERT INTO guild_settings (guild_id, vc_cleanup_time)
             VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET vc_cleanup_time = excluded.vc_cleanup_time
             """,
                 (guild_id, cleanup_time),
             )
@@ -945,8 +981,9 @@ class DBHandler:
             cursor = self.conn.cursor()
             cursor.execute(
                 """
-            INSERT OR REPLACE INTO guild_settings (guild_id, vc_category_id)
+            INSERT INTO guild_settings (guild_id, vc_category_id)
             VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET vc_category_id = excluded.vc_category_id
             """,
                 (guild_id, category_id),
             )

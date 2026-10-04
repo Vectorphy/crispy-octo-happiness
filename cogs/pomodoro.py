@@ -7,7 +7,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from utils import check_manager, should_use_ephemeral
+from utils import acknowledge_interaction, check_manager, send_response, should_use_ephemeral
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -389,12 +389,9 @@ class Pomodoro(commands.Cog):
         long_break: Optional[int] = None,
         require_vc: bool = True,
     ):
+        if not interaction.response.is_done():
+            await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=ephemeral)
-        except Exception:
-            pass
 
         logger.info(f"Attempt to start Pomodoro session by user {interaction.user.id}")
 
@@ -403,7 +400,7 @@ class Pomodoro(commands.Cog):
             logger.warning(f"User {interaction.user.id} tried to start Pomodoro without being in a group")
             msg = "You're not in any study group."
             if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
+                await send_response(interaction, msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
             return
@@ -413,7 +410,7 @@ class Pomodoro(commands.Cog):
             logger.info(f"Pomodoro session already exists for group {group['id']}")
             msg = "A Pomodoro session is already in progress for this group."
             if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
+                await send_response(interaction, msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
             return
@@ -424,7 +421,7 @@ class Pomodoro(commands.Cog):
         if not interaction.guild:
             msg = "This command can only be used in a server."
             if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
+                await send_response(interaction, msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
             return
@@ -444,7 +441,7 @@ class Pomodoro(commands.Cog):
             if not voice_channel:
                 msg = "Could not locate or create a voice channel."
                 if interaction.response.is_done():
-                    await interaction.followup.send(msg, ephemeral=True)
+                    await send_response(interaction, msg, ephemeral=True)
                 else:
                     await interaction.response.send_message(msg, ephemeral=True)
                 return
@@ -459,7 +456,7 @@ class Pomodoro(commands.Cog):
                 logger.warning(f"User {interaction.user.id} is not in a voice channel")
                 msg = f"Please join the voice channel {voice_channel.mention} to start the Pomodoro session (or use `require_vc: False`)."
                 if interaction.response.is_done():
-                    await interaction.followup.send(msg, ephemeral=True)
+                    await send_response(interaction, msg, ephemeral=True)
                 else:
                     await interaction.response.send_message(msg, ephemeral=True)
                 return
@@ -503,7 +500,7 @@ class Pomodoro(commands.Cog):
             f"• **Mode**: {mode_text}"
         )
         if interaction.response.is_done():
-            await interaction.followup.send(response_msg, ephemeral=ephemeral)
+            await send_response(interaction, response_msg, ephemeral=ephemeral)
         else:
             await interaction.response.send_message(response_msg, ephemeral=ephemeral)
 
@@ -535,19 +532,16 @@ class Pomodoro(commands.Cog):
         long_break: Optional[int] = None,
         require_vc: Optional[bool] = None,
     ):
+        if not interaction.response.is_done():
+            await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=ephemeral)
-        except Exception:
-            pass
 
         group = await self._resolve_group(interaction)
         session = self._get_session(group)
         if not group or not session:
             msg = "No active Pomodoro session found for your group."
             if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
+                await send_response(interaction, msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
             return
@@ -557,7 +551,7 @@ class Pomodoro(commands.Cog):
         if interaction.user.id not in (group.get("creator_id"), group.get("owner_id")) and not is_mgr:
             msg = "Only the group owner or a server manager can edit Pomodoro settings."
             if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
+                await send_response(interaction, msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
             return
@@ -605,7 +599,7 @@ class Pomodoro(commands.Cog):
         )
 
         if interaction.response.is_done():
-            await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+            await send_response(interaction, embed=embed, ephemeral=ephemeral)
         else:
             await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
 
@@ -613,12 +607,9 @@ class Pomodoro(commands.Cog):
 
     @app_commands.command(name="end_pomodoro", description="End the current Pomodoro session")
     async def end_pomodoro(self, interaction: discord.Interaction):
+        if not interaction.response.is_done():
+            await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=ephemeral)
-        except Exception:
-            pass
 
         logger.info(f"Attempt to end Pomodoro session by user {interaction.user.id}")
         group = await self._resolve_group(interaction)
@@ -627,7 +618,7 @@ class Pomodoro(commands.Cog):
             logger.warning(f"No active Pomodoro session for user {interaction.user.id}")
             msg = "No active Pomodoro session for your group."
             if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
+                await send_response(interaction, msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
             return
@@ -651,7 +642,7 @@ class Pomodoro(commands.Cog):
             self.run_timer.stop()
         logger.info(f"Ended Pomodoro session for group {group['id']}")
         if interaction.response.is_done():
-            await interaction.followup.send("Pomodoro session ended.", ephemeral=ephemeral)
+            await send_response(interaction, "Pomodoro session ended.", ephemeral=ephemeral)
         else:
             await interaction.response.send_message("Pomodoro session ended.", ephemeral=ephemeral)
 
@@ -659,12 +650,9 @@ class Pomodoro(commands.Cog):
 
     @app_commands.command(name="pause_pomodoro", description="Pause the current Pomodoro session")
     async def pause_pomodoro(self, interaction: discord.Interaction):
+        if not interaction.response.is_done():
+            await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=ephemeral)
-        except Exception:
-            pass
 
         logger.info(f"Attempt to pause Pomodoro session by user {interaction.user.id}")
         group = await self._resolve_group(interaction)
@@ -673,7 +661,7 @@ class Pomodoro(commands.Cog):
             logger.warning(f"No active Pomodoro session for user {interaction.user.id}")
             msg = "No active Pomodoro session for your group."
             if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
+                await send_response(interaction, msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
             return
@@ -681,7 +669,7 @@ class Pomodoro(commands.Cog):
         if session.is_paused:
             msg = "Session is already paused."
             if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
+                await send_response(interaction, msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
             return
@@ -689,7 +677,7 @@ class Pomodoro(commands.Cog):
         session.is_paused = True
         logger.info(f"Paused Pomodoro session for group {group['id']}")
         if interaction.response.is_done():
-            await interaction.followup.send("Pomodoro session paused.", ephemeral=ephemeral)
+            await send_response(interaction, "Pomodoro session paused.", ephemeral=ephemeral)
         else:
             await interaction.response.send_message("Pomodoro session paused.", ephemeral=ephemeral)
 
@@ -697,12 +685,9 @@ class Pomodoro(commands.Cog):
 
     @app_commands.command(name="resume_pomodoro", description="Resume the paused Pomodoro session")
     async def resume_pomodoro(self, interaction: discord.Interaction):
+        if not interaction.response.is_done():
+            await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=ephemeral)
-        except Exception:
-            pass
 
         logger.info(f"Attempt to resume Pomodoro session by user {interaction.user.id}")
         group = await self._resolve_group(interaction)
@@ -711,7 +696,7 @@ class Pomodoro(commands.Cog):
             logger.warning(f"No active Pomodoro session for user {interaction.user.id}")
             msg = "No active Pomodoro session for your group."
             if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
+                await send_response(interaction, msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
             return
@@ -719,7 +704,7 @@ class Pomodoro(commands.Cog):
         if not session.is_paused:
             msg = "Session is not paused."
             if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
+                await send_response(interaction, msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
             return
@@ -732,7 +717,7 @@ class Pomodoro(commands.Cog):
 
         logger.info(f"Resumed Pomodoro session for group {group['id']}")
         if interaction.response.is_done():
-            await interaction.followup.send("Pomodoro session resumed.", ephemeral=ephemeral)
+            await send_response(interaction, "Pomodoro session resumed.", ephemeral=ephemeral)
         else:
             await interaction.response.send_message("Pomodoro session resumed.", ephemeral=ephemeral)
 
@@ -897,12 +882,9 @@ class Pomodoro(commands.Cog):
         description="Check the status of the current Pomodoro session",
     )
     async def pomodoro_status(self, interaction: discord.Interaction):
+        if not interaction.response.is_done():
+            await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=ephemeral)
-        except Exception:
-            pass
 
         logger.info(f"Pomodoro status check by user {interaction.user.id}")
         group = await self._resolve_group(interaction)
@@ -912,7 +894,7 @@ class Pomodoro(commands.Cog):
             logger.warning(f"No active Pomodoro session for user {interaction.user.id}")
             msg = "No active Pomodoro session for your group."
             if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
+                await send_response(interaction, msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
             return
@@ -940,7 +922,7 @@ class Pomodoro(commands.Cog):
 
         logger.info(f"Sent Pomodoro status for group {group['id']}")
         if interaction.response.is_done():
-            await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+            await send_response(interaction, embed=embed, ephemeral=ephemeral)
         else:
             await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
 

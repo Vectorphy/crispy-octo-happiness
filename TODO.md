@@ -31,6 +31,7 @@ Verified on 2026-10-01 against the rc3 candidate based on `c7bdca3`. Checked ite
 - [ ] Add explicit timeouts around external resource provisioning calls.
 - [ ] Validate `BOT_DEVELOPER_ID` and reject placeholder or invalid values.
 - [ ] Add persistent retry tracking for Discord resources left behind when group cleanup lacks permissions.
+- [ ] Add recovery for setup resources retained after failed saves, with explicit ownership checks before resource deletion.
 
 ## Release audit findings
 
@@ -41,11 +42,20 @@ Verified on 2026-10-01 against the rc3 candidate based on `c7bdca3`. Checked ite
 - [x] Remove ended groups from active lookups and remove related Pomodoro aliases during cleanup.
 - [x] Check permission denial, malformed selections, missing resources, failed API calls, and persistence rollback.
 
+## Setup and command reply visibility
+
+- [x] Open an invoker-owned private setup wizard on every `/setup` invocation, with existing-category selection and a new-category name modal.
+- [x] Keep all settings staged until Save; Cancel and expiry leave the stored configuration unchanged. Reject Cancel while Save is in progress.
+- [x] Create or reuse `#cpo-commands` and `#cpo-logs` in the chosen category and save their IDs with the category and default member limit.
+- [x] Restrict newly created logs channels to staff and use the existing moderator activity log destination.
+- [x] Make normal slash success replies public only in the exact stored commands channel; keep threads, other channels, DMs, errors, and sensitive results private.
+- [x] Verify wizard ownership, persistence failures, legacy migration, exact-channel visibility, and unchanged operational message destinations with offline regressions (107 tests; mypy and Ruff pass on 2026-10-04).
+
 ## Release verification
 
 - [x] Prevent default task-list results from exposing group tasks; require `all_groups: true` for cross-group listing and make cross-group results ephemeral.
 - [x] Scope task persistence and default listings by `guild_id`, preventing cross-server task leaks.
-- [x] Implement category-based response visibility (`should_use_ephemeral`) across all command cogs, keeping responses public in configured categories and ephemeral elsewhere.
+- [x] Implement the rc4 category-based response visibility policy. The commands-channel policy above supersedes it.
 - [x] Keep study-group voice channels when the last member leaves; retain explicit deletion paths.
 - [x] Provide a `main.py` compatibility launcher for hosting panels whose default startup command targets `python3 main.py`.
 - [x] Verify the candidate: 68 pytest tests, the asserted 54-flow standalone runner, mypy, Ruff lint, and Ruff formatting on Python 3.12.

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from enum import IntEnum
 from functools import wraps
@@ -7,7 +8,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils import should_use_ephemeral
+from cogs._setup_view import SetupView
+from utils import acknowledge_interaction, send_response, should_use_ephemeral
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -40,6 +42,8 @@ class Manager(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        self._setup_locks: Dict[int, asyncio.Lock] = {}
+        self._setup_views: Dict[int, SetupView] = {}
         logger.info("Manager cog initialized")
 
     ### --- DECORATOR FUNCTIONS --- ###
@@ -330,8 +334,10 @@ class Manager(commands.Cog):
         max_members: Optional[app_commands.Range[int, 1, 50]] = None,
         category: Optional[discord.CategoryChannel] = None,
     ):
-        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
+        await interaction.response.defer(ephemeral=True)
+        if interaction.guild is None or interaction.guild_id is None:
+            await interaction.followup.send("Set up this bot inside a server.", ephemeral=True)
+            return
         level = await self.get_permission_level(
             interaction.guild_id,
             interaction.user.id,
@@ -344,36 +350,32 @@ class Manager(commands.Cog):
             )
             return
 
-        updated_items = []
-        if max_members is not None:
-            await self.bot.db.update_default_max_members(interaction.guild_id, max_members)
-            updated_items.append(f"• **Default Max Members**: {max_members}")
+        if category is not None and (
+            not isinstance(category, discord.CategoryChannel) or category.guild.id != interaction.guild_id
+        ):
+            await interaction.followup.send("Choose a category in this server.", ephemeral=True)
+            return
 
-        if category is not None:
-            await self.bot.db.update_group_category(interaction.guild_id, category.id)
-            updated_items.append(f"• **Study Group Category**: {category.name} (`{category.id}`)")
-
-        current_max = await self.bot.db.get_default_max_members(interaction.guild_id)
-        current_cat_id = await self.bot.db.get_group_category(interaction.guild_id)
-        cat_str = f"<#{current_cat_id}>" if current_cat_id else "*Not configured (default)*"
-
-        embed = discord.Embed(
-            title="⚙️ Study Group Server Configuration",
-            description="Manage server-wide settings for study groups and productivity sessions.",
-            color=discord.Color.blue(),
-        )
-        embed.add_field(
-            name="👥 Default Max Members",
-            value=f"**{current_max}** members per group",
-            inline=True,
-        )
-        embed.add_field(name="📁 Study Group Category", value=cat_str, inline=True)
-
-        if updated_items:
-            embed.add_field(name="✅ Changes Saved", value="\n".join(updated_items), inline=False)
-
-        embed.set_footer(text="To change settings, run /setup with options or use /set_group_category.")
-        await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+        async with self._setup_locks.setdefault(interaction.guild_id, asyncio.Lock()):
+            current_cat_id = await self.bot.db.get_group_category(interaction.guild_id)
+            current_channel_id = await self.bot.db.get_commands_channel(interaction.guild_id)
+            current_log_channel_id = await self.bot.db.get_mod_log_channel(interaction.guild_id)
+            current_max = await self.bot.db.get_default_max_members(interaction.guild_id)
+            view = SetupView(
+                self,
+                interaction.guild,
+                interaction.user.id,
+                category.id if category is not None else current_cat_id,
+                current_channel_id,
+                max_members if max_members is not None else current_max,
+                current_log_channel_id,
+            )
+            view.snapshot = (current_cat_id, current_channel_id, current_log_channel_id, current_max)
+            prior = self._setup_views.get(interaction.guild_id)
+            if prior:
+                prior.stop()
+            self._setup_views[interaction.guild_id] = view
+        view.message = await interaction.followup.send(embed=view.render(), view=view, ephemeral=True, wait=True)
 
     @app_commands.command(
         name="sync_commands",
@@ -382,10 +384,10 @@ class Manager(commands.Cog):
     @app_commands.describe(guild_only="If true, syncs only to this server. If false, syncs globally.")
     @app_commands.default_permissions(administrator=True)
     async def sync_commands(self, interaction: discord.Interaction, guild_only: bool = False):
+        await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
         if not interaction.guild and guild_only:
-            await interaction.followup.send("Guild-only sync can only be used inside a server.", ephemeral=True)
+            await send_response(interaction, "Guild-only sync can only be used inside a server.", ephemeral=True)
             return
 
         level = await self.get_permission_level(
@@ -394,7 +396,8 @@ class Manager(commands.Cog):
             member=(interaction.user if isinstance(interaction.user, discord.Member) else None),
         )
         if level < PermissionLevel.ADMIN:
-            await interaction.followup.send(
+            await send_response(
+                interaction,
                 "You must be an Administrator or Bot Developer to sync commands.",
                 ephemeral=True,
             )
@@ -404,20 +407,22 @@ class Manager(commands.Cog):
             if guild_only and interaction.guild:
                 self.bot.tree.copy_global_to(guild=interaction.guild)
                 synced = await self.bot.tree.sync(guild=interaction.guild)
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     f"Successfully synced **{len(synced)}** command(s) to server **{interaction.guild.name}**.",
                     ephemeral=ephemeral,
                 )
             else:
                 synced = await self.bot.tree.sync()
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     f"Successfully synced **{len(synced)}** command(s) globally across all servers.",
                     ephemeral=ephemeral,
                 )
             logger.info(f"Slash commands synced by {interaction.user.display_name} (guild_only={guild_only})")
         except Exception as e:
             logger.exception(f"Error syncing commands: {e}")
-            await interaction.followup.send(f"Failed to sync commands: {e}", ephemeral=True)
+            await send_response(interaction, f"Failed to sync commands: {e}", ephemeral=True)
 
     @app_commands.command(
         name="user_level",
@@ -464,10 +469,10 @@ class Manager(commands.Cog):
     )
     @app_commands.default_permissions(administrator=True)
     async def sync_managers(self, interaction: discord.Interaction):
+        await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
         if not interaction.guild:
-            await interaction.followup.send("This command can only be used in a server.", ephemeral=True)
+            await send_response(interaction, "This command can only be used in a server.", ephemeral=True)
             return
 
         level = await self.get_permission_level(
@@ -476,7 +481,7 @@ class Manager(commands.Cog):
             member=(interaction.user if isinstance(interaction.user, discord.Member) else None),
         )
         if level < PermissionLevel.ADMIN:
-            await interaction.followup.send("You don't have permission to use this command.", ephemeral=True)
+            await send_response(interaction, "You don't have permission to use this command.", ephemeral=True)
             return
 
         synced = await self.sync_guild_managers(interaction.guild)
@@ -484,7 +489,8 @@ class Manager(commands.Cog):
         if len(synced) > 15:
             names += f" and {len(synced) - 15} others"
 
-        await interaction.followup.send(
+        await send_response(
+            interaction,
             f"Successfully synced **{len(synced)}** server owner & moderator members in the database:\n{names or 'None detected'}",
             ephemeral=ephemeral,
         )
@@ -575,8 +581,8 @@ class Manager(commands.Cog):
     @app_commands.command(name="list_managers", description="List all managers and staff for this server")
     @app_commands.default_permissions(manage_guild=True)
     async def list_managers(self, interaction: discord.Interaction):
+        await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
         logger.info(f"Listing managers for guild {interaction.guild_id}")
         managers_from_db = await self.bot.db.get_all_managers(interaction.guild_id)
         embed = discord.Embed(title="Server Staff & Managers", color=discord.Color.blue())
@@ -628,7 +634,7 @@ class Manager(commands.Cog):
             )
 
         logger.debug(f"Found {count} managers for guild {interaction.guild_id}")
-        await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+        await send_response(interaction, embed=embed, ephemeral=ephemeral)
 
     @app_commands.command(
         name="set_permission_level",

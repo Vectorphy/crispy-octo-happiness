@@ -5,7 +5,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils import is_group_creator, should_use_ephemeral
+from utils import acknowledge_interaction, is_group_creator, send_response, should_use_ephemeral
 
 logger = logging.getLogger(__name__)
 
@@ -20,16 +20,16 @@ class VoiceChannels(commands.Cog):
     @is_group_creator()
     async def create_vc(self, interaction: discord.Interaction, name: Optional[str] = None):
         logger.info(f"create_vc command invoked by {interaction.user}")
+        await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
         if not interaction.guild:
-            await interaction.followup.send("This command can only be used in a server.", ephemeral=ephemeral)
+            await send_response(interaction, "This command can only be used in a server.", ephemeral=True)
             return
 
         group = await self.bot.db.get_study_group(interaction.guild_id)
         if not group:
             logger.warning(f"No study group exists in server {interaction.guild_id}")
-            await interaction.followup.send("No study group exists in this server.", ephemeral=ephemeral)
+            await send_response(interaction, "No study group exists in this server.", ephemeral=True)
             return
 
         group_id = group.get("group_id") or group.get("id")
@@ -38,7 +38,7 @@ class VoiceChannels(commands.Cog):
 
         if group_vc_id:
             logger.warning(f"Voice channel already exists for group {group_id}")
-            await interaction.followup.send("A voice channel already exists for this group.", ephemeral=ephemeral)
+            await send_response(interaction, "A voice channel already exists for this group.", ephemeral=True)
             return
 
         channel_name = name or f"{group_name} VC"
@@ -62,24 +62,26 @@ class VoiceChannels(commands.Cog):
             await self.bot.db.update_voice_channel(group_id, channel.id)
             logger.info(f"Voice channel {channel.id} created for group {group_id}")
             if interaction.response.is_done():
-                await interaction.followup.send(
-                    f"Voice channel {channel.mention} created for the study group.", ephemeral=ephemeral
+                await send_response(
+                    interaction, f"Voice channel {channel.mention} created for the study group.", ephemeral=ephemeral
                 )
             else:
-                await interaction.followup.send(
-                    f"Voice channel {channel.mention} created for the study group.", ephemeral=ephemeral
+                await send_response(
+                    interaction, f"Voice channel {channel.mention} created for the study group.", ephemeral=ephemeral
                 )
         except discord.HTTPException as e:
             logger.error(f"Failed to create voice channel: {str(e)}")
             if interaction.response.is_done():
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     "Failed to create the voice channel. Please try again later.",
-                    ephemeral=ephemeral,
+                    ephemeral=True,
                 )
             else:
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     "Failed to create the voice channel. Please try again later.",
-                    ephemeral=ephemeral,
+                    ephemeral=True,
                 )
 
     @app_commands.command(name="delete_vc", description="Delete the selected VC from the Server")
@@ -87,17 +89,17 @@ class VoiceChannels(commands.Cog):
     @app_commands.describe(voice_channel="Select the VC to delete")
     @is_group_creator()
     async def delete_vc(self, interaction: discord.Interaction, voice_channel: discord.VoiceChannel):
+        await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
         if not interaction.guild:
-            await interaction.followup.send("This command can only be used in a server.", ephemeral=ephemeral)
+            await send_response(interaction, "This command can only be used in a server.", ephemeral=True)
             return
         logger.info(f"delete_vc command invoked by {interaction.user.display_name} in guild {interaction.guild.name}")
 
         group = await self.bot.db.get_study_group(interaction.guild_id)
         if not group:
             logger.warning(f"No study group found in server {interaction.guild_id}")
-            await interaction.followup.send("No study group exists for this server.", ephemeral=ephemeral)
+            await send_response(interaction, "No study group exists for this server.", ephemeral=True)
             return
 
         group_id = group.get("group_id") or group.get("id")
@@ -105,9 +107,10 @@ class VoiceChannels(commands.Cog):
 
         if voice_channel.id != group_vc_id:
             logger.warning(f"Voice channel {voice_channel.id} is not associated with the study group {group_id}")
-            await interaction.followup.send(
+            await send_response(
+                interaction,
                 "This voice channel is not associated with the current study group.",
-                ephemeral=ephemeral,
+                ephemeral=True,
             )
             return
 
@@ -116,20 +119,22 @@ class VoiceChannels(commands.Cog):
             await self.bot.db.update_voice_channel(group_id, None)
             logger.info(f"Voice channel {voice_channel.id} deleted for group {group_id}")
             if interaction.response.is_done():
-                await interaction.followup.send("Voice channel deleted successfully.", ephemeral=ephemeral)
+                await send_response(interaction, "Voice channel deleted successfully.", ephemeral=ephemeral)
             else:
-                await interaction.followup.send("Voice channel deleted successfully.", ephemeral=ephemeral)
+                await send_response(interaction, "Voice channel deleted successfully.", ephemeral=ephemeral)
         except discord.HTTPException as e:
             logger.error(f"Failed to delete voice channel {voice_channel.id}: {str(e)}")
             if interaction.response.is_done():
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     "Failed to delete the voice channel. Please try again later.",
-                    ephemeral=ephemeral,
+                    ephemeral=True,
                 )
             else:
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     "Failed to delete the voice channel. Please try again later.",
-                    ephemeral=ephemeral,
+                    ephemeral=True,
                 )
 
     @app_commands.command(name="delete_role", description="Delete the selected role for the study group")
@@ -137,17 +142,17 @@ class VoiceChannels(commands.Cog):
     @app_commands.describe(role="Select the Role to delete")
     @is_group_creator()
     async def delete_role(self, interaction: discord.Interaction, role: discord.Role):
+        await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
         if not interaction.guild:
-            await interaction.followup.send("This command can only be used in a server.", ephemeral=ephemeral)
+            await send_response(interaction, "This command can only be used in a server.", ephemeral=True)
             return
         logger.info(f"delete_role command invoked by {interaction.user.display_name} in guild {interaction.guild.name}")
 
         group = await self.bot.db.get_study_group(interaction.guild_id)
         if not group:
             logger.warning(f"No study group found in server {interaction.guild_id}")
-            await interaction.followup.send("No study group exists for this server.", ephemeral=ephemeral)
+            await send_response(interaction, "No study group exists for this server.", ephemeral=True)
             return
 
         group_id = group.get("group_id") or group.get("id")
@@ -155,9 +160,10 @@ class VoiceChannels(commands.Cog):
 
         if role.id != group_role_id:
             logger.warning(f"Role {role.id} is not associated with the study group {group_id}")
-            await interaction.followup.send(
+            await send_response(
+                interaction,
                 "This role is not associated with the current study group.",
-                ephemeral=ephemeral,
+                ephemeral=True,
             )
             return
 
@@ -166,19 +172,15 @@ class VoiceChannels(commands.Cog):
             await self.bot.db.update_group_roles(group_id, None, None)
             logger.info(f"Role {role.id} deleted for group {group_id}")
             if interaction.response.is_done():
-                await interaction.followup.send("Role deleted successfully.", ephemeral=ephemeral)
+                await send_response(interaction, "Role deleted successfully.", ephemeral=ephemeral)
             else:
-                await interaction.followup.send("Role deleted successfully.", ephemeral=ephemeral)
+                await send_response(interaction, "Role deleted successfully.", ephemeral=ephemeral)
         except discord.HTTPException as e:
             logger.error(f"Failed to delete role {role.id}: {str(e)}")
             if interaction.response.is_done():
-                await interaction.followup.send(
-                    "Failed to delete the role. Please try again later.", ephemeral=ephemeral
-                )
+                await send_response(interaction, "Failed to delete the role. Please try again later.", ephemeral=True)
             else:
-                await interaction.followup.send(
-                    "Failed to delete the role. Please try again later.", ephemeral=ephemeral
-                )
+                await send_response(interaction, "Failed to delete the role. Please try again later.", ephemeral=True)
 
     @app_commands.command(
         name="delete_text_channel",
@@ -188,10 +190,10 @@ class VoiceChannels(commands.Cog):
     @app_commands.describe(text_channel="Select the Text Channel to delete")
     @is_group_creator()
     async def delete_text_channel(self, interaction: discord.Interaction, text_channel: discord.TextChannel):
+        await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        await interaction.response.defer(ephemeral=ephemeral)
         if not interaction.guild:
-            await interaction.followup.send("This command can only be used in a server.", ephemeral=ephemeral)
+            await send_response(interaction, "This command can only be used in a server.", ephemeral=True)
             return
         logger.info(
             f"delete_text_channel command invoked by {interaction.user.display_name} in guild {interaction.guild.name}"
@@ -200,7 +202,7 @@ class VoiceChannels(commands.Cog):
         group = await self.bot.db.get_study_group(interaction.guild_id)
         if not group:
             logger.warning(f"No study group found in server {interaction.guild_id}")
-            await interaction.followup.send("No study group exists for this server.", ephemeral=ephemeral)
+            await send_response(interaction, "No study group exists for this server.", ephemeral=True)
             return
 
         group_id = group.get("group_id") or group.get("id")
@@ -208,9 +210,10 @@ class VoiceChannels(commands.Cog):
 
         if text_channel.id != group_text_id:
             logger.warning(f"Text channel {text_channel.id} is not associated with the study group {group_id}")
-            await interaction.followup.send(
+            await send_response(
+                interaction,
                 "This text channel is not associated with the current study group.",
-                ephemeral=ephemeral,
+                ephemeral=True,
             )
             return
 
@@ -220,20 +223,22 @@ class VoiceChannels(commands.Cog):
                 await self.bot.db.update_study_group_by_id({"group_id": group["group_id"], "text_id": 0})
             logger.info(f"Text channel {text_channel.id} deleted for group {group_id}")
             if interaction.response.is_done():
-                await interaction.followup.send("Text channel deleted successfully.", ephemeral=ephemeral)
+                await send_response(interaction, "Text channel deleted successfully.", ephemeral=ephemeral)
             else:
-                await interaction.followup.send("Text channel deleted successfully.", ephemeral=ephemeral)
+                await send_response(interaction, "Text channel deleted successfully.", ephemeral=ephemeral)
         except discord.HTTPException as e:
             logger.error(f"Failed to delete text channel {text_channel.id}: {str(e)}")
             if interaction.response.is_done():
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     "Failed to delete the text channel. Please try again later.",
-                    ephemeral=ephemeral,
+                    ephemeral=True,
                 )
             else:
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     "Failed to delete the text channel. Please try again later.",
-                    ephemeral=ephemeral,
+                    ephemeral=True,
                 )
 
 

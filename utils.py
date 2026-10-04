@@ -1,6 +1,7 @@
 import logging
 import random
 import re
+import sqlite3
 from typing import List, Optional
 
 import discord
@@ -11,24 +12,51 @@ logger = logging.getLogger(__name__)
 
 
 async def should_use_ephemeral(interaction: discord.Interaction, db) -> bool:
-    """Return whether a command response should be hidden outside the configured group category."""
+    """Only the configured commands channel permits public command replies."""
     guild = getattr(interaction, "guild", None)
     if guild is None:
         return True
-
     channel = getattr(interaction, "channel", None)
-    category_id = getattr(channel, "category_id", None)
-    if category_id is None:
-        category = getattr(channel, "category", None)
-        category_id = getattr(category, "id", None)
-    if category_id is None:
+    if isinstance(channel, discord.Thread):
         return True
+    channel_id = getattr(interaction, "channel_id", None)
+    if not isinstance(channel_id, int):
+        channel_id = getattr(channel, "id", None)
+    if not isinstance(channel_id, int):
+        return True
+    get_channel = getattr(db, "get_commands_channel", None)
+    if not callable(get_channel):
+        return True
+    try:
+        configured_channel_id = await get_channel(guild.id)
+    except (sqlite3.Error, RuntimeError, OSError):
+        logger.exception("Response visibility lookup failed guild_id=%s channel_id=%s", guild.id, channel_id)
+        return True
+    return not isinstance(configured_channel_id, int) or channel_id != configured_channel_id
 
-    get_cat = getattr(db, "get_group_category", None)
-    if not callable(get_cat):
-        return True
-    configured_category_id = await get_cat(guild.id)
-    return category_id != configured_category_id
+
+async def acknowledge_interaction(interaction: discord.Interaction) -> None:
+    # An immediate private response allows later public success and private errors
+    # without inheriting a deferred message's visibility on the first followup.
+    await interaction.response.send_message("Processing your request…", ephemeral=True)
+    extras = getattr(interaction, "extras", None)
+    if isinstance(extras, dict):
+        extras["cpo_acknowledged"] = True
+
+
+async def send_response(interaction: discord.Interaction, *args, ephemeral: bool = True, **kwargs):
+    message = await interaction.followup.send(*args, ephemeral=ephemeral, **kwargs)
+    extras = getattr(interaction, "extras", None)
+    if isinstance(extras, dict) and extras.pop("cpo_acknowledged", False):
+        try:
+            await interaction.delete_original_response()
+        except discord.HTTPException:
+            logger.exception(
+                "Could not remove command acknowledgement guild_id=%s user_id=%s",
+                interaction.guild_id,
+                interaction.user.id,
+            )
+    return message
 
 
 ### Parsing Time Functions
@@ -139,7 +167,8 @@ async def validate_parameters(
         # 1. Validate the group name if provided
         if name is not None:
             if not name or len(name) > 100:
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     "Invalid group name. The name must be non-empty and less than 100 characters.",
                     ephemeral=True,
                 )
@@ -148,7 +177,7 @@ async def validate_parameters(
 
         # 2. Check if the max_members given is a positive number
         if max_members is not None and max_members < 0:
-            await interaction.followup.send("The maximum number of members must be non-negative.", ephemeral=True)
+            await send_response(interaction, "The maximum number of members must be non-negative.", ephemeral=True)
             logger.warning(f"Invalid max_members provided: {max_members} by user {interaction.user}")
             return False
 
@@ -168,7 +197,8 @@ async def validate_parameters(
                 members.append(member)
 
             if not all(members):
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     "One or more members couldn't be found. Please mention valid users.",
                     ephemeral=True,
                 )
@@ -178,7 +208,8 @@ async def validate_parameters(
                 return False
 
             if max_members is not None and len(members) > max_members:
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     f"Too many members specified. Max allowed: {max_members}.",
                     ephemeral=True,
                 )
@@ -190,7 +221,8 @@ async def validate_parameters(
         # 4. Validate category if provided
         if category is not None:
             if not interaction.guild or category.id not in [c.id for c in interaction.guild.categories]:
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     "No valid category specified. Please provide a valid category.",
                     ephemeral=True,
                 )
@@ -201,14 +233,16 @@ async def validate_parameters(
         if duration is not None:
             duration_seconds = parse_duration(duration)
             if duration_seconds is None:
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     "Wrong duration format used. Please provide a valid duration like '2d 14h 25m 30s'.",
                     ephemeral=True,
                 )
                 logger.warning(f"Wrong duration format entered by user {interaction.user}: {duration}")
                 return False
             if min_duration is not None and duration_seconds < min_duration:
-                await interaction.followup.send(
+                await send_response(
+                    interaction,
                     f"Duration must be at least {parse_seconds_to_hms(min_duration)}.",
                     ephemeral=True,
                 )
@@ -221,7 +255,8 @@ async def validate_parameters(
 
     except discord.Forbidden as forbidden_e:
         logger.error(f"Permission error during validation by user {interaction.user}: {forbidden_e}")
-        await interaction.followup.send(
+        await send_response(
+            interaction,
             f"Permission error occurred during validation: {forbidden_e}",
             ephemeral=True,
         )
@@ -229,12 +264,12 @@ async def validate_parameters(
 
     except discord.HTTPException as http_e:
         logger.error(f"HTTP error during validation by user {interaction.user}: {http_e}")
-        await interaction.followup.send(f"HTTP error occurred during validation: {http_e}", ephemeral=True)
+        await send_response(interaction, f"HTTP error occurred during validation: {http_e}", ephemeral=True)
         return False
 
     except Exception as e:
         logger.critical(f"Unexpected error during validation by user {interaction.user}: {e}")
-        await interaction.followup.send(f"An unexpected error occurred during validation: {e}", ephemeral=True)
+        await send_response(interaction, f"An unexpected error occurred during validation: {e}", ephemeral=True)
         return False
 
 

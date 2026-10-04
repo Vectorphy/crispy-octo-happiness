@@ -1,5 +1,7 @@
 # Known Issues and Debt (Audit Scope)
 
+Setup verification (2026-10-04): all 107 offline tests pass, including category creation, commands/log channel provisioning, effective reply visibility, concurrent setup controls, and rollback after a failed database commit. Mypy reports zero errors; Ruff lint and formatting pass. Live Discord provisioning has not been exercised. The existing `audioop` deprecation warning remains.
+
 ## 1. Functional & Technical Deficiencies
 
 ### AD-01: Aggressive `.gitignore` Blocking Documentation
@@ -59,6 +61,12 @@
 - **Status**: **OPEN**
 - **Affected File**: `cogs/study_groups.py:end_group`
 - **Details**: Cleanup logs Discord deletion failures and continues to retire the group. Channels or roles that could not be deleted require manual cleanup; persisted retry tracking is not implemented.
+
+### ARC-06: Failed setup saves can retain provisioned resources
+- **Severity**: Low (P2)
+- **Status**: **OPEN**
+- **Affected File**: `cogs/_setup_view.py`
+- **Details**: Changing Discord resources and saving SQLite settings cannot share one transaction. If Save creates a category, commands channel, or logs channel and the settings write fails, those resources remain. Existing recorded channels can also remain moved to the draft category. The wizard retains resource IDs for retry, blocks changing the draft category after resource creation, and discloses created or moved resources on cancellation or expiry. Automatic deletion and restoration are not implemented.
 
 ---
 
@@ -134,7 +142,13 @@
 - **Severity**: High (P1)
 - **Status**: **RESOLVED**
 - **Affected Files**: `cogs/tasklist.py`, `database.py`, `utils.py`, `cogs/study_groups.py`, `cogs/pomodoro.py`, `cogs/checkin.py`, `cogs/manager.py`, `cogs/productivity_tracker.py`, `cogs/voice_channels.py`
-- **Details**: Tasks previously lacked strict server isolation, allowing tasks from one guild to appear in another when queried. Scoped task storage and queries by `guild_id` and added `guild_id` column migration. Additionally implemented the category-based response visibility helper (`should_use_ephemeral`) across all command cogs, ensuring commands post publicly only within configured study group categories and fall back to ephemeral responses in general channels or DMs, while keeping all permission and validation errors strictly private.
+- **Details**: Tasks previously lacked strict server isolation, allowing tasks from one guild to appear in another when queried. Scoped task storage and queries by `guild_id` and added `guild_id` column migration. The rc4 release introduced category-based reply visibility; the current setup work replaces that policy with exact commands-channel matching.
+
+### AD-16: Public error replies inherit command context
+- **Severity**: Medium (P2)
+- **Status**: **RESOLVED**
+- **Affected Files**: `cogs/voice_channels.py`, `cogs/tasklist.py`, `cogs/checkin.py`, `utils.py`
+- **Details**: Commands now acknowledge privately before sending independently visible final replies. Voice and task validation failures remain private, mixed task-action failures and purge cleanup warnings force private results, and check-in personal acknowledgements remain private. Normal slash success replies use the exact saved commands channel rather than category membership.
 
 The rc3 candidate builds on `c7bdca3`. On bundled Python 3.12.14 with the original virtual environment's packages, all 68 pytest tests pass, including the standalone 54-flow matrix. Mypy and Ruff lint/format checks pass. The upstream `audioop` deprecation warning remains.
 

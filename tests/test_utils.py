@@ -9,28 +9,28 @@ from utils import ProductivityService, parse_duration, parse_seconds_to_hms, sho
 
 
 class TestUtils(unittest.TestCase):
-    def test_response_visibility_matches_configured_category(self):
+    def test_response_visibility_matches_exact_commands_channel(self):
         async def run_test():
             db = AsyncMock()
-            db.get_group_category.return_value = 42
+            db.get_commands_channel.return_value = 42
             public_interaction = SimpleNamespace(
                 guild=SimpleNamespace(id=7),
-                channel=SimpleNamespace(category_id=42),
+                channel=SimpleNamespace(id=42, category_id=10),
             )
             outside_interaction = SimpleNamespace(
                 guild=SimpleNamespace(id=7),
-                channel=SimpleNamespace(category_id=99),
+                channel=SimpleNamespace(id=99, category_id=10),
             )
 
             self.assertFalse(await should_use_ephemeral(public_interaction, db))
             self.assertTrue(await should_use_ephemeral(outside_interaction, db))
-            db.get_group_category.assert_awaited()
+            db.get_commands_channel.assert_awaited()
 
         import asyncio
 
         asyncio.run(run_test())
 
-    def test_response_visibility_is_ephemeral_without_guild_or_category(self):
+    def test_response_visibility_is_ephemeral_without_guild_or_channel(self):
         async def run_test():
             db = AsyncMock()
             no_guild = SimpleNamespace(guild=None, channel=None)
@@ -38,7 +38,7 @@ class TestUtils(unittest.TestCase):
 
             self.assertTrue(await should_use_ephemeral(no_guild, db))
             self.assertTrue(await should_use_ephemeral(no_category, db))
-            db.get_group_category.assert_not_awaited()
+            db.get_commands_channel.assert_not_awaited()
 
         import asyncio
 

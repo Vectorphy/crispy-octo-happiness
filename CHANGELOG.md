@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `/setup` now opens a private, invoker-owned wizard on every invocation. Managers can choose an existing category or name a new one, review the staged settings, and save dedicated `#cpo-commands` and staff-only `#cpo-logs` channels with the category and default group size. Group activity logs use the existing moderator log setting.
+- Normal slash command success replies are public only in the exact saved commands channel. Threads, other channels, DMs, and unconfigured servers receive private replies; errors and sensitive results remain private everywhere. Operational dashboards, reminders, logs, and invitation DMs retain their destinations.
+- Added a nullable commands channel setting through an additive SQLite migration. Existing installations keep replies private until setup is saved.
+
 ## [1.0.0-rc.4] - 2026-10-02
 
 This rc4 release candidate introduces category-based response visibility and server-scoped tasks. Python package metadata is `1.0.0rc4`.
