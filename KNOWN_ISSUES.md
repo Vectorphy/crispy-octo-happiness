@@ -58,9 +58,9 @@ Verification (2026-10-04 antigravity-fix): all 281 offline tests pass, including
 
 ### ARC-05: Failed Discord Cleanup Can Leave Resources Behind
 - **Severity**: Medium (P2)
-- **Status**: **OPEN**
-- **Affected File**: `cogs/study_groups.py:end_group`
-- **Details**: Cleanup logs Discord deletion failures and continues to retire the group. Channels or roles that could not be deleted require manual cleanup; persisted retry tracking is not implemented.
+- **Status**: **RESOLVED (2026-10-04)**
+- **Affected Files**: `cogs/study_groups.py`, `database.py`, `bot.py`
+- **Details**: Implemented persistent retry tracking via `pending_resource_cleanups` table. Failed deletions of text channels, voice channels, and roles during `end_group` (or its database fallback) are recorded with error context and status='pending'. A background task (`cleanup_retry_loop`, 10-minute cadence) and bot `on_ready` sweep re-attempt deletion when Discord permissions are granted, or prune entries when resources are confirmed deleted. Staff can also manually trigger `/retry_cleanups` for immediate execution and status reporting. Covered by `tests/test_cleanup_retries.py` (8 tests).
 
 ### ARC-06: Failed setup saves can retain provisioned resources
 - **Severity**: Low (P2)

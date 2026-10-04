@@ -27,7 +27,8 @@ The current branch starts from that commit. New work is dirty and not committed 
 - cogs/help.py: private immediate defer, runtime-level filtering of setup/staff descriptions, report-to-staff wording. Regular members retain ordinary session/task guidance. Staff see elevated descriptions but execution permissions remain unchanged.
 - utils.py and cogs/productivity_tracker.py: design agent replaced random hours with DB-measured attended focus, exact unrounded efficiency calculation, zero when untracked, labelled measured-focus embed.
 - utils.py, bot.py, and main.py: design and security update added validate_bot_developer_id rejecting known placeholder values ('123456789012345678', 'your_discord_user_id_here', 'placeholder', 'none', 'null', etc.), invalid formats (booleans, non-integer/floats, negatives, 0), repetitive sequences, non-digits, and out-of-range snowflakes (> 64-bit). CPO constructor supports allow_mock=True for test suites.
-- Tests: setup/relocation/helper/help fixtures updated; tests/test_bot_developer_id.py (46 tests), tests/test_default_vc.py, tests/test_setup.py, tests/test_productivity_time.py, and tests/test_database.py added/extended (329 tests passing).
+- database.py and cogs/study_groups.py: added pending_resource_cleanups table and DAL methods (record_pending_cleanup, get_pending_cleanups, update_cleanup_retry, delete_pending_cleanup, get_pending_cleanup_count). Failed channel and role deletions in StudyGroup.end_group and StudyGroupCog.end_group fallback are recorded for persistent retry tracking. StudyGroupCog runs a background task (cleanup_retry_loop, 10-minute cadence) and startup sweep in bot.py:on_ready to retry deletions when permissions are granted or prune deleted resources, and provides /retry_cleanups command for staff.
+- Tests: setup/relocation/helper/help fixtures updated; tests/test_cleanup_retries.py (8 tests), tests/test_bot_developer_id.py (46 tests), tests/test_default_vc.py, tests/test_setup.py, tests/test_productivity_time.py, and tests/test_database.py added/extended (337 tests passing).
 
 ## Agents and ownership
 
@@ -41,9 +42,10 @@ The current branch starts from that commit. New work is dirty and not committed 
 1. [COMPLETED] Review real-DB recovery and analytics tests: unique tracking ID survives restart, cumulative focus seconds counted once for opted-in voice-present members, no offline focus time awarded, final counters persisted before retirement, group cleanup retires snapshots.
 2. [COMPLETED] Inspect bot.py on_ready hydration and timer/group lifecycle: foreign/inactive group rejection, channel permissions, paused state, stage advancement, reconnect idempotence, and retirement verified.
 3. [COMPLETED] Validate BOT_DEVELOPER_ID: added strict snowflake validation, dummy/placeholder rejection, and 46 unit tests.
-4. [COMPLETED] Update documentation: CHANGELOG.md [Unreleased], KNOWN_ISSUES.md, TODO.md, ARCHITECTURE.md, and HANDOFF.md updated with BOT_DEVELOPER_ID validation and 329 passing tests.
-5. [COMPLETED] Run full verification: 329/329 offline tests pass (zero failures), Mypy static typing 0 errors across 32 source files, Ruff lint and format check clean, git diff --check clean.
-6. [PENDING USER APPROVAL] Commit/push new branch: local atomic commits complete; remote push deferred awaiting user orders (no push on remote per user instruction). Remote origin: https://github.com/Vectorphy/crispy-octo-happiness.git.
+4. [COMPLETED] Add persistent retry tracking for Discord resources left behind when group cleanup lacks permissions (ARC-05 resolved): added pending_resource_cleanups table, background retry loop, startup sweep, /retry_cleanups command, and 8 unit tests.
+5. [COMPLETED] Update documentation: CHANGELOG.md [Unreleased], KNOWN_ISSUES.md (ARC-05 resolved), TODO.md, ARCHITECTURE.md, commands.md, and HANDOFF.md updated with persistent retry tracking and 337 passing tests.
+6. [COMPLETED] Run full verification: 337/337 offline tests pass (zero failures), Mypy static typing 0 errors across 33 source files, Ruff lint and format check clean, git diff --check clean.
+7. [PENDING USER APPROVAL] Commit/push new branch: local atomic commits complete; remote push deferred awaiting user orders (no push on remote per user instruction). Remote origin: https://github.com/Vectorphy/crispy-octo-happiness.git.
 
 ## Commands and constraints
 

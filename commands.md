@@ -151,6 +151,9 @@ The highest applicable level wins: 4 > 3 > 2 > 1 > 0. Outside active group chann
 - `/sync_managers`: Synchronize server owner and moderators (Level 3 staff or Bot Developer).
   - Scans native guild permissions and records server owners, administrators, and moderators at Level 3 with `server_sync` provenance. Explicit bot-added grants are preserved.
 
+- `/retry_cleanups`: Retry deleting orphaned study group channels and roles left behind from failed cleanups (Level 3 staff or Bot Developer).
+  - Scans pending resource cleanups, re-attempts deletion against Discord when permissions are granted, prunes already-deleted resources, and reports counts of resolved and pending items.
+
 All commands use slash syntax (`/`). Registered staff commands omit Discord's default permission restriction so explicitly granted managers and developers can reach them without native Administrator permissions. Runtime handlers still enforce each command's authorization and return private denials. Servers can impose their own command restrictions through Discord settings.
 
 ### Response visibility and privacy
