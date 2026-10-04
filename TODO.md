@@ -1,6 +1,6 @@
 # TODO
 
-Updated on 2026-10-04 for the rc4 branch. Checked items have implementation and offline regression evidence; historical verification counts describe earlier checkpoints.
+Updated on 2026-10-04 for the antigravity-fix / codex/default-vc-pomodoro-recovery branch. Checked items have implementation and offline regression evidence; historical verification counts describe earlier checkpoints.
 
 ## Immediate refactoring (Phase 1)
 
@@ -26,7 +26,7 @@ Updated on 2026-10-04 for the rc4 branch. Checked items have implementation and 
 ## Technical debt
 
 - [ ] Move SQLite I/O off the event loop using `asyncio.to_thread` or an approved async driver.
-- [ ] Replace placeholder productivity hours with measured, persisted session/voice time before presenting efficiency as real analytics.
+- [x] Replace placeholder productivity hours with measured, persisted session/voice time before presenting efficiency as real analytics.
 - [ ] Decompose complex group and Pomodoro handlers into services.
 - [x] Include the standalone command matrix in pytest discovery.
 - [ ] Add explicit timeouts around external resource provisioning calls.
@@ -64,17 +64,19 @@ Updated on 2026-10-04 for the rc4 branch. Checked items have implementation and 
 - [x] Route member end requests to the current owner's DM and enforce current ownership/activity on approval.
 - [x] Serialize group name allocation/provisioning per guild and retain UUIDs.
 - [x] Add private everyday `/help`; accept camera or screen sharing for video requirements.
-- [ ] Persist and hydrate Pomodoro deadlines, stages, pause state, and consented participants across restarts; agree a persistence schema first.
+- [x] Persist and hydrate Pomodoro deadlines, stages, pause state, and consented participants across restarts; agree a persistence schema first.
 - [x] Distinguish auto-synced staff grants from explicit grants so permission removals can revoke auto-synced authority safely. Preserve legacy grants as explicit because their original source cannot be inferred.
 - [x] Use the contextual five-level profile with Server Member wording and highest-level precedence.
 - [x] Synchronize CPO Manager and Bot Developer roles with category/channel access and stored staff grants.
 - [x] Resolve group invitations from persisted records, case-insensitive names, and text/voice channel context.
 - [x] Remove check-in/Pomodoro buttons from the group dashboard and hide standalone resource maintenance commands.
 - [ ] Add a default voice channel to `/setup`, create or reuse it under the selected category, and synchronize its permissions with that category. Persist its destination with a backward-compatible schema change after approval. When video or microphone participation enforcement removes a member from a study VC, move them to this default VC; handle missing destinations, full channels, and Move Members permission failures. Keep camera or screen sharing acceptable for video. Define and test the microphone requirement and grace period before enabling it.
+  - **Partial (2026-10-04)**: Setup creates/reuses `CPO Lobby` VC under the selected category; destination saved atomically as `default_vc_id`; `_voice_relocation.py` helper moves video-noncompliant members there. Microphone enforcement is intentionally disabled per user request. Full grace-period, DM notification, and microphone flow remain follow-up work.
 
 ## Release verification
 
 - [x] Verify the 2026-10-04 combined implementation: 224 offline tests, full Mypy, Ruff lint/format, and whitespace checks. Live Discord behavior still requires staging validation.
+- [x] Verify the 2026-10-04 antigravity-fix batch: 277 offline tests pass (includes Pomodoro recovery, default VC, focus-time DAL, help/setup regression suites, and `AsyncMock` mock-fix in session-controls). No new dependencies.
 
 - [x] Prevent default task-list results from exposing group tasks; require `all_groups: true` for cross-group listing and make cross-group results ephemeral.
 - [x] Scope task persistence and default listings by `guild_id`, preventing cross-server task leaks.
