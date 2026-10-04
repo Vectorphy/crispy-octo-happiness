@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sqlite3
 from enum import IntEnum
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional
@@ -9,6 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from cogs._setup_view import SetupView
+from cogs._staff_roles import StaffRoleSyncError, sync_staff_roles
 from utils import acknowledge_interaction, send_response, should_use_ephemeral
 
 # Set up logging
@@ -19,10 +21,11 @@ class PermissionLevel(IntEnum):
     BOT_DEVELOPER = 4
     ADMIN = 3
     GUILD_MANAGER = 3  # Backward-compatible alias
-    MODERATOR = 2
-    GROUP_OWNER = 2  # Backward-compatible alias
+    MODERATOR = 3
+    GROUP_OWNER = 2
     GROUP_MEMBER = 1
-    REGULAR_USER = 0
+    SERVER_MEMBER = 0
+    REGULAR_USER = 0  # Compatibility for existing callers
 
 
 class Manager(commands.Cog):
@@ -32,19 +35,41 @@ class Manager(commands.Cog):
 
     @staticmethod
     def get_tier_name(level: int) -> str:
-        """Maps permission level to high-level user tier: Admin, Mod, or User."""
+        if level >= PermissionLevel.BOT_DEVELOPER:
+            return "Bot Developer"
         if level >= PermissionLevel.ADMIN:
-            return "Admin"
-        elif level >= PermissionLevel.MODERATOR:
-            return "Mod"
-        else:
-            return "User"
+            return "Manager"
+        if level >= PermissionLevel.GROUP_OWNER:
+            return "Group Owner"
+        if level >= PermissionLevel.GROUP_MEMBER:
+            return "Group Member"
+        return "Server Member"
 
     def __init__(self, bot):
         self.bot = bot
         self._setup_locks: Dict[int, asyncio.Lock] = {}
         self._setup_views: Dict[int, SetupView] = {}
         logger.info("Manager cog initialized")
+
+    async def _sync_staff_access(self, interaction: discord.Interaction, *, global_scope: bool = False) -> str:
+        guilds = {interaction.guild.id: interaction.guild} if interaction.guild else {}
+        if global_scope:
+            guilds.update({guild.id: guild for guild in self.bot.guilds})
+        warnings = []
+        for guild in guilds.values():
+            try:
+                category_id = await self.bot.db.get_group_category(guild.id)
+                category = guild.get_channel(category_id) if isinstance(category_id, int) else None
+                if not isinstance(category, discord.CategoryChannel):
+                    warnings.append(f"Server {guild.id}: run /setup to synchronize CPO staff roles.")
+                    continue
+                await sync_staff_roles(self.bot, guild, category)
+            except (StaffRoleSyncError, sqlite3.Error, OSError):
+                logger.exception("CPO staff-role synchronization failed guild_id=%s", guild.id)
+                warnings.append(
+                    f"Server {guild.id}: CPO role synchronization failed. Check Manage Roles and bot role hierarchy, then retry /sync_managers."
+                )
+        return "\n" + "\n".join(warnings) if warnings else ""
 
     ### --- DECORATOR FUNCTIONS --- ###
 
@@ -209,20 +234,23 @@ class Manager(commands.Cog):
         guild = self.bot.get_guild(guild_id) if guild_id else None
         if not member and guild:
             member = guild.get_member(user_id)
+        if member and (member.id != user_id or member.guild.id != guild_id):
+            member = None
 
+        native_level = PermissionLevel.REGULAR_USER
         if member and member.guild and member.guild.owner_id == user_id:
             logger.debug(f"User {user_id} identified as server owner (Admin)")
-            return PermissionLevel.ADMIN
+            native_level = PermissionLevel.ADMIN
         elif guild and guild.owner_id == user_id:
             logger.debug(f"User {user_id} identified as server owner (Admin)")
-            return PermissionLevel.ADMIN
+            native_level = PermissionLevel.ADMIN
 
         if member:
             perms = member.guild_permissions
-            if perms.administrator:
+            if perms.administrator or perms.manage_guild:
                 logger.debug(f"User {user_id} identified as admin via administrator permission")
-                return PermissionLevel.ADMIN
-            if (
+                native_level = PermissionLevel.ADMIN
+            elif (
                 perms.manage_guild
                 or perms.manage_channels
                 or perms.manage_roles
@@ -231,34 +259,27 @@ class Manager(commands.Cog):
                 or perms.ban_members
             ):
                 logger.debug(f"User {user_id} identified as moderator via permissions")
-                return PermissionLevel.MODERATOR
-            mod_keywords = {
-                "admin",
-                "administrator",
-                "mod",
-                "moderator",
-                "manager",
-                "lead",
-                "staff",
-            }
-            if any(any(kw in r.name.lower() for kw in mod_keywords) for r in member.roles):
-                logger.debug(f"User {user_id} identified as moderator via role name")
-                return PermissionLevel.MODERATOR
+                native_level = max(native_level, PermissionLevel.MODERATOR)
 
         manager = await self.bot.db.get_manager(user_id, guild_id)
-        if manager:
+        if isinstance(manager, (dict, sqlite3.Row)):
+            if dict(manager).get("grant_source") == "server_sync":
+                return native_level
             permission_level = manager["permission_level"]
+            grant_guild_id = manager["guild_id"]
+            if grant_guild_id != guild_id and not (grant_guild_id is None and permission_level == 4):
+                return native_level
             logger.debug(f"User {user_id} has permission level {permission_level}")
             try:
-                return PermissionLevel(permission_level)
+                return max(native_level, PermissionLevel(permission_level))
             except ValueError:
-                return PermissionLevel.REGULAR_USER
-        logger.debug(f"User {user_id} has regular user permissions")
-        return PermissionLevel.REGULAR_USER
+                return native_level
+        return native_level
 
     async def sync_guild_managers(self, guild: discord.Guild) -> List[discord.Member]:
         """Auto-detect server owner, administrators, and moderators, registering them into the database."""
         synced_members: List[discord.Member] = []
+        grants: Dict[int, int] = {guild.owner_id: int(PermissionLevel.ADMIN)} if guild.owner_id else {}
         try:
             owner = guild.owner
             if not owner and guild.owner_id:
@@ -268,25 +289,16 @@ class Manager(commands.Cog):
                     owner = guild.get_member(guild.owner_id)
 
             if owner:
-                await self.bot.db.add_manager(owner.id, guild.id, PermissionLevel.ADMIN)
+                grants[owner.id] = int(PermissionLevel.ADMIN)
                 synced_members.append(owner)
                 logger.info(f"Auto-synced server owner {owner.display_name} ({owner.id}) as ADMIN for guild {guild.id}")
 
-            mod_keywords = {
-                "admin",
-                "administrator",
-                "mod",
-                "moderator",
-                "manager",
-                "lead",
-                "staff",
-            }
             for member in guild.members:
                 if member.bot or (owner and member.id == owner.id):
                     continue
                 perms = member.guild_permissions
-                if perms.administrator:
-                    await self.bot.db.add_manager(member.id, guild.id, PermissionLevel.ADMIN)
+                if perms.administrator or perms.manage_guild:
+                    grants[member.id] = int(PermissionLevel.ADMIN)
                     synced_members.append(member)
                     logger.info(
                         f"Auto-synced administrator {member.display_name} ({member.id}) as ADMIN for guild {guild.id}"
@@ -298,13 +310,14 @@ class Manager(commands.Cog):
                     or perms.moderate_members
                     or perms.kick_members
                     or perms.ban_members
-                    or any(any(kw in r.name.lower() for kw in mod_keywords) for r in member.roles)
                 ):
-                    await self.bot.db.add_manager(member.id, guild.id, PermissionLevel.MODERATOR)
+                    grants[member.id] = int(PermissionLevel.MODERATOR)
                     synced_members.append(member)
                     logger.info(
                         f"Auto-synced moderator {member.display_name} ({member.id}) as MODERATOR for guild {guild.id}"
                     )
+
+            await self.bot.db.sync_guild_manager_grants(guild.id, grants)
 
         except Exception as e:
             logger.error(f"Error in sync_guild_managers for guild {guild.id}: {e}")
@@ -316,6 +329,10 @@ class Manager(commands.Cog):
         for guild in self.bot.guilds:
             try:
                 await self.sync_guild_managers(guild)
+                category_id = await self.bot.db.get_group_category(guild.id)
+                category = guild.get_channel(category_id) if isinstance(category_id, int) else None
+                if isinstance(category, discord.CategoryChannel):
+                    await sync_staff_roles(self.bot, guild, category)
             except Exception as e:
                 logger.warning(f"Could not sync managers for guild {guild.id}: {e}")
 
@@ -327,7 +344,6 @@ class Manager(commands.Cog):
         max_members="Default maximum members per study group (1-50)",
         category="Category where new study group channels will be placed",
     )
-    @app_commands.default_permissions(manage_guild=True)
     async def setup(
         self,
         interaction: discord.Interaction,
@@ -345,7 +361,7 @@ class Manager(commands.Cog):
         )
         if level < PermissionLevel.MODERATOR:
             await interaction.followup.send(
-                "You must be at least a Moderator (Level 2) to use this command.",
+                "You must be server staff (Level 3) or a Bot Developer to use this command.",
                 ephemeral=True,
             )
             return
@@ -361,6 +377,8 @@ class Manager(commands.Cog):
             current_channel_id = await self.bot.db.get_commands_channel(interaction.guild_id)
             current_log_channel_id = await self.bot.db.get_mod_log_channel(interaction.guild_id)
             current_max = await self.bot.db.get_default_max_members(interaction.guild_id)
+            current_group_duration = await self.bot.db.get_default_group_duration(interaction.guild_id)
+            current_pomodoro_duration = await self.bot.db.get_default_pomodoro_duration(interaction.guild_id)
             view = SetupView(
                 self,
                 interaction.guild,
@@ -369,8 +387,17 @@ class Manager(commands.Cog):
                 current_channel_id,
                 max_members if max_members is not None else current_max,
                 current_log_channel_id,
+                current_group_duration,
+                current_pomodoro_duration,
             )
-            view.snapshot = (current_cat_id, current_channel_id, current_log_channel_id, current_max)
+            view.snapshot = (
+                current_cat_id,
+                current_channel_id,
+                current_log_channel_id,
+                current_max,
+                current_group_duration,
+                current_pomodoro_duration,
+            )
             prior = self._setup_views.get(interaction.guild_id)
             if prior:
                 prior.stop()
@@ -382,7 +409,6 @@ class Manager(commands.Cog):
         description="Synchronize application slash commands with Discord (Admin only)",
     )
     @app_commands.describe(guild_only="If true, syncs only to this server. If false, syncs globally.")
-    @app_commands.default_permissions(administrator=True)
     async def sync_commands(self, interaction: discord.Interaction, guild_only: bool = False):
         await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
@@ -426,48 +452,61 @@ class Manager(commands.Cog):
 
     @app_commands.command(
         name="user_level",
-        description="Check the authorization level (User, Mod, Admin) of a server member",
+        description="Check a member’s server or study-group authorization level",
     )
     @app_commands.describe(user="The member to inspect (defaults to yourself)")
     async def user_level(self, interaction: discord.Interaction, user: Optional[discord.Member] = None):
+        await acknowledge_interaction(interaction)
         target_member = user or (interaction.user if isinstance(interaction.user, discord.Member) else None)
-        if not target_member:
-            await interaction.response.send_message("Could not identify the target member.", ephemeral=True)
+        if interaction.guild is None or target_member is None or target_member.guild.id != interaction.guild.id:
+            await send_response(interaction, "Choose a member of this server.")
             return
-
-        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         level = await self.get_permission_level(interaction.guild_id, target_member.id, member=target_member)
-        tier = self.get_tier_name(level)
-
-        level_labels = {
-            PermissionLevel.BOT_DEVELOPER: "Bot Developer (Superuser)",
-            PermissionLevel.ADMIN: "Administrator (Admin)",
-            PermissionLevel.MODERATOR: "Moderator (Mod)",
-            PermissionLevel.GROUP_MEMBER: "Group Member",
-            PermissionLevel.REGULAR_USER: "Regular User",
-        }
-
-        color = (
-            discord.Color.gold()
-            if tier == "Admin"
-            else (discord.Color.blue() if tier == "Mod" else discord.Color.green())
-        )
-        embed = discord.Embed(title=f"User Authorization Level: {target_member.display_name}", color=color)
-        embed.add_field(name="User Level Tier", value=f"🛡️ **{tier}**", inline=True)
-        embed.add_field(
-            name="Permission Level",
-            value=f"{level_labels.get(level, str(level))} (Level {int(level)})",
-            inline=True,
-        )
+        label = "Server Member"
+        if level == PermissionLevel.BOT_DEVELOPER:
+            label = "Bot Developer"
+        elif level >= PermissionLevel.ADMIN:
+            record = await self.bot.db.get_manager(target_member.id, interaction.guild_id)
+            explicit = (
+                isinstance(record, (dict, sqlite3.Row)) and dict(record).get("grant_source", "explicit") == "explicit"
+            )
+            if explicit:
+                label = "Manager"
+            elif (
+                target_member.id == interaction.guild.owner_id
+                or target_member.guild_permissions.administrator
+                or target_member.guild_permissions.manage_guild
+            ):
+                label = "Admin"
+            else:
+                label = "Mod"
+        else:
+            group = await self.bot.db.get_study_group_by_channel(interaction.channel_id)
+            if isinstance(group, dict) and group.get("guild_id") == interaction.guild.id and group.get("active", 1):
+                if target_member.id == group.get("owner_id"):
+                    level = PermissionLevel.GROUP_OWNER
+                    label = f"{group['name']} Owner"
+                elif target_member.id in await self.bot.db.fetch_members_of_group(
+                    group.get("group_id") or group.get("id")
+                ):
+                    level = PermissionLevel.GROUP_MEMBER
+                    label = f"{group['name']} Group Member"
+                else:
+                    level = PermissionLevel.SERVER_MEMBER
+            else:
+                level = PermissionLevel.SERVER_MEMBER
+        color = discord.Color.gold() if level >= PermissionLevel.ADMIN else discord.Color.blue()
+        embed = discord.Embed(title="User Authorization Level", color=color)
+        embed.add_field(name="Member", value=target_member.mention, inline=False)
+        embed.add_field(name="User Level Tier", value=label, inline=True)
+        embed.add_field(name="Permission Level", value=f"Level {int(level)}", inline=True)
         embed.set_footer(text=f"User ID: {target_member.id}")
-
-        await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
+        await send_response(interaction, embed=embed, ephemeral=await should_use_ephemeral(interaction, self.bot.db))
 
     @app_commands.command(
         name="sync_managers",
         description="Automatically detect server owner and moderators and grant manager roles (Admin only)",
     )
-    @app_commands.default_permissions(administrator=True)
     async def sync_managers(self, interaction: discord.Interaction):
         await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
@@ -485,156 +524,161 @@ class Manager(commands.Cog):
             return
 
         synced = await self.sync_guild_managers(interaction.guild)
+        role_warnings = await self._sync_staff_access(interaction)
         names = ", ".join(m.display_name for m in synced[:15])
         if len(synced) > 15:
             names += f" and {len(synced) - 15} others"
 
         await send_response(
             interaction,
-            f"Successfully synced **{len(synced)}** server owner & moderator members in the database:\n{names or 'None detected'}",
+            f"Successfully synced **{len(synced)}** server owner & moderator members in the database:\n{names or 'None detected'}"
+            + role_warnings,
             ephemeral=ephemeral,
         )
 
     @app_commands.command(name="add_bot_developer", description="Add a bot developer (Bot Developer only)")
     @app_commands.describe(user="The user to add as a bot developer")
-    @app_commands.default_permissions(administrator=True)
     async def add_bot_developer(self, interaction: discord.Interaction, user: discord.User):
-        logger.info(f"Attempt to add bot developer: {user.id} by user: {interaction.user.id}")
+        await acknowledge_interaction(interaction)
         if await self.get_permission_level(interaction.guild_id, interaction.user.id) != PermissionLevel.BOT_DEVELOPER:
-            logger.warning(f"User {interaction.user.id} attempted to add bot developer without permission")
-            if interaction.response.is_done():
-                await interaction.followup.send("You don't have permission to use this command.", ephemeral=True)
-            else:
-                await interaction.response.send_message(
-                    "You don't have permission to use this command.", ephemeral=True
-                )
+            await send_response(interaction, "You don't have permission to use this command.")
             return
-
-        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         await self.bot.db.add_manager(user.id, None, PermissionLevel.BOT_DEVELOPER)
-        logger.info(f"Added {user.id} as bot developer")
-        if interaction.response.is_done():
-            await interaction.followup.send(f"{user.name} has been added as a bot developer.", ephemeral=ephemeral)
-        else:
-            await interaction.response.send_message(
-                f"{user.name} has been added as a bot developer.", ephemeral=ephemeral
-            )
+        role_warnings = await self._sync_staff_access(interaction, global_scope=True)
+        logger.info(
+            "Bot developer added guild_id=%s actor_id=%s user_id=%s", interaction.guild_id, interaction.user.id, user.id
+        )
+        await send_response(
+            interaction,
+            f"{user.name} has been added as a bot developer." + role_warnings,
+            ephemeral=await should_use_ephemeral(interaction, self.bot.db),
+        )
 
     @app_commands.command(name="add_guild_manager", description="Add a guild manager (Admin only)")
     @app_commands.describe(user="The user to add as a guild manager")
-    @app_commands.default_permissions(administrator=True)
     async def add_guild_manager(self, interaction: discord.Interaction, user: discord.User):
-        logger.info(f"Attempt to add guild manager: {user.id} by user: {interaction.user.id}")
-        if await self.get_permission_level(interaction.guild_id, interaction.user.id) < PermissionLevel.ADMIN:
-            logger.warning(f"User {interaction.user.id} attempted to add guild manager without permission")
-            if interaction.response.is_done():
-                await interaction.followup.send("You don't have permission to use this command.", ephemeral=True)
-            else:
-                await interaction.response.send_message(
-                    "You don't have permission to use this command.", ephemeral=True
-                )
+        await acknowledge_interaction(interaction)
+        if interaction.guild is None:
+            await send_response(interaction, "This command can only be used in a server.")
             return
-
-        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
+        if await self.get_permission_level(interaction.guild_id, interaction.user.id) < PermissionLevel.ADMIN:
+            await send_response(interaction, "You don't have permission to use this command.")
+            return
         await self.bot.db.add_manager(user.id, interaction.guild_id, PermissionLevel.ADMIN)
-        logger.info(f"Added {user.id} as guild manager for guild {interaction.guild_id}")
-        if interaction.response.is_done():
-            await interaction.followup.send(
-                f"{user.name} has been added as a guild manager for this server.",
-                ephemeral=ephemeral,
-            )
-        else:
-            await interaction.response.send_message(
-                f"{user.name} has been added as a guild manager for this server.",
-                ephemeral=ephemeral,
-            )
+        role_warnings = await self._sync_staff_access(interaction)
+        logger.info(
+            "Guild manager added guild_id=%s actor_id=%s user_id=%s", interaction.guild_id, interaction.user.id, user.id
+        )
+        await send_response(
+            interaction,
+            f"{user.name} has been added as a guild manager for this server." + role_warnings,
+            ephemeral=await should_use_ephemeral(interaction, self.bot.db),
+        )
 
     @app_commands.command(name="remove_guild_manager", description="Remove a guild manager (Admin only)")
     @app_commands.describe(user="The user to remove as a guild manager")
-    @app_commands.default_permissions(administrator=True)
     async def remove_guild_manager(self, interaction: discord.Interaction, user: discord.User):
+        await acknowledge_interaction(interaction)
+        if interaction.guild is None:
+            await send_response(interaction, "This command can only be used in a server.")
+            return
         logger.info(f"Attempt to remove guild manager: {user.id} by user: {interaction.user.id}")
         if await self.get_permission_level(interaction.guild_id, interaction.user.id) < PermissionLevel.ADMIN:
             logger.warning(f"User {interaction.user.id} attempted to remove guild manager without permission")
-            if interaction.response.is_done():
-                await interaction.followup.send("You don't have permission to use this command.", ephemeral=True)
-            else:
-                await interaction.response.send_message(
-                    "You don't have permission to use this command.", ephemeral=True
-                )
+            await send_response(interaction, "You don't have permission to use this command.")
             return
 
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         await self.bot.db.remove_manager(user.id, interaction.guild_id)
+        role_warnings = await self._sync_staff_access(interaction)
         logger.info(f"Removed {user.id} as guild manager for guild {interaction.guild_id}")
-        if interaction.response.is_done():
-            await interaction.followup.send(
-                f"{user.name} has been removed as a guild manager for this server.",
-                ephemeral=ephemeral,
-            )
-        else:
-            await interaction.response.send_message(
-                f"{user.name} has been removed as a guild manager for this server.",
-                ephemeral=ephemeral,
-            )
+        await send_response(
+            interaction,
+            f"{user.name} has been removed as a guild manager for this server." + role_warnings,
+            ephemeral=ephemeral,
+        )
 
     @app_commands.command(name="list_managers", description="List all managers and staff for this server")
-    @app_commands.default_permissions(manage_guild=True)
     async def list_managers(self, interaction: discord.Interaction):
         await acknowledge_interaction(interaction)
+        if interaction.guild is None:
+            await send_response(interaction, "This command can only be used in a server.")
+            return
+        if await self.get_permission_level(interaction.guild_id, interaction.user.id) < PermissionLevel.MODERATOR:
+            await send_response(interaction, "You don't have permission to use this command.")
+            return
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-        logger.info(f"Listing managers for guild {interaction.guild_id}")
-        managers_from_db = await self.bot.db.get_all_managers(interaction.guild_id)
-        embed = discord.Embed(title="Server Staff & Managers", color=discord.Color.blue())
+        records = await self.bot.db.get_all_managers(interaction.guild_id)
+        levels: Dict[int, int] = {}
+        sources: Dict[int, str] = {}
+        for record in records:
+            if record["guild_id"] != interaction.guild_id and not (
+                record["guild_id"] is None and record["permission_level"] == PermissionLevel.BOT_DEVELOPER
+            ):
+                continue
+            user_id = record["user_id"]
+            if user_id not in levels or record["permission_level"] > levels[user_id]:
+                levels[user_id] = record["permission_level"]
+                sources[user_id] = dict(record).get("grant_source", "explicit")
+        developer_id = self.bot.bot_developer_id
+        if isinstance(developer_id, int):
+            levels[developer_id] = PermissionLevel.BOT_DEVELOPER
 
         categories: Dict[str, List[str]] = {
-            "Bot Developer (Superuser)": [],
-            "Administrator (Admin)": [],
-            "Moderator (Mod)": [],
+            "Bot Developer": [],
+            "Manager": [],
+            "Admin": [],
+            "Mod": [],
             "Other Levels": [],
         }
-
-        # Add managers who are in the database (explicitly added)
-        for manager in managers_from_db:
-            uid = manager["user_id"]
-
-            user = self.bot.get_user(uid)
-            if not user:
-                try:
-                    user = await self.bot.fetch_user(uid)
-                except Exception:
-                    user = None
-
-            if user and user.bot:
-                continue
-
-            user_label = user.name if user else f"User {uid}"
-            perm_lvl = manager["permission_level"]
-            if manager["guild_id"] is None or perm_lvl >= PermissionLevel.BOT_DEVELOPER:
-                categories["Bot Developer (Superuser)"].append(user_label)
-            elif perm_lvl >= PermissionLevel.ADMIN:
-                categories["Administrator (Admin)"].append(user_label)
-            elif perm_lvl >= PermissionLevel.MODERATOR:
-                categories["Moderator (Mod)"].append(user_label)
+        for user_id, level in sorted(levels.items(), key=lambda item: (-item[1], item[0])):
+            user = interaction.guild.get_member(user_id) or self.bot.get_user(user_id)
+            label = f"{user.display_name[:80]} (<@{user_id}>)" if user else f"<@{user_id}>"
+            if level >= PermissionLevel.BOT_DEVELOPER:
+                categories["Bot Developer"].append(label)
+            elif level >= PermissionLevel.ADMIN:
+                category = "Manager"
+                if sources.get(user_id) == "server_sync":
+                    member = interaction.guild.get_member(user_id)
+                    category = (
+                        "Admin"
+                        if user_id == interaction.guild.owner_id
+                        or (
+                            member and (member.guild_permissions.administrator or member.guild_permissions.manage_guild)
+                        )
+                        else "Mod"
+                    )
+                categories[category].append(label)
             else:
-                categories["Other Levels"].append(f"{user_label} (Level {perm_lvl})")
+                categories["Other Levels"].append(f"{label} (Level {level})")
 
-        count = 0
-        for cat_name, users in categories.items():
-            if users:
-                val = "\n".join(users)
-                if len(val) > 1024:
-                    val = val[:1000] + "...\n(Truncated)"
-                embed.add_field(name=cat_name, value=val, inline=False)
-                count += len(users)
-
-        if count == 0:
-            embed.description = (
-                "No managers found in the database.\nUse `/sync_managers` to import server mods automatically."
+        pages = [discord.Embed(title="Server Staff & Managers", color=discord.Color.blue())]
+        for category, labels in categories.items():
+            chunk = ""
+            chunks = []
+            for label in labels:
+                if len(chunk) + len(label) + 1 > 1024:
+                    chunks.append(chunk)
+                    chunk = ""
+                chunk = f"{chunk}\n{label}" if chunk else label
+            if chunk:
+                chunks.append(chunk)
+            for value in chunks:
+                page = pages[-1]
+                if len(page.fields) >= 25 or len(page) + len(category) + len(value) > 5500:
+                    page = discord.Embed(title="Server Staff & Managers", color=discord.Color.blue())
+                    pages.append(page)
+                page.add_field(name=category, value=value, inline=False)
+        if not levels:
+            pages[0].description = "No managers found. Add a manager or use `/sync_managers` to import server staff."
+        for number, page in enumerate(pages, 1):
+            page.set_footer(text=f"{len(levels)} people • Page {number} of {len(pages)}")
+            await send_response(
+                interaction, embed=page, ephemeral=ephemeral, allowed_mentions=discord.AllowedMentions.none()
             )
-
-        logger.debug(f"Found {count} managers for guild {interaction.guild_id}")
-        await send_response(interaction, embed=embed, ephemeral=ephemeral)
+        logger.info(
+            "Managers listed guild_id=%s user_id=%s count=%s", interaction.guild_id, interaction.user.id, len(levels)
+        )
 
     @app_commands.command(
         name="set_permission_level",
@@ -642,10 +686,10 @@ class Manager(commands.Cog):
     )
     @app_commands.describe(
         user="The user to set permissions for",
-        level="The permission level to set (0: Regular User, 1: Member, 2: Moderator, 3: Admin, 4: Bot Developer)",
+        level="Server grant: 0 removes it, 3 grants Manager, 4 grants Bot Developer",
     )
-    @app_commands.default_permissions(administrator=True)
     async def set_permission_level(self, interaction: discord.Interaction, user: discord.User, level: int):
+        await acknowledge_interaction(interaction)
         logger.info(
             f"Attempt to set permission level for user {user.id} to level {level} by user {interaction.user.id}"
         )
@@ -653,26 +697,19 @@ class Manager(commands.Cog):
             logger.warning(
                 f"User {interaction.user.id} attempted to set permission level without being a Bot Developer"
             )
-            if interaction.response.is_done():
-                await interaction.followup.send("You don't have permission to use this command.", ephemeral=True)
-            else:
-                await interaction.response.send_message(
-                    "You don't have permission to use this command.", ephemeral=True
-                )
+            await send_response(interaction, "You don't have permission to use this command.")
             return
 
-        if level not in [0, 1, 2, 3, 4]:
+        if level not in [0, 3, 4]:
             logger.warning(f"Invalid permission level {level} specified")
-            if interaction.response.is_done():
-                await interaction.followup.send(
-                    "Invalid permission level. Please use 0 (User), 1 (Member), 2 (Mod), 3 (Admin), or 4 (Dev).",
-                    ephemeral=True,
-                )
-            else:
-                await interaction.response.send_message(
-                    "Invalid permission level. Please use 0 (User), 1 (Member), 2 (Mod), 3 (Admin), or 4 (Dev).",
-                    ephemeral=True,
-                )
+            await send_response(
+                interaction,
+                "Invalid permission level. Use 0 (Server Member), 3 (Manager), or 4 (Bot Developer). Group membership and ownership come from group commands.",
+            )
+            return
+
+        if interaction.guild is None and level != PermissionLevel.BOT_DEVELOPER:
+            await send_response(interaction, "Server grants can only be changed inside a server.")
             return
 
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
@@ -685,19 +722,17 @@ class Manager(commands.Cog):
             logger.info(f"Set permission level {level} for user {user.id} in guild {guild_id}")
 
         permission_names = {
-            PermissionLevel.REGULAR_USER: "Regular User (User)",
-            PermissionLevel.GROUP_MEMBER: "Group Member (User)",
-            PermissionLevel.MODERATOR: "Moderator (Mod)",
-            PermissionLevel.ADMIN: "Administrator (Admin)",
-            PermissionLevel.BOT_DEVELOPER: "Bot Developer (Superuser)",
+            PermissionLevel.REGULAR_USER: "Server Member",
+            PermissionLevel.GROUP_MEMBER: "Group Member",
+            PermissionLevel.GROUP_OWNER: "Group Owner",
+            PermissionLevel.ADMIN: "Manager",
+            PermissionLevel.BOT_DEVELOPER: "Bot Developer",
         }
         name_str = permission_names.get(PermissionLevel(level), str(level))
-        if interaction.response.is_done():
-            await interaction.followup.send(f"Set {user.name}'s permission level to {name_str}.", ephemeral=ephemeral)
-        else:
-            await interaction.response.send_message(
-                f"Set {user.name}'s permission level to {name_str}.", ephemeral=ephemeral
-            )
+        role_warnings = await self._sync_staff_access(interaction, global_scope=level == PermissionLevel.BOT_DEVELOPER)
+        await send_response(
+            interaction, f"Set {user.name}'s permission level to {name_str}." + role_warnings, ephemeral=ephemeral
+        )
 
 
 async def setup(bot):

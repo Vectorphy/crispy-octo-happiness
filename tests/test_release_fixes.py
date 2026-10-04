@@ -141,7 +141,7 @@ async def test_force_video_disconnects_member_after_timer():
     assert sleep.await_args_list[0].args == (30,)
     assert sleep.await_args_list[1].args == (30,)
     member.send.assert_awaited_once_with(
-        f"Please turn on your camera in **{group.name}** within 30 seconds, "
+        f"Please turn on your camera or screen sharing in **{group.name}** within 30 seconds, "
         "or you will be disconnected from the study voice channel."
     )
     member.move_to.assert_awaited_once_with(None, reason=f"Video required in study group {group.group_id}")

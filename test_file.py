@@ -19,7 +19,7 @@ import asyncio
 import logging
 import os
 from typing import Any, List, Optional
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
@@ -158,6 +158,7 @@ class DummyInteractionFactory:
         guild.create_voice_channel.return_value = vc
 
         interaction.guild = guild
+        user.guild = guild
 
         # Mock Responses & Followups
         response = AsyncMock()
@@ -436,12 +437,12 @@ async def _run_command_matrix(bot):
         # Test level 3 (Administrator / Admin)
         interaction, _, _, _ = DummyInteractionFactory.create(bot)
         await manager_cog.set_permission_level.callback(manager_cog, interaction, user=dummy_target_user, level=3)
-        assert "Administrator" in get_response_text(interaction) or "Admin" in get_response_text(interaction)
+        assert "Manager" in get_response_text(interaction)
 
         # Test level 2 (Moderator / Mod)
         interaction, _, _, _ = DummyInteractionFactory.create(bot)
         await manager_cog.set_permission_level.callback(manager_cog, interaction, user=dummy_target_user, level=2)
-        assert "Moderator" in get_response_text(interaction) or "Mod" in get_response_text(interaction)
+        assert "Group membership and ownership" in get_response_text(interaction)
 
         # Test level 4 (Bot Developer / Superuser)
         interaction, _, _, _ = DummyInteractionFactory.create(bot)
@@ -451,7 +452,7 @@ async def _run_command_matrix(bot):
         # Test level 0 (Regular User - demotes)
         interaction, _, _, _ = DummyInteractionFactory.create(bot)
         await manager_cog.set_permission_level.callback(manager_cog, interaction, user=dummy_target_user, level=0)
-        assert "Regular User" in get_response_text(interaction)
+        assert "Server Member" in get_response_text(interaction)
 
     await execute_test(
         "Manager - /set_permission_level (Levels 3, 2, 4, 0)",
@@ -535,7 +536,7 @@ async def _run_command_matrix(bot):
         assert "User Authorization Level" in embed.title
         field_dict = {f.name: f.value for f in embed.fields}
         assert "User Level Tier" in field_dict
-        assert "Admin" in field_dict["User Level Tier"]
+        assert "Bot Developer" in field_dict["User Level Tier"]
 
     await execute_test("Manager - /user_level (Self inspect - Admin/Dev)", test_user_level_self_admin())
 
@@ -549,6 +550,7 @@ async def _run_command_matrix(bot):
         mod_member.bot = False
         mod_perms = discord.Permissions(manage_channels=True, view_channel=True)
         mod_member.guild_permissions = mod_perms
+        mod_member.guild = interaction.guild
         mod_member.roles = []
         interaction.guild.get_member = MagicMock(side_effect=lambda uid: mod_member if uid == 666111222333 else None)
 
@@ -565,24 +567,25 @@ async def _run_command_matrix(bot):
         reg_member.display_name = "RegularUser"
         reg_member.bot = False
         reg_member.guild_permissions = discord.Permissions(send_messages=True)
+        reg_member.guild = reg_interaction.guild
         reg_member.roles = []
 
         await manager_cog.user_level.callback(manager_cog, reg_interaction, user=reg_member)
         embed = get_response_embed(reg_interaction)
         assert embed is not None
         field_dict = {f.name: f.value for f in embed.fields}
-        assert "User" in field_dict["User Level Tier"]
+        assert "Server Member" in field_dict["User Level Tier"]
 
     await execute_test("Manager - /user_level (Mod & User inspections)", test_user_level_mod_and_user())
 
     async def test_tier_mapping_unit():
-        assert manager_cog.get_tier_name(PermissionLevel.BOT_DEVELOPER) == "Admin"
-        assert manager_cog.get_tier_name(PermissionLevel.ADMIN) == "Admin"
-        assert manager_cog.get_tier_name(PermissionLevel.GUILD_MANAGER) == "Admin"
-        assert manager_cog.get_tier_name(PermissionLevel.MODERATOR) == "Mod"
-        assert manager_cog.get_tier_name(PermissionLevel.GROUP_OWNER) == "Mod"
-        assert manager_cog.get_tier_name(PermissionLevel.GROUP_MEMBER) == "User"
-        assert manager_cog.get_tier_name(PermissionLevel.REGULAR_USER) == "User"
+        assert manager_cog.get_tier_name(PermissionLevel.BOT_DEVELOPER) == "Bot Developer"
+        assert manager_cog.get_tier_name(PermissionLevel.ADMIN) == "Manager"
+        assert manager_cog.get_tier_name(PermissionLevel.GUILD_MANAGER) == "Manager"
+        assert manager_cog.get_tier_name(PermissionLevel.MODERATOR) == "Manager"
+        assert manager_cog.get_tier_name(PermissionLevel.GROUP_OWNER) == "Group Owner"
+        assert manager_cog.get_tier_name(PermissionLevel.GROUP_MEMBER) == "Group Member"
+        assert manager_cog.get_tier_name(PermissionLevel.REGULAR_USER) == "Server Member"
 
     await execute_test("Manager - Tier Mapping Logic (User, Mod, Admin)", test_tier_mapping_unit())
 
@@ -595,7 +598,7 @@ async def _run_command_matrix(bot):
     async def test_checkin_settings_default():
         interaction, _, _, _ = DummyInteractionFactory.create(bot)
         await checkin_cog.settings_checkin.callback(
-            checkin_cog, interaction, max_members=12, min_duration=30, max_duration=7200
+            checkin_cog, interaction, max_members=12, min_duration=120, max_duration=7200
         )
         text = get_response_text(interaction)
         assert "Check-in settings updated" in text
@@ -621,7 +624,7 @@ async def _run_command_matrix(bot):
             checkin_cog,
             interaction,
             max_members=5,
-            min_duration=10,
+            min_duration=120,
             max_duration=14400,
             max_absences=2,
             permission_mode="DENY",
@@ -689,9 +692,9 @@ async def _run_command_matrix(bot):
         await checkin_session.start_break_callback(interaction)
         assert checkin_session.member_statuses[USER_ID]["status"] == "break"
 
-        # 3. Join
+        # 3. Return from a break
         interaction, _, _, _ = DummyInteractionFactory.create(bot)
-        await checkin_session.join_session_callback(interaction)
+        await checkin_session.mark_present_callback(interaction)
         assert checkin_session.member_statuses[USER_ID]["status"] == "present"
 
         # 4. Leave
@@ -699,8 +702,13 @@ async def _run_command_matrix(bot):
         await checkin_session.leave_session_callback(interaction)
         assert checkin_session.member_statuses[USER_ID]["status"] == "exited"
 
-        # 5. Change Owner
-        checkin_session.member_statuses[USER_ID]["status"] = "present"
+        # 5. Rejoin after leaving; a Join click must be an explicit opt-in.
+        interaction, _, _, _ = DummyInteractionFactory.create(bot)
+        with patch.object(bot, "get_guild", return_value=interaction.guild):
+            await checkin_session.join_session_callback(interaction)
+        assert checkin_session.member_statuses[USER_ID]["status"] == "present"
+
+        # 6. Change Owner
         checkin_session.member_ids = [USER_ID, SECOND_USER_ID]
         checkin_session.member_statuses[SECOND_USER_ID] = {
             "status": "present",
@@ -709,7 +717,7 @@ async def _run_command_matrix(bot):
         interaction, _, _, _ = DummyInteractionFactory.create(bot)
         await checkin_session.change_owner_callback(interaction)
 
-        # 6. End Session
+        # 7. End Session
         interaction, _, _, _ = DummyInteractionFactory.create(bot)
         await checkin_session.end_session_callback(interaction)
         assert checkin_session.session_id not in checkin_cog.active_sessions
@@ -1124,8 +1132,10 @@ async def _run_command_matrix(bot):
     # 8. SLASH COMMAND INVISIBILITY & DEFAULT PERMISSIONS
     # =========================================================================
     async def test_command_permissions_visibility():
-        # Admin-only commands: must require administrator=True (invisible to non-admins in Discord UI)
-        admin_commands = [
+        # Runtime guards must admit explicit CPO staff grants without native server permissions.
+        staff_commands = [
+            manager_cog.setup,
+            manager_cog.list_managers,
             manager_cog.sync_commands,
             manager_cog.sync_managers,
             manager_cog.add_bot_developer,
@@ -1133,16 +1143,12 @@ async def _run_command_matrix(bot):
             manager_cog.remove_guild_manager,
             manager_cog.set_permission_level,
             checkin_cog.settings_checkin,
+            sg_cog.set_mod_log_channel,
+            sg_cog.set_group_category,
+            sg_cog.purge_groups,
         ]
-        for cmd in admin_commands:
-            assert cmd.default_permissions is not None, f"Command {cmd.name} must have default_permissions set"
-            assert cmd.default_permissions.administrator is True, (
-                f"Command {cmd.name} must require administrator permission"
-            )
-
-        # Moderator-level commands: must require manage_guild or manage_channels/roles
-        assert manager_cog.list_managers.default_permissions is not None
-        assert manager_cog.list_managers.default_permissions.manage_guild is True
+        for cmd in staff_commands:
+            assert cmd.default_permissions is None, f"Command {cmd.name} must remain visible to granted CPO staff"
 
         assert vc_cog.delete_vc.default_permissions is not None
         assert vc_cog.delete_vc.default_permissions.manage_channels is True

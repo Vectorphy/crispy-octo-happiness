@@ -27,6 +27,7 @@ class InteractionHarness:
         self.interaction.user.id = 5
         self.interaction.user.display_name = "Tester"
         self.interaction.user.mention = "<@5>"
+        self.interaction.user.guild_permissions = discord.Permissions.none()
         self.interaction.extras = {}
         self.messages: list[dict[str, Any]] = []
         self.responded = False
@@ -87,6 +88,7 @@ def make_bot(commands_channel_id: int | None = 20) -> MagicMock:
     bot.db.get_commands_channel.return_value = commands_channel_id
     bot.db.get_study_group_by_channel.return_value = None
     bot.db.get_study_group.return_value = None
+    bot.db.get_manager.return_value = None
     bot.db.add_task.return_value = 7
     return bot
 
@@ -133,6 +135,15 @@ async def test_thread_and_lookup_failure_stay_private():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("guild_id", "active", "private"), [(1, 1, False), (2, 1, True), (1, 0, True)])
+async def test_only_current_guild_active_group_channels_are_public(guild_id, active, private):
+    harness = InteractionHarness(channel_id=91)
+    bot = make_bot()
+    bot.db.get_study_group_by_channel.return_value = {"guild_id": guild_id, "active": active}
+    assert await should_use_ephemeral(harness.interaction, bot.db) is private
+
+
+@pytest.mark.asyncio
 async def test_acknowledgement_cleanup_failure_does_not_hide_result():
     harness = InteractionHarness()
     harness.delete_error = discord.HTTPException(MagicMock(status=403, reason="Forbidden"), "denied")
@@ -175,7 +186,7 @@ async def test_task_add_acknowledges_before_settings_lookup():
 @pytest.mark.asyncio
 async def test_voice_channel_success_is_public_and_missing_group_error_is_private():
     bot = make_bot()
-    bot.db.get_study_group.return_value = {"group_id": "group-1", "vc_id": None, "name": "Study"}
+    bot.db.get_user_group.return_value = {"group_id": "group-1", "guild_id": 1, "vc_id": None, "name": "Study"}
     bot.db.get_group_roles.return_value = (None, None)
     harness = InteractionHarness()
     channel = MagicMock(spec=discord.VoiceChannel)
@@ -183,12 +194,14 @@ async def test_voice_channel_success_is_public_and_missing_group_error_is_privat
     channel.mention = "<#91>"
     harness.interaction.guild.create_voice_channel = AsyncMock(return_value=channel)
     harness.interaction.guild.get_role.return_value = None
+    category = MagicMock(spec=discord.CategoryChannel)
+    harness.interaction.guild.get_channel.return_value = category
     cog = VoiceChannels(bot)
     await cog.create_vc.callback(cog, harness.interaction, name="Study VC")
     assert harness.visible_messages()[-1]["ephemeral"] is False
     assert "created" in harness.visible_messages()[-1]["args"][0]
 
-    bot.db.get_study_group.return_value = None
+    bot.db.get_user_group.return_value = None
     missing = InteractionHarness()
     await cog.create_vc.callback(cog, missing.interaction, name=None)
     assert missing.visible_messages()[-1]["ephemeral"] is True
@@ -201,6 +214,7 @@ async def test_pomodoro_missing_group_is_private_in_commands_channel():
     bot.db.get_user_group.return_value = None
     harness = InteractionHarness()
     cog = Pomodoro(bot)
+    harness.interaction.client = bot
     await cog.start_pomodoro.callback(cog, harness.interaction, require_vc=False)
     assert harness.responded
     assert harness.visible_messages()[-1]["ephemeral"] is True

@@ -1,6 +1,6 @@
 # Known Issues and Debt (Audit Scope)
 
-Setup verification (2026-10-04): all 107 offline tests pass, including category creation, commands/log channel provisioning, effective reply visibility, concurrent setup controls, and rollback after a failed database commit. Mypy reports zero errors; Ruff lint and formatting pass. Live Discord provisioning has not been exercised. The existing `audioop` deprecation warning remains.
+Verification (2026-10-04): all 224 offline tests pass, including the standalone command matrix, category provisioning, permission inheritance, contextual replies and profiles, invitations, owner approvals, lifetimes, migrations, manager listing, and staff-role synchronization. Mypy reports zero errors; Ruff lint and formatting pass. Live Discord provisioning has not been exercised. The existing `audioop` deprecation warning remains.
 
 ## 1. Functional & Technical Deficiencies
 
@@ -66,7 +66,7 @@ Setup verification (2026-10-04): all 107 offline tests pass, including category 
 - **Severity**: Low (P2)
 - **Status**: **OPEN**
 - **Affected File**: `cogs/_setup_view.py`
-- **Details**: Changing Discord resources and saving SQLite settings cannot share one transaction. If Save creates a category, commands channel, or logs channel and the settings write fails, those resources remain. Existing recorded channels can also remain moved to the draft category. The wizard retains resource IDs for retry, blocks changing the draft category after resource creation, and discloses created or moved resources on cancellation or expiry. Automatic deletion and restoration are not implemented.
+- **Details**: Changing Discord resources and saving SQLite settings cannot share one transaction. If Save creates a category, commands channel, or logs channel and the settings write fails, those resources remain. Existing recorded channels can also remain moved to the draft category. Staff roles, membership, and permission changes can likewise outlive a failed settings save. The wizard retains channel/category resource IDs for retry, blocks changing the draft category after resource creation, and discloses created or moved resources on cancellation or expiry. Automatic deletion and restoration are not implemented.
 
 ---
 
@@ -104,7 +104,7 @@ Setup verification (2026-10-04): all 107 offline tests pass, including category 
 - **Severity**: Medium (P2)
 - **Status**: **RESOLVED**
 - **Affected Files**: `cogs/study_groups.py`, `cogs/tasklist.py`, `TODO.md`
-- **Details**: Implemented persisted voice permission toggles, invitation DMs, moderator logs, task Select menus, scoped task-message purging, public task/group results, one initial dashboard, and deleted-channel response fallback. Regression checks cover state, authorization, races, malformed selections, missing resources, and API/database failures. Forced camera participation remains a separate open TODO.
+- **Details**: Implemented persisted voice permission toggles, invitation DMs, moderator logs, task Select menus, scoped task-message purging, public task/group results, one initial dashboard, and deleted-channel response fallback. Regression checks cover state, authorization, races, malformed selections, missing resources, and API/database failures. Forced video participation is implemented and now accepts camera or screen sharing.
 
 ### SEC-05: Legacy schema migration can discard study groups
 - **Severity**: High (P1)
@@ -124,7 +124,7 @@ Setup verification (2026-10-04): all 107 offline tests pass, including category 
 - **Severity**: Medium (P2)
 - **Status**: **RESOLVED**
 - **Affected Files**: `cogs/study_groups.py`, `tests/test_release_fixes.py`
-- **Details**: Force Video warns members after 30 seconds and gives them a 60-second camera grace period before disconnecting them, while Speak updates both `@everyone` and group-role microphone permissions with transactional rollback.
+- **Details**: Force Video warns members after 30 seconds and gives them a 60-second grace period before disconnecting members with neither camera nor screen sharing, while Speak updates both `@everyone` and group-role microphone permissions with transactional rollback.
 
 ### AD-12: Study-group voice channels were deleted when empty
 - **Severity**: Medium (P2)
@@ -142,15 +142,43 @@ Setup verification (2026-10-04): all 107 offline tests pass, including category 
 - **Severity**: High (P1)
 - **Status**: **RESOLVED**
 - **Affected Files**: `cogs/tasklist.py`, `database.py`, `utils.py`, `cogs/study_groups.py`, `cogs/pomodoro.py`, `cogs/checkin.py`, `cogs/manager.py`, `cogs/productivity_tracker.py`, `cogs/voice_channels.py`
-- **Details**: Tasks previously lacked strict server isolation, allowing tasks from one guild to appear in another when queried. Scoped task storage and queries by `guild_id` and added `guild_id` column migration. The rc4 release introduced category-based reply visibility; the current setup work replaces that policy with exact commands-channel matching.
+- **Details**: Tasks previously lacked strict server isolation, allowing tasks from one guild to appear in another when queried. Scoped task storage and queries by `guild_id` and added `guild_id` column migration. The rc4 release introduced category-based reply visibility; the current setup work replaces that policy with active-group or exact commands-channel matching.
 
 ### AD-16: Public error replies inherit command context
 - **Severity**: Medium (P2)
 - **Status**: **RESOLVED**
 - **Affected Files**: `cogs/voice_channels.py`, `cogs/tasklist.py`, `cogs/checkin.py`, `utils.py`
-- **Details**: Commands now acknowledge privately before sending independently visible final replies. Voice and task validation failures remain private, mixed task-action failures and purge cleanup warnings force private results, and check-in personal acknowledgements remain private. Normal slash success replies use the exact saved commands channel rather than category membership.
+- **Details**: Commands now acknowledge privately before sending independently visible final replies. Voice and task validation failures remain private, mixed task-action failures and purge cleanup warnings force private results, and check-in personal acknowledgements remain private. Normal slash success replies are public in active group channels and the exact saved commands channel. Category membership alone does not make replies public.
 
 The rc3 candidate builds on `c7bdca3`. On bundled Python 3.12.14 with the original virtual environment's packages, all 68 pytest tests pass, including the standalone 54-flow matrix. Mypy and Ruff lint/format checks pass. The upstream `audioop` deprecation warning remains.
 
-`davey 0.1.6` is installed in the original virtual environment and declared in both runtime manifests. The five-tier permission implementation is preserved. Checks use mocked Discord APIs; this run does not verify live provisioning. GitHub publishing remains pending because this automation cannot reach GitHub over the network.
+`davey 0.1.6` is installed in the original virtual environment and declared in both runtime manifests. The five-tier permission implementation is preserved. Checks use mocked Discord APIs; this run does not verify live provisioning. Historical automation publishing failures do not describe the current local branch push; release/tag publication remains separate follow-up work.
 
+
+## Session-control review (2026-10-04)
+
+### ARC-07: Pomodoro runtime state is lost on restart
+- **Severity**: Medium (P2)
+- **Status**: **OPEN**
+- **Affected Files**: `cogs/pomodoro.py`, `database.py`
+- **Details**: Deadlines, stage timers, pause state, renewal state, and opted-in participants live in memory. The existing `pomodoro_sessions` table and unused save stub do not hydrate these values. Restarting the bot loses running Pomodoros. Persistent lifetime defaults do survive restart. A backward-compatible runtime persistence design remains to be approved and implemented.
+
+### SEC-06: Auto-synced staff grants can outlive Discord permissions
+- **Severity**: Medium (P2)
+- **Status**: **RESOLVED for tracked grants; legacy provenance limitation remains**
+- **Affected Files**: `cogs/manager.py`, `database.py`
+- **Details**: Approved `grant_source` tracking now distinguishes `server_sync` from `explicit`. Native authority is checked at evaluation time; staff sync removes stale server-synced rows without removing explicit grants. Legacy rows migrate as explicit because their original source cannot be inferred; review old grants manually if they were originally imported from Discord permissions.
+
+### UX-01: Default voice destination remains follow-up work
+- **Severity**: Low (P2)
+- **Status**: **BACKLOG**
+- **Affected Files**: `cogs/_setup_view.py`, `cogs/study_groups.py`
+- **Details**: The requested task to create a default VC during setup and move video/microphone-noncompliant members there is recorded in `TODO.md`. It is not implemented. Current Force Video disconnects members after its grace period; microphone participation enforcement is not enabled.
+
+Owner-approval controls, invitation consent, group naming, dashboard delegation, category permission inheritance, bounded intervals, and paused expiry now have offline regression coverage. Live Discord DM delivery, provisioning, and hierarchy behavior remain unverified.
+
+### DATA-01: Productivity time is a placeholder
+- **Severity**: Medium (P2)
+- **Status**: **OPEN**
+- **Affected File**: `utils.py:ProductivityService`
+- **Details**: Completed-task counts come from SQLite, but time spent is randomly generated between 1 and 40 hours. Efficiency uses that placeholder time and must not be treated as measured study productivity. Voice/session time aggregation is not implemented.

@@ -5,8 +5,16 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from cogs._setup_view import NewCategoryModal, SetupView
+from cogs._setup_view import DurationModal, NewCategoryModal, SetupView
 from cogs.manager import Manager, PermissionLevel
+
+
+@pytest.fixture(autouse=True)
+def isolate_staff_role_sync(monkeypatch):
+    async def sync_staff_roles(bot, guild, category):
+        return category
+
+    monkeypatch.setitem(SetupView._save_locked.__globals__, "sync_staff_roles", AsyncMock(side_effect=sync_staff_roles))
 
 
 def make_interaction(guild: discord.Guild, user_id: int = 5) -> MagicMock:
@@ -38,11 +46,13 @@ def make_setup(category_id: int | None = 10, channel_id: int | None = 20):
     channel = MagicMock(spec=discord.TextChannel)
     channel.id = 20
     channel.category_id = category_id
+    channel.permissions_synced = True
     channel.permissions_for.return_value = perms
     channel.edit = AsyncMock(return_value=None)
     log_channel = MagicMock(spec=discord.TextChannel)
     log_channel.id = 30
     log_channel.category_id = category_id
+    log_channel.permissions_synced = True
     log_channel.permissions_for.return_value = perms
     log_channel.edit = AsyncMock(return_value=None)
     guild.get_channel.side_effect = lambda identifier: {10: category, 20: channel, 30: log_channel}.get(identifier)
@@ -58,6 +68,8 @@ def make_setup(category_id: int | None = 10, channel_id: int | None = 20):
     bot.db.get_commands_channel.return_value = channel_id
     bot.db.get_mod_log_channel.return_value = 30
     bot.db.get_default_max_members.return_value = 10
+    bot.db.get_default_group_duration.return_value = 86400
+    bot.db.get_default_pomodoro_duration.return_value = 86400
     manager = Manager(bot)
     setattr(manager, "get_permission_level", AsyncMock(return_value=PermissionLevel.MODERATOR))
     return manager, guild, category, channel
@@ -65,6 +77,54 @@ def make_setup(category_id: int | None = 10, channel_id: int | None = 20):
 
 def button(view: SetupView, label: str) -> discord.ui.Button:
     return next(item for item in view.children if isinstance(item, discord.ui.Button) and item.label == label)
+
+
+@pytest.mark.asyncio
+async def test_setup_duration_editor_stages_and_saves_defaults():
+    manager, guild, _, _ = make_setup()
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30)
+    manager._setup_views[guild.id] = view
+    editor = DurationModal(view)
+    editor.group_duration._value = "1d 12h"
+    editor.pomodoro_duration._value = "48 hours"
+    await editor.on_submit(make_interaction(guild))
+    assert (view.group_duration, view.pomodoro_duration) == (129600, 172800)
+    manager.bot.db.save_setup.assert_not_awaited()
+    await button(view, "Save").callback(make_interaction(guild))
+    manager.bot.db.save_setup.assert_awaited_once_with(
+        1, 10, 20, 10, 30, default_group_duration=129600, default_pomodoro_duration=172800
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("duration", ["0h", "invalid", "-1h", "999999999999999999h"])
+async def test_setup_rejects_invalid_lifetimes_without_changing_draft(duration):
+    manager, guild, _, _ = make_setup()
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30)
+    manager._setup_views[guild.id] = view
+    editor = DurationModal(view)
+    editor.group_duration._value = duration
+    editor.pomodoro_duration._value = "24h"
+    interaction = make_interaction(guild)
+    await editor.on_submit(interaction)
+    assert (view.group_duration, view.pomodoro_duration) == (86400, 86400)
+    interaction.response.send_message.assert_awaited_once()
+    assert interaction.response.send_message.call_args.kwargs["ephemeral"] is True
+    manager.bot.db.save_setup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["get_default_group_duration", "get_default_pomodoro_duration"])
+async def test_setup_rejects_stale_lifetimes_before_provisioning(setting):
+    manager, guild, _, _ = make_setup()
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30)
+    manager._setup_views[guild.id] = view
+    getattr(manager.bot.db, setting).return_value = 172800
+    interaction = make_interaction(guild)
+    await button(view, "Save").callback(interaction)
+    assert "settings changed" in interaction.followup.send.call_args.args[0]
+    guild.create_text_channel.assert_not_awaited()
+    manager.bot.db.save_setup.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -79,14 +139,16 @@ async def test_setup_stages_options_without_writing_until_save():
     view = manager._setup_views[guild.id]
     assert view.max_members == 25
     assert view.category_id == category.id
-    assert view.snapshot == (10, 20, 30, 10)
+    assert view.snapshot == (10, 20, 30, 10, 86400, 86400)
     manager.bot.db.save_setup.assert_not_awaited()
     guild.create_text_channel.assert_not_awaited()
 
     save_interaction = make_interaction(guild)
     await button(view, "Save").callback(save_interaction)
 
-    manager.bot.db.save_setup.assert_awaited_once_with(1, 10, 20, 25, 30)
+    manager.bot.db.save_setup.assert_awaited_once_with(
+        1, 10, 20, 25, 30, default_group_duration=86400, default_pomodoro_duration=86400
+    )
     assert guild.id not in manager._setup_views
     assert all(item.disabled for item in view.children)
     assert save_interaction.followup.send.call_args.kwargs["ephemeral"] is True
@@ -154,7 +216,7 @@ async def test_failed_save_reuses_created_channel_and_reports_its_id():
 
 
 @pytest.mark.asyncio
-async def test_recorded_channel_move_keeps_permission_overwrites():
+async def test_recorded_channel_move_syncs_category_permissions():
     manager, guild, _, channel = make_setup()
     channel.category_id = 99
     view = SetupView(manager, guild, 5, 10, 20, 10, 30)
@@ -163,12 +225,14 @@ async def test_recorded_channel_move_keeps_permission_overwrites():
     await button(view, "Save").callback(make_interaction(guild))
 
     channel.edit.assert_awaited_once()
-    assert channel.edit.call_args.kwargs["sync_permissions"] is False
-    manager.bot.db.save_setup.assert_awaited_once_with(1, 10, 20, 10, 30)
+    assert channel.edit.call_args.kwargs["sync_permissions"] is True
+    manager.bot.db.save_setup.assert_awaited_once_with(
+        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400
+    )
 
 
 @pytest.mark.asyncio
-async def test_setup_creates_restricted_log_channel_and_reuses_it_on_retry():
+async def test_setup_creates_synced_log_channel_and_reuses_it_on_retry():
     manager, guild, _, _ = make_setup()
     log_channel = guild.get_channel(30)
     manager.bot.db.get_mod_log_channel.return_value = None
@@ -185,10 +249,10 @@ async def test_setup_creates_restricted_log_channel_and_reuses_it_on_retry():
     options = guild.create_text_channel.call_args.kwargs
     overwrites = options["overwrites"]
     assert options["category"].id == 10
-    assert overwrites[guild.default_role].view_channel is False
-    assert overwrites[guild.me].view_channel is True
-    assert overwrites[guild.me].read_message_history is True
-    manager.bot.db.save_setup.assert_awaited_once_with(1, 10, 20, 10, 30)
+    assert overwrites == options["category"].overwrites
+    manager.bot.db.save_setup.assert_awaited_once_with(
+        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400
+    )
 
     await button(view, "Save").callback(make_interaction(guild))
 
@@ -222,7 +286,9 @@ async def test_cancel_during_save_cannot_claim_no_settings_changed():
     assert "Save is in progress" in cancel_interaction.response.send_message.call_args.args[0]
     release.set()
     await asyncio.wait_for(save, timeout=2)
-    manager.bot.db.save_setup.assert_awaited_once_with(1, 10, 20, 10, 30)
+    manager.bot.db.save_setup.assert_awaited_once_with(
+        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400
+    )
 
 
 @pytest.mark.asyncio
@@ -262,7 +328,7 @@ async def test_log_creation_failure_keeps_pending_commands_id_for_cancel_report(
 
 
 @pytest.mark.asyncio
-async def test_recorded_log_channel_moves_without_syncing_overwrites():
+async def test_recorded_log_channel_move_syncs_category_permissions():
     manager, guild, _, _ = make_setup()
     log_channel = guild.get_channel(30)
     log_channel.category_id = 99
@@ -272,9 +338,11 @@ async def test_recorded_log_channel_moves_without_syncing_overwrites():
     await button(view, "Save").callback(make_interaction(guild))
 
     log_channel.edit.assert_awaited_once()
-    assert log_channel.edit.call_args.kwargs["sync_permissions"] is False
+    assert log_channel.edit.call_args.kwargs["sync_permissions"] is True
     guild.create_text_channel.assert_not_awaited()
-    manager.bot.db.save_setup.assert_awaited_once_with(1, 10, 20, 10, 30)
+    manager.bot.db.save_setup.assert_awaited_once_with(
+        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400
+    )
 
 
 @pytest.mark.asyncio
@@ -309,7 +377,9 @@ async def test_new_category_modal_stages_then_creates_category_and_both_channels
 
     guild.create_category.assert_awaited_once_with("Study rooms", reason="CPO server setup")
     assert [call.args[0] for call in guild.create_text_channel.await_args_list] == ["cpo-commands", "cpo-logs"]
-    manager.bot.db.save_setup.assert_awaited_once_with(1, 40, 21, 10, 31)
+    manager.bot.db.save_setup.assert_awaited_once_with(
+        1, 40, 21, 10, 31, default_group_duration=86400, default_pomodoro_duration=86400
+    )
     assert view.new_category_name is None
 
 
@@ -329,11 +399,14 @@ async def test_new_category_modal_rejects_empty_name_privately():
 
 
 @pytest.mark.asyncio
-async def test_revoked_setup_permission_blocks_callback():
+@pytest.mark.parametrize(
+    "level", [PermissionLevel.REGULAR_USER, PermissionLevel.GROUP_MEMBER, PermissionLevel.GROUP_OWNER]
+)
+async def test_revoked_setup_permission_blocks_callback(level):
     manager, guild, _, _ = make_setup()
     view = SetupView(manager, guild, 5, 10, 20, 10, 30)
     manager._setup_views[guild.id] = view
-    setattr(manager, "get_permission_level", AsyncMock(return_value=PermissionLevel.REGULAR_USER))
+    setattr(manager, "get_permission_level", AsyncMock(return_value=level))
     interaction = make_interaction(guild)
 
     assert await view.interaction_check(interaction) is False

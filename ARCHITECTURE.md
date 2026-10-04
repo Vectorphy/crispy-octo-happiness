@@ -10,9 +10,9 @@ Study group startup migrates legacy records with additive columns and identifier
 
 Each group owns a membership lock shared by direct joins, invitation admission, voice-setting changes, and the transition into teardown. Invitations arrive by DM with recipient-only Join/Decline controls and five-minute expiry. Admission grants the role and persists the roster before changing memory; failed persistence attempts to remove the newly granted role. Teardown blocks further admission, marks the persisted group inactive, removes current roster entries and related session aliases, and stops the dashboard controls.
 
-The initial group dashboard combines mentions, the status embed, and controls. Speak and Video preserve unrelated voice permission overwrites. A failed settings write triggers a Discord rollback; a failed rollback is logged for manual recovery. Force Video warns members after 30 seconds and allows a 60-second camera grace period before disconnecting members who remain camera-off.
+The initial group dashboard combines mentions, the status embed, and controls. Speak and Video preserve unrelated voice permission overwrites. A failed settings write triggers a Discord rollback; a failed rollback is logged for manual recovery. Force Video warns members after 30 seconds and allows a 60-second grace period before disconnecting members with neither camera nor screen sharing enabled.
 
-Task Select menus carry primary row IDs and pass the owner and exact group to `DBHandler.apply_task_action`. This prevents a legacy task number from affecting multiple rows. Task command acknowledgements follow the commands-channel visibility policy. Purges batch database deletion, then inspect only the current channel's latest 100 messages for bot task messages attributed to the requesting user. A Discord cleanup failure is reported privately without undoing successful database deletion.
+Task Select menus carry primary row IDs and pass the owner and exact group to `DBHandler.apply_task_action`. This prevents a legacy task number from affecting multiple rows. Task command acknowledgements follow the group/commands-channel visibility policy. Purges batch database deletion, then inspect only the current channel's latest 100 messages for bot task messages attributed to the requesting user. A Discord cleanup failure is reported privately without undoing successful database deletion.
 
 `guild_settings.mod_log_channel_id` stores the optional destination for group lifecycle embeds. Event logs include the actor and group, suppress mentions, and tolerate missing channels or logging failures. If cleanup deletes the invocation channel and Discord returns error 10003, the final command result is sent by DM. If that DM also fails, the result is logged.
 
@@ -22,15 +22,31 @@ Offline verification covers these flows in pytest and executes the standalone 54
 
 `/setup` opens an ephemeral wizard on every invocation. Its existing `max_members` and `category` options seed a draft. The invoker can select an existing guild category or enter a new category name, then review the draft before Save. Controls belong to the invoker. Cancel and expiry discard the draft.
 
-Save resolves the chosen category and creates `cpo-commands` and `cpo-logs` text channels or reuses their recorded channels. Existing recorded channels can move into the selected category without synchronizing their permission overwrites. New logs channels deny access to `@everyone` and grant access to the bot, setup invoker, and roles with Administrator or Manage Server permissions. The logs channel receives existing group creation, ending, and purge events; runtime logs continue through the Python logger.
+Save resolves the chosen category and creates `cpo-commands` and `cpo-logs` text channels or reuses their recorded channels. Created channels inherit the selected category permissions. Recorded channels synchronize their permissions with the category when moved or when their existing permissions differ, including the logs channel. The logs channel receives existing group creation, ending, and purge events; runtime logs continue through the Python logger.
 
-The database stores the category ID, commands channel ID, moderator log channel ID, and default member limit together. The logs channel uses the existing `guild_settings.mod_log_channel_id` field. Startup adds the nullable `guild_settings.commands_channel_id` column to existing databases; its initial null value keeps replies private until setup is saved.
+The database stores the category ID, commands channel ID, moderator log channel ID, default member limit, and default group/Pomodoro lifetimes together. The lifetime editor accepts positive durations; both settings initially store 86400 seconds and affect new sessions. The approved migration adds these columns without replacing existing settings. The stale-draft snapshot includes both lifetimes. The logs channel uses the existing `guild_settings.mod_log_channel_id` field. Startup adds the nullable `guild_settings.commands_channel_id` column to existing databases; its initial null value keeps replies private until setup is saved.
 
 Discord provisioning and the SQLite write are separate operations. If a Save attempt creates resources and later fails, the wizard retains their IDs for a retry and prevents switching the draft to another category. Existing recorded channels can also remain moved after a failed settings write. Cancel and expiry disclose created or moved resource IDs for review. Created resources are not automatically deleted, and moved channels are not automatically restored.
 
-Normal slash success replies are public only in the exact saved commands channel. Threads, other channels, DMs, and unconfigured servers use ephemeral replies. Errors, sensitive results, and the setup wizard are always private. The category controls study group placement; it does not grant public reply visibility. Dashboards, reminders, Pomodoro announcements, moderator logs, and invitation DMs keep their operational destinations.
+Normal slash success replies are public in active study-group channels and the exact saved commands channel. Threads, other channels, and DMs use ephemeral replies. An unset commands channel still permits public replies in active groups. Errors, sensitive results, and the setup wizard are always private. The category controls study group placement; it does not grant public reply visibility. Dashboards, reminders, Pomodoro announcements, moderator logs, and invitation DMs keep their operational destinations.
 
 Commands acknowledge the interaction privately before processing. A separate follow-up carries the final success or error with its own visibility, then removes the temporary acknowledgement. This avoids Discord's first deferred follow-up inheriting an earlier public response flag.
+
+### Consent, ending, and lifetime controls
+
+Group creation allocates a name under a per-guild lock and holds that lock through provisioning. Historical names and live sessions prevent reuse: unnamed groups use a username and session number, while custom-name collisions append a numeric suffix. Each group retains its UUID independently of the display name.
+
+Creators join automatically. Mentioned users receive recipient-only DM Join/Decline controls before admission. Pomodoros maintain a separate opted-in participant roster for attendance, pings, and voice moves. The voice-state listener no longer starts sessions. Group dashboards retain session status fields, with check-in and Pomodoro action buttons confined to their session controls.
+
+Staff grants carry `explicit` or `server_sync` provenance. Native staff synchronize at Level 3; sync removes stale native grants and preserves explicit grants. Older grants are migrated as explicit because their source cannot be inferred. `/user_level` uses only the active group in the invocation channel for owner/member levels and selects the highest applicable level.
+
+`cogs/_staff_roles.py` creates or reuses CPO Manager and CPO Bot Developer roles with no guild-wide permissions, synchronizes their membership, and merges their access into the configured category and its children. New channels inherit that category's permissions. Existing children retain unrelated overwrites, including intentional Speak/Video settings. Manage Roles and role hierarchy failures leave database grants intact and return an actionable warning.
+
+Current group/session owners and guild staff end directly. Other current participants request the current owner's approval by DM. Shared controls serialize End/Keep running decisions and expire after five minutes; confirmation rechecks activity and captured ownership. Persisted group fallback rechecks the latest database record before cleanup. Outsiders cannot request ending, and failed owner DMs leave sessions running.
+
+Pomodoros use UTC deadlines. The timer checks expiry before pause state, offers renewal with one hour left, and offers a new prompt for each renewed deadline. Renew adds 24 hours to the existing deadline. Each stage and check-in reminder interval is 2–240 minutes. Auto-calculated Pomodoro breaks use the 5:1:3 ratio with a two-minute minimum.
+
+Pomodoro state is currently memory-only. The existing `pomodoro_sessions` table and save stub do not provide runtime hydration, participant consent, or deadline restoration. A restart loses running Pomodoros; this remains tracked in `KNOWN_ISSUES.md` and `TODO.md`.
 
 ### 1.1 C4 Container Diagram
 
@@ -251,9 +267,9 @@ graph TD
     subgraph Hierarchy ["🔐 Authorization Hierarchy (PermissionLevel)"]
         DEV["Level 4: BOT_DEVELOPER<br/>• Configured in .env BOT_DEVELOPER_ID or DB<br/>• Global superuser: manage bot devs, guild managers, system-wide overrides"]
         GM["Level 3: GUILD_MANAGER<br/>• Server administrators & designated moderators<br/>• Server scope: configure guild settings, manage all study groups"]
-        GO["Level 2: GROUP_OWNER<br/>• Creator or designated owner of a specific study group or check-in<br/>• Session scope: end group, invite members, toggle VC settings"]
+        GO["Level 2: GROUP_OWNER<br/>• Current owner of the contextual study group or check-in<br/>• Session scope: end group, invite members, toggle VC settings"]
         GMEM["Level 1: GROUP_MEMBER<br/>• Verified participant in an active study group or checkin<br/>• Participant scope: join group VC, access group text channel, interact with buttons"]
-        REG["Level 0: REGULAR_USER<br/>• Standard server member<br/>• Baseline scope: manage personal tasks, create new groups (subject to caps)"]
+        REG["Level 0: SERVER_MEMBER<br/>• Standard server member<br/>• Baseline scope: manage personal tasks, create new groups (subject to caps)"]
     end
 
     DEV -->|Has all permissions of| GM
@@ -338,33 +354,14 @@ graph TD
 
 ## 8. Authorization Tiers & Slash Command Visibility Architecture
 
-The CPO Bot implements a 3-tier authorization model mapped to Discord's native slash command visibility system:
+The bot evaluates five levels at runtime. Level 3 includes native administrators/moderators and explicit Managers. Group ownership (2) and membership (1) are contextual; Level 4 overrides every lower level. Registered staff commands omit Discord's default permission restriction so an explicit Manager without native administrator permissions can reach the handler. Unauthorized invocations receive private denials.
 
 ```mermaid
 graph TD
-    subgraph Tiers ["🛡️ Authorization Hierarchy"]
-        AdminTier["👑 ADMIN TIER (Levels 3 & 4)<br/>• Bot Developer (4)<br/>• Server Owner (3)<br/>• Server Administrator (3)"]
-        ModTier["🛡️ MOD TIER (Level 2)<br/>• Server Moderators (perms & roles)<br/>• Study Group Owners<br/>• DB-Registered Moderators"]
-        UserTier["👤 USER TIER (Levels 0 & 1)<br/>• Study Group Members (1)<br/>• Regular Server Members (0)"]
-    end
-
-    subgraph SlashVisibility ["👁️ Discord Slash Command UI Visibility"]
-        AdminCmds["Admin Only (default_permissions: administrator=True)<br/>• /sync_commands<br/>• /sync_managers<br/>• /settings_checkin<br/>• /add_guild_manager<br/>• /remove_guild_manager<br/>• /add_bot_developer<br/>• /set_permission_level"]
-        ModCmds["Mod/Admin Only (default_permissions: manage_guild / manage_channels)<br/>• /list_managers<br/>• /delete_vc<br/>• /delete_text_channel<br/>• /delete_role"]
-        PublicCmds["Visible to All Server Members<br/>• /user_level<br/>• /create_group, /join_group, /leave_group<br/>• /task_add, /task_list, /task_complete<br/>• /productivity<br/>• /start_pomodoro, /pomodoro_status<br/>• /checkin"]
-    end
-
-    AdminTier -->|Can view & execute| AdminCmds
-    AdminTier -->|Can view & execute| ModCmds
-    AdminTier -->|Can view & execute| PublicCmds
-
-    ModTier -->|Can view & execute| ModCmds
-    ModTier -->|Can view & execute| PublicCmds
-    ModTier -.->|Hidden in Discord UI| AdminCmds
-
-    UserTier -->|Can view & execute| PublicCmds
-    UserTier -.->|Hidden in Discord UI| ModCmds
-    UserTier -.->|Hidden in Discord UI| AdminCmds
+    Picker["Registered slash commands"] --> Handler["Runtime authorization guard"]
+    Handler -->|Authorized| Execute["Scoped command operation"]
+    Handler -->|Unauthorized| Deny["Private denial"]
+    Hidden["Standalone resource maintenance callbacks"] --> Lifecycle["Internal group lifecycle only"]
 ```
 
 ---

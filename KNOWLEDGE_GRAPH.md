@@ -27,6 +27,10 @@ Chief-Productivity-Officer/
 │   ├── study_groups.py        # Dedicated study rooms, dynamic role/channel provisioning, dashboard
 │   ├── pomodoro.py            # Focus/Break timer state machine, VC auto-move, 5:1:3 ratio calculation
 │   ├── manager.py             # 5-tier permission hierarchy, session limits, command authorization
+│   ├── _setup_view.py         # Private staged setup wizard and lifetime editor
+│   ├── _staff_roles.py        # Staff role membership and scoped category/channel access
+│   ├── _session_controls.py   # Current-owner DM approval controls
+│   ├── help.py                # Private everyday command guide
 │   ├── tasklist.py            # Personal task CRUD with channel-aware study group scoping
 │   ├── productivity_tracker.py# Productivity metrics calculation and Discord embed formatting
 │   └── voice_channels.py      # Dedicated voice channel provisioning and lifecycle cleanup
@@ -271,7 +275,8 @@ erDiagram
         int id PK "Auto Increment"
         int user_id "Discord User Snowflake ID"
         int guild_id "Discord Guild ID (NULL for global Bot Developer)"
-        int permission_level "0=Regular, 1=Member, 2=Owner/Mod, 3=Manager, 4=Dev"
+        int permission_level "0=Server Member, 3=Staff, 4=Developer; 1/2 are contextual"
+        text grant_source "explicit or server_sync; legacy grants are explicit"
     }
 
     GUILD_SETTINGS {
@@ -282,6 +287,8 @@ erDiagram
         int group_category_id "Saved category for new study group resources"
         int commands_channel_id "Nullable exact channel ID for public slash success replies"
         int default_max_members "Default member limit for new study groups"
+        int default_group_duration "Seconds; defaults to 86400"
+        int default_pomodoro_duration "Seconds; defaults to 86400"
     }
 
     VOICE_CHANNEL_LOGS {
@@ -297,25 +304,31 @@ erDiagram
 
 ## 4. State & Invariants
 
-- **Application command visibility**: `bot.py:setup_hook` syncs the global command tree, then `on_ready` replaces each guild's command set with a copy of the global commands and syncs it for immediate visibility. Manager commands use Discord `default_permissions` that match their permission checks.
+- **Application command visibility**: `bot.py:setup_hook` syncs the global command tree, then `on_ready` replaces each guild's command set with a copy of the global commands and syncs it for immediate visibility. Standalone resource maintenance commands are excluded from the tree. Registered staff commands rely on handler guards and omit default permission restrictions so explicit bot-granted staff can access them.
 - **Study group lookups**: `DBHandler.get_user_group`, `get_study_group_by_channel`, and `get_study_group` return dictionaries so cogs can consistently read records with `.get()` and map database IDs to in-memory sessions.
-- **Study group membership**: `save_study_group` writes the creator and initial invitees to `study_groups_members` under the group UUID. Group roster reads and `/list_groups` use that same UUID.
+- **Study group membership**: `save_study_group` writes only the consented initial roster (the creator at creation) to `study_groups_members` under the group UUID. Group roster reads and `/list_groups` use that same UUID.
 - **Invitations and admission**: `GroupInvitationView` sends recipient-only Join/Decline controls by DM. A group membership lock serializes invitations and direct joins, enforces capacity, and prevents admission during teardown. Memory membership follows successful role assignment and persistence; a failed database write triggers role rollback.
 - **Legacy migration**: Startup adds missing columns, maps numeric IDs to text, and preserves old records and rosters. Historical `study_groups_db` and `study_group_members_db` names are renamed when the current tables are absent. The earliest schema's `max_size`, session role, and voice channel map to current fields. Records without an old activity flag default to inactive; unavailable category, text-channel, and start-time fields retain neutral defaults.
 - **Group lifecycle**: Saving a group retains its numeric primary key. Ending sets `active=0`, removes current roster entries, stops the dashboard view, and removes every matching Pomodoro alias. Active channel, name, guild, and user lookups exclude ended groups.
 - **Task menus**: Select values use database primary keys; `apply_task_action` checks the owner and exact group, including a null global scope. Typed task commands retain ID/number handling. Purges use one database deletion and remove only matching bot task messages attributed to the invoking user among the latest 100 messages in the current text channel.
 - **Server-scoped tasks**: The `tasks` table stores `guild_id`. Default `/task_list` is scoped to the user's current guild and active group (or global tasks outside groups), preventing tasks from bleeding across different Discord servers. `all_groups: True` lists cross-group tasks and is sent ephemerally.
-- **Server setup**: Every `/setup` invocation opens an ephemeral wizard owned by its invoker. Existing categories and newly named categories remain draft choices until Save. Save resolves the category, creates `cpo-commands` and `cpo-logs` text channels or reuses their recorded channels, and persists category ID, commands channel ID, moderator log channel ID, and default member limit together. New logs channels restrict visibility to the bot, invoker, and Administrator or Manage Server roles. Cancel and expiry leave saved settings unchanged. Changed resources from a failed Save remain available for retry; cancellation and expiry disclose their IDs.
-- **Commands-channel response visibility**: Normal slash success replies are public only when the invocation channel ID equals `guild_settings.commands_channel_id`. Threads, other channels, DMs, unset settings, and lookup failures keep replies private. Errors, sensitive results, and cross-group task lists remain private everywhere. Category membership and matching channel names do not enable public replies.
+- **Server setup**: Every `/setup` invocation opens an ephemeral wizard owned by its invoker. Existing categories and newly named categories remain draft choices until Save. Save resolves the category, creates `cpo-commands` and `cpo-logs` text channels or reuses their recorded channels, and persists category ID, commands channel ID, moderator log channel ID, default member limit, and both default lifetimes together. Both lifetimes default to 86400 seconds, apply to new sessions, and participate in stale-draft checks. Created and reused channels synchronize with category permissions, including logs. Cancel and expiry leave saved settings unchanged. Changed resources from a failed Save remain available for retry; cancellation and expiry disclose their IDs.
+- **Commands-channel response visibility**: Normal slash success replies are public in active group channels or when the invocation channel ID equals `guild_settings.commands_channel_id`. Threads, other channels, DMs, and lookup failures keep replies private. Without a commands-channel setting, active group channels still allow public replies. Errors, sensitive results, and cross-group task lists remain private everywhere. Category membership and matching channel names do not enable public replies.
 - **Operational message destinations**: Group dashboards, check-in reminders, Pomodoro announcements, moderator logs, and invitation DMs continue to use their own channels or recipients. Their placement is independent of the slash reply policy.
 - **Moderator logs**: `guild_settings.mod_log_channel_id` stores the optional destination for creation, ending, and purge embeds. Logs suppress mentions. Missing channels and logging API/database failures do not abort the action.
-- **Voice controls and dashboard**: Speak and Video preserve other permission overwrites and persist their settings. Database failures trigger Discord permission rollback. The initial dashboard carries member mentions, the status embed, and controls together. Force Video warns members after 30 seconds and allows a 60-second camera grace period before disconnecting members who remain camera-off.
+- **Voice controls and dashboard**: Speak and Video preserve other permission overwrites and persist their settings. Database failures trigger Discord permission rollback. The initial dashboard carries member mentions, the status embed, and controls together. Force Video warns members after 30 seconds and allows a 60-second grace period before disconnecting members with neither camera nor screen sharing enabled.
+- **Manager grants and listing**: Grants update within their guild/global scope. `grant_source` distinguishes explicit Manager grants from server-synced Admin/Mod grants; sync removes stale server-synced rows and preserves explicit rows. Permission evaluation rejects stale native authority. Effective lookup selects the highest valid grant, including global developer grants. `/list_managers` includes uncached users and the configured developer, deduplicates by user, and splits output within Discord field/embed limits. Legacy grants remain explicit because their source cannot be reconstructed.
+- **Staff roles**: Setup and grant updates synchronize `CPO Manager` and `CPO Bot Developer` membership and category/channel overwrites. Both roles have no guild-wide permissions; category grants provide manager controls and additional developer role/webhook controls. Existing channel overwrites unrelated to these roles are preserved. Failures report saved grants and required Discord permissions instead of deleting grants.
+- **Contextual profile**: `/user_level` resolves only the active group in the invocation channel. Higher server/global authority overrides that group's owner/member labels. The display name is a separate field; the authorization title is fixed.
+- **Invitations and dashboard**: Group invitation lookup hydrates active persisted groups after cache misses and accepts trimmed, case-insensitive names or text/voice channel context. Group dashboards show Pomodoro/check-in status without their session action buttons; those actions remain on session controls.
+- **Session consent and ending**: Creators join automatically; invitees choose Join/Decline by DM. Pomodoro attendance, pings, and moves use a separate opted-in roster. Current owners and staff end directly; participants request the current owner’s DM approval. Confirmation rejects ended sessions and changed ownership.
+- **Group naming**: A per-guild creation lock serializes historical/live name lookup and provisioning. Unnamed groups use `{user-name}-studysession-{number}`; duplicate custom names append numeric suffixes without changing UUIDs.
 - **Regression execution**: Pytest includes `tests/test_release_fixes.py` and the standalone command matrix. The matrix uses an in-memory database and closes the bot in `finally`.
 
 | Component | State Medium | Concurrency & Sync Mechanism | Invariant Rules |
 |---|---|---|---|
 | **Study Groups** | In-Memory (`StudyGroupCog.sessions`) & SQLite (`study_groups`) | Synchronized during lifecycle events; hydrated from SQLite on startup. | An active study group must hold valid `text_id`, `vc_id`, and `group_role_id`. When terminated, channels and roles must be deleted, `active` set to `0`, and memory references popped. |
-| **Pomodoro Engine** | In-Memory (`Pomodoro.sessions`) & SQLite (`pomodoro_sessions`) | Tick evaluation via background loop; notifications routed to channel. | The ratio between Focus, Short Break, and Long Break must strictly obey `(focus, focus // 5, focus * 3 // 5)`. After 4 cycles, Long Break is enforced. |
+| **Pomodoro Engine** | In-memory (`Pomodoro.sessions`); existing SQLite save stub is unused | Tick evaluation checks UTC expiry even while paused; reminders go to the group channel. | Each stage is 2–240 minutes; automatic breaks use the 5:1:3 ratio with a two-minute minimum. Every fourth cycle has a long break. Renew adds 24 hours; runtime state is lost on restart. |
 | **Check-in Standups** | In-Memory (`CheckinCog.active_sessions`) & SQLite (`checkin_sessions`) | Periodic `asyncio.sleep` reminder loop with member state dict. | Member absences cannot be negative. If absences exceed `max_absences`, member status transitions to `exited` or is kicked from group. |
 | **Task Lists** | SQLite (`tasks`) | Atomic parameterized SQL queries under `async with self.lock:`. | If invoked inside a study group channel (`channel_id`), tasks are strictly scoped to `group_id`. Global tasks are isolated from group tasks. |
 | **Permission Controls** | Memory Cache & SQLite (`managers`) | Dynamic permission resolution cascading across 5 tiers. | Superuser `BOT_DEVELOPER` (ID in `.env`) unconditionally overrides all guild-level and group-level permissions. |
@@ -342,9 +355,9 @@ graph TD
     subgraph Levels ["5-Tier Permission Hierarchy (cogs/manager.py)"]
         L4["Tier 4: BOT_DEVELOPER<br/>• Configured in .env (BOT_DEVELOPER_ID)<br/>• Global superadmin across all guilds<br/>• Sync commands, add/remove managers, override any session"]
         L3["Tier 3: GUILD_MANAGER<br/>• Server Owner (guild.owner_id) or Server Administrator<br/>• Members with manage_guild / manage_channels / manage_roles<br/>• End or control any session in guild, manage whitelist/settings"]
-        L2["Tier 2: GROUP_OWNER<br/>• Host/Creator of a study group or checkin session<br/>• End session, invite/kick members, toggle VC settings, start Pomodoro"]
+        L2["Tier 2: GROUP_OWNER<br/>• Current owner in active group context<br/>• End session, invite/kick members, toggle VC settings, start Pomodoro"]
         L1["Tier 1: GROUP_MEMBER<br/>• Roster member of active study group or checkin<br/>• Interact with Present/Break/Exit buttons, join study VC, view task list"]
-        L0["Tier 0: REGULAR_USER<br/>• Baseline Discord guild member<br/>• Create new study groups (under caps), manage personal tasks"]
+        L0["Tier 0: SERVER_MEMBER<br/>• Baseline Discord guild member<br/>• Create new study groups (under caps), manage personal tasks"]
     end
 
     L4 -->|Overrides| L3

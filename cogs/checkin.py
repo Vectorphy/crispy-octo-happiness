@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+import sqlite3
 import sys
 import uuid
 from datetime import datetime, timedelta
@@ -13,10 +14,12 @@ from discord import app_commands
 from discord.ext import commands
 from discord.ui import Button, Select, View
 
+from cogs._session_controls import request_session_end
 from database import DBHandler
 from utils import (
     acknowledge_interaction,
     check_manager,
+    is_guild_manager,
     parse_duration,
     parse_mentions,
     parse_seconds_to_hms,
@@ -46,14 +49,44 @@ class MemberStatusKey(str, Enum):
     ABSENCES = "absences"
 
 
+class CheckinInvitationView(View):
+    def __init__(self, session: "CheckinSession", invitee_id: int):
+        super().__init__(timeout=3600)
+        self.session = session
+        self.invitee_id = invitee_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invitee_id:
+            await interaction.response.send_message("This invitation is for someone else.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.green)
+    async def join(self, interaction: discord.Interaction, button: Button[Any]) -> None:
+        if interaction.user.id != self.invitee_id:
+            await interaction.response.send_message("This invitation is for someone else.", ephemeral=True)
+            return
+        await self.session.join_session_callback(interaction)
+        if interaction.user.id in self.session.member_ids:
+            self.stop()
+
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.grey)
+    async def decline(self, interaction: discord.Interaction, button: Button[Any]) -> None:
+        if interaction.user.id != self.invitee_id:
+            await interaction.response.send_message("This invitation is for someone else.", ephemeral=True)
+            return
+        await interaction.response.send_message("Invitation declined.", ephemeral=True)
+        self.stop()
+
+
 ## Permission Class
 class CheckinGuildSettings:
     def __init__(
         self,
         interaction: Optional[discord.Interaction] = None,
         max_members: int = 10,
-        min_duration: int = 20,
-        max_duration: int = 7200,
+        min_duration: int = 120,
+        max_duration: int = 14400,
         max_absences: int = 3,
         max_breaks: int = 3,
         max_user_sessions: int = 5,
@@ -103,7 +136,10 @@ class CheckinGuildSettings:
         @wraps(func)
         async def wrapper(session: "CheckinSession", interaction: discord.Interaction, *args, **kwargs):
             if interaction.user.id not in session.member_ids:
-                await interaction.response.send_message("You are not a member of this session.", ephemeral=True)
+                if interaction.response.is_done():
+                    await send_response(interaction, "You are not a member of this session.", ephemeral=True)
+                else:
+                    await interaction.response.send_message("You are not a member of this session.", ephemeral=True)
                 return
             return await func(session, interaction, *args, **kwargs)
 
@@ -169,10 +205,7 @@ class CheckinGuildSettings:
 
         @wraps(func)
         async def wrapper(session: "CheckinSession", interaction: discord.Interaction, *args, **kwargs):
-            is_authorized = interaction.user.id in (
-                session.owner_id,
-                session.creator_id,
-            ) or await check_manager(interaction)
+            is_authorized = interaction.user.id == session.owner_id or await check_manager(interaction)
             if not is_authorized:
                 if interaction.response.is_done():
                     await send_response(
@@ -406,6 +439,7 @@ class CheckinSession:
         self.db: DBHandler = db
         self.guild: Optional[discord.Guild] = interaction.guild if interaction else None
         self.end_session_event = asyncio.Event()
+        self.join_lock = asyncio.Lock()
 
         logger.debug("Check-in session created with duration: %s seconds", duration)
 
@@ -844,7 +878,8 @@ class CheckinSession:
     @CheckinGuildSettings.is_member
     async def mark_present_callback(self, interaction: discord.Interaction):
         try:
-            await acknowledge_interaction(interaction)
+            if not interaction.response.is_done():
+                await acknowledge_interaction(interaction)
             logger.info(f"Mark present initiated by {interaction.user.display_name} for session {self.session_id}.")
 
             user_id: int = interaction.user.id
@@ -890,7 +925,8 @@ class CheckinSession:
             self.member_ids = [
                 member_id
                 for member_id in self.member_statuses.keys()
-                if self.member_statuses.get(user_id, {}).get(MemberStatusKey.STATUS.value) != MemberStatus.EXITED.value
+                if self.member_statuses.get(member_id, {}).get(MemberStatusKey.STATUS.value)
+                != MemberStatus.EXITED.value
             ]
 
             # Save to DB
@@ -916,7 +952,8 @@ class CheckinSession:
     @CheckinGuildSettings.is_member
     async def start_break_callback(self, interaction: discord.Interaction):
         try:
-            await acknowledge_interaction(interaction)
+            if not interaction.response.is_done():
+                await acknowledge_interaction(interaction)
             logger.info(f"Start break initiated by {interaction.user.display_name} for session {self.session_id}.")
 
             user_id: int = interaction.user.id
@@ -950,7 +987,8 @@ class CheckinSession:
             self.member_ids = [
                 member_id
                 for member_id in self.member_statuses.keys()
-                if self.member_statuses.get(user_id, {}).get(MemberStatusKey.STATUS.value) != MemberStatus.EXITED.value
+                if self.member_statuses.get(member_id, {}).get(MemberStatusKey.STATUS.value)
+                != MemberStatus.EXITED.value
             ]
 
             # Save to DB
@@ -979,59 +1017,44 @@ class CheckinSession:
     ## Button Function - Join Session
     async def join_session_callback(self, interaction: discord.Interaction):
         try:
-            await acknowledge_interaction(interaction)
-            logger.info(f"Join session initiated by {interaction.user.display_name} for session {self.session_id}.")
-
-            user_id: int = interaction.user.id
-            # If Members are present or absent, return
-            if user_id in self.member_statuses and (
-                self.member_statuses.get(user_id, {}).get(MemberStatusKey.STATUS.value) == MemberStatus.PRESENT.value
-                or self.member_statuses.get(user_id, {}).get(MemberStatusKey.STATUS.value) == MemberStatus.ABSENT.value
-            ):
-                await send_response(interaction, "You are already in the session.", ephemeral=True)
-                return
-
-            # If member is in break, change message
-            if (
-                user_id in self.member_statuses
-                and self.member_statuses.get(user_id, {}).get(MemberStatusKey.STATUS.value) == MemberStatus.BREAK.value
-            ):
-                await send_response(
-                    interaction,
-                    f"Welcome back! Let's start working!. {interaction.user.mention}.",
-                    ephemeral=True,
-                )
-
-            # If user is not in the members_statuses, or has exited the session
-            self.member_statuses[user_id][MemberStatusKey.STATUS.value] = MemberStatus.PRESENT.value
-            self.member_statuses[user_id][MemberStatusKey.ABSENCES.value] = 0
-            self.member_ids = [
-                member_id
-                for member_id in self.member_statuses.keys()
-                if self.member_statuses.get(user_id, {}).get(MemberStatusKey.STATUS.value) != MemberStatus.EXITED.value
-            ]
-
-            # Save to DB
-            await self.db.add_or_update_checkin_member(
-                self.session_id,
-                user_id,
-                str(self.member_statuses[user_id][MemberStatusKey.STATUS.value]),
-                int(self.member_statuses[user_id][MemberStatusKey.ABSENCES.value]),
-            )
+            if not interaction.response.is_done():
+                await acknowledge_interaction(interaction)
+            user_id = interaction.user.id
+            async with self.join_lock:
+                if self.end_session_event.is_set() or self.cog.active_sessions.get(self.session_id) is not self:
+                    await send_response(interaction, "This check-in has ended.", ephemeral=True)
+                    return
+                guild = self.cog.bot.get_guild(self.guild_id)
+                if guild is None or guild.get_member(user_id) is None:
+                    await send_response(interaction, "You must be a member of this server to join.", ephemeral=True)
+                    return
+                if user_id in self.member_ids:
+                    await send_response(interaction, "You are already in the session.", ephemeral=True)
+                    return
+                if len(self.member_ids) >= self.max_members:
+                    await send_response(interaction, "This check-in is full.", ephemeral=True)
+                    return
+                await self.db.add_or_update_checkin_member(self.session_id, user_id, MemberStatus.PRESENT.value, 0)
+                self.member_statuses[user_id] = {
+                    MemberStatusKey.STATUS.value: MemberStatus.PRESENT.value,
+                    MemberStatusKey.ABSENCES.value: 0,
+                }
+                self.member_ids.append(user_id)
 
             await send_response(interaction, "You have joined the session.", ephemeral=True)
             await self.update_embed()
 
-        except Exception as e:
-            logger.error(f"Failed to join session for user: {interaction.user.display_name}: {str(e)}")
-            await send_response(interaction, f"Failed to join session. {str(e)}", ephemeral=True)
+        except (sqlite3.Error, discord.HTTPException, RuntimeError, OSError):
+            logger.exception("Failed to join check-in session_id=%s user_id=%s", self.session_id, interaction.user.id)
+            await send_response(interaction, "Failed to join this check-in.", ephemeral=True)
 
     ## Button Function - Leave Session
     @CheckinGuildSettings.is_member
     async def leave_session_callback(self, interaction: discord.Interaction):
         # Remove user from the session and update absent and members lists
         try:
-            await acknowledge_interaction(interaction)
+            if not interaction.response.is_done():
+                await acknowledge_interaction(interaction)
             logger.info(f"Leave session initiated by {interaction.user.display_name} for session {self.session_id}.")
 
             user_id: int = interaction.user.id
@@ -1054,7 +1077,8 @@ class CheckinSession:
             self.member_ids = [
                 member_id
                 for member_id in self.member_statuses.keys()
-                if self.member_statuses.get(user_id, {}).get(MemberStatusKey.STATUS.value) != MemberStatus.EXITED.value
+                if self.member_statuses.get(member_id, {}).get(MemberStatusKey.STATUS.value)
+                != MemberStatus.EXITED.value
             ]
 
             # Update DB
@@ -1087,10 +1111,7 @@ class CheckinSession:
 
             user_id = interaction.user.id
             menu_msg: Optional[discord.Message] = None
-            is_authorized = user_id in (
-                self.owner_id,
-                self.creator_id,
-            ) or await check_manager(interaction)
+            is_authorized = user_id == self.owner_id or await check_manager(interaction)
             if not is_authorized:
                 await send_response(
                     interaction,
@@ -1105,7 +1126,13 @@ class CheckinSession:
                 ephemeral=True,
             )
 
-            rest_members_list = [member_id for member_id in self.member_ids if member_id != self.owner_id]
+            rest_members_list = [
+                member_id
+                for member_id in self.member_ids
+                if member_id != self.owner_id
+                and self.member_statuses.get(member_id, {}).get(MemberStatusKey.STATUS.value)
+                != MemberStatus.EXITED.value
+            ]
 
             if not rest_members_list:
                 await send_response(
@@ -1143,7 +1170,11 @@ class CheckinSession:
                 old_owner = self.guild.get_member(old_owner_id)
                 old_mention = old_owner.mention if old_owner else f"<@{old_owner_id}>"
 
-                if selected_user_id not in self.member_ids:
+                if (
+                    selected_user_id not in self.member_ids
+                    or self.member_statuses.get(selected_user_id, {}).get(MemberStatusKey.STATUS.value)
+                    == MemberStatus.EXITED.value
+                ):
                     logger.error(
                         f"The selected member with id {selected_user_id} is not in the Session named {self.name}. Exiting..."
                     )
@@ -1186,27 +1217,45 @@ class CheckinSession:
             )
 
     ## Button Function - End Session
-    @CheckinGuildSettings.is_owner
     async def end_session_callback(self, interaction: discord.Interaction):
         try:
-            await acknowledge_interaction(interaction)
-            logger.info(f"End session initiated by {interaction.user.display_name} for session {self.session_id}.")
-
-            owner_member = self.guild.get_member(self.owner_id) if self.guild else None
-            owner_str = owner_member.display_name if owner_member else f"User {self.owner_id}"
-
-            can_end_session = (
-                self.can_end(interaction.user.id)
-                or interaction.user.id == self.owner_id
-                or await check_manager(interaction)
-            )
-            if not can_end_session:
-                await send_response(
+            if not interaction.response.is_done():
+                await acknowledge_interaction(interaction)
+            if self.end_session_event.is_set() or self.cog.active_sessions.get(self.session_id) is not self:
+                await send_response(interaction, "This check-in has already ended.", ephemeral=True)
+                return
+            if interaction.user.id != self.owner_id and not await is_guild_manager(interaction):
+                if interaction.user.id not in self.member_ids:
+                    await send_response(
+                        interaction, "Only participants can request to end this check-in.", ephemeral=True
+                    )
+                    return
+                owner_id = self.owner_id
+                await request_session_end(
                     interaction,
-                    "Only the session owner, creator, or server managers/moderators can end the session.",
-                    ephemeral=True,
+                    owner_id=owner_id,
+                    label=f"check-in {self.name}",
+                    is_active=lambda: (
+                        self.cog.active_sessions.get(self.session_id) is self
+                        and not self.end_session_event.is_set()
+                        and self.owner_id == owner_id
+                    ),
+                    on_confirm=self._finish_end_session,
                 )
                 return
+            await self._finish_end_session(interaction)
+        except (sqlite3.Error, discord.HTTPException, RuntimeError, OSError):
+            logger.exception("Failed to end check-in session_id=%s user_id=%s", self.session_id, interaction.user.id)
+            await send_response(interaction, "Failed to end this check-in.", ephemeral=True)
+
+    async def _finish_end_session(self, interaction: discord.Interaction) -> None:
+        if self.end_session_event.is_set() or self.cog.active_sessions.get(self.session_id) is not self:
+            await send_response(interaction, "This check-in has already ended.", ephemeral=True)
+            return
+
+        try:
+            owner_member = self.guild.get_member(self.owner_id) if self.guild else None
+            owner_str = owner_member.display_name if owner_member else f"User {self.owner_id}"
 
             await self.disable_previous_buttons()
 
@@ -1233,16 +1282,16 @@ class CheckinSession:
             logger.info(f"Check-in session {self.session_id} successfully ended by {interaction.user.display_name}.")
             ephemeral = await should_use_ephemeral(interaction, self.db)
             await send_response(interaction, embed=embed, ephemeral=ephemeral)
-        except Exception as e:
-            logger.error(f"Failed in end_session_callback for user: {interaction.user.display_name}: {str(e)}")
-            await send_response(interaction, f"Failed to end session. {str(e)}", ephemeral=True)
+        except (sqlite3.Error, discord.HTTPException, RuntimeError, OSError):
+            logger.exception("Failed to end check-in session_id=%s user_id=%s", self.session_id, interaction.user.id)
+            await send_response(interaction, "Failed to end this check-in.", ephemeral=True)
 
     """End Session Helper Functions"""
 
     ## Helper Function - Can End
     def can_end(self, user_id: int):
         # Determine if the user can end the session.
-        return user_id in (self.creator_id, self.owner_id)
+        return user_id == self.owner_id
 
     ## Helper Function - Clear Session Data
     async def clear_session_data(self):
@@ -1314,7 +1363,11 @@ class CheckinCog(commands.Cog):
                     cog=self,
                     interaction=None,  # Interaction is not available during bot restart
                     name=session_data["name"],
-                    member_ids=[m["member_id"] for m in member_statuses],
+                    member_ids=[
+                        m["member_id"]
+                        for m in member_statuses
+                        if m[MemberStatusKey.STATUS.value] != MemberStatus.EXITED.value
+                    ],
                     duration=int(session_data["duration"]),
                     settings=this_guild_settings,
                 )
@@ -1323,6 +1376,7 @@ class CheckinCog(commands.Cog):
                 session.session_id = session_data["session_id"]
                 session.guild_id = session_data["guild_id"]
                 session.creator_id = session_data["creator_id"]
+                session.owner_id = session_data.get("owner_id") or session.creator_id
                 session.text_id = (
                     session_data["text_id"] if "text_id" in session_data else session_data.get("text_channel_id", 0)
                 )
@@ -1384,8 +1438,13 @@ class CheckinCog(commands.Cog):
         if duration_seconds is None:
             await send_response(interaction, "Invalid duration format.", ephemeral=True)
             return
+        if not 120 <= duration_seconds <= 14400:
+            await send_response(interaction, "Check-in duration must be between 2 minutes and 4 hours.", ephemeral=True)
+            return
 
-        member_ids: List[int] = parse_mentions(interaction, mentions) if mentions else [interaction.user.id]
+        invitee_ids = set(parse_mentions(interaction, mentions)) if mentions else set()
+        invitee_ids.discard(interaction.user.id)
+        member_ids: List[int] = [interaction.user.id]
 
         if interaction.guild.id not in self.guild_settings:
             self.guild_settings[interaction.guild.id] = CheckinGuildSettings(interaction)
@@ -1423,13 +1482,30 @@ class CheckinCog(commands.Cog):
             await session.send_reminder_message(initial=True)
             asyncio.create_task(session.run_checkin_reminders())
             await send_response(interaction, f"Check-in session **{name}** started.", ephemeral=ephemeral)
+            for invitee_id in invitee_ids:
+                member = interaction.guild.get_member(invitee_id)
+                if member is None:
+                    continue
+                try:
+                    await member.send(
+                        f"You are invited to join the check-in **{name}**. Joining is optional.",
+                        view=CheckinInvitationView(session, invitee_id),
+                    )
+                except discord.HTTPException:
+                    logger.warning(
+                        "Could not DM check-in invitation guild_id=%s session_id=%s user_id=%s",
+                        interaction.guild.id,
+                        session.session_id,
+                        invitee_id,
+                    )
         except Exception as e:
+            if "session" in locals():
+                self.active_sessions.pop(session.session_id, None)
             logger.error(f"Error starting check-in session: {str(e)}")
             await send_response(interaction, "An error occurred while starting the check-in session.", ephemeral=True)
 
     ## Command - /setup_checkin
     @app_commands.command(name="settings_checkin", description="Changes the Settings of Checkin Module")
-    @app_commands.default_permissions(administrator=True)
     @app_commands.describe(
         max_members="Maximum members allowed in a Checkin Session",
         min_duration="Minimum Duration Allowed",
@@ -1443,8 +1519,8 @@ class CheckinCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         max_members: int = 10,
-        min_duration: int = 20,
-        max_duration: int = 7200,
+        min_duration: int = 120,
+        max_duration: int = 14400,
         max_absences: int = 3,
         max_breaks: int = 3,
         max_user_sessions: int = 5,
@@ -1460,6 +1536,14 @@ class CheckinCog(commands.Cog):
             await send_response(
                 interaction,
                 "You do not have permission to manage check-in settings.",
+                ephemeral=True,
+            )
+            return
+
+        if not 120 <= min_duration <= max_duration <= 14400:
+            await send_response(
+                interaction,
+                "Check-in reminder limits must stay between 2 minutes and 4 hours.",
                 ephemeral=True,
             )
             return

@@ -40,40 +40,10 @@ class TestPomodoroRatioAndFeatures(unittest.TestCase):
         # All provided
         self.assertEqual(calculate_pomodoro_ratio(45, 10, 20), (45, 10, 20))
 
-    def test_voice_join_session_is_linked_by_database_group_ids(self):
-        async def run_test():
-            bot = MagicMock()
-            bot.db = AsyncMock()
-            cog = Pomodoro(bot)
-            cog.send_notification = AsyncMock()
-            cog._update_group_gui = AsyncMock()
-            cog.run_timer = MagicMock()
-            cog.run_timer.is_running.return_value = False
-
-            group = {
-                "id": 42,
-                "group_id": "sg-42",
-                "text_id": 777,
-                "vc_id": 888,
-            }
-            bot.db.get_study_group_by_channel.return_value = group
-            member = MagicMock()
-            member.id = 123
-            member.guild.id = 999
-            before = MagicMock()
-            before.channel = None
-            after = MagicMock()
-            after.channel.id = 888
-
-            await cog.on_voice_state_update(member, before, after)
-
-            session = cog.sessions[42]
-            self.assertIs(cog.sessions["sg-42"], session)
-            self.assertEqual(session.group_id, "sg-42")
-            self.assertTrue(session.require_vc)
-            cog.send_notification.assert_awaited_once()
-
-        asyncio.run(run_test())
+    def test_voice_join_does_not_start_sessions_without_consent(self):
+        cog = Pomodoro(MagicMock())
+        self.assertNotIn("on_voice_state_update", [name for name, _ in cog.get_listeners()])
+        self.assertEqual(cog.sessions, {})
 
     def test_start_pomodoro_require_vc_false(self):
         async def run_test():
@@ -390,9 +360,11 @@ class TestStudyGroupEmbedIntegration(unittest.TestCase):
                 max_members=10,
                 member_ids=[123, 456, 789],
             )
+            db.fetch_members_of_group.return_value = [123, 456, 789]
             group.text_id = 777
             group.vc_id = 888
             group.group_role_id = 999
+            group.active = True
 
             guild = MagicMock()
             group.guild = guild
@@ -421,12 +393,15 @@ class TestStudyGroupEmbedIntegration(unittest.TestCase):
             mock_pomo_session.timer = 1200
             mock_pomo_session.cycles = 3
             mock_pomo_session.require_vc = False
+            mock_pomo_session.guild_id = 999
+            mock_pomo_session.owner_id = 123
             mock_pomo_cog.sessions = {group.group_id: mock_pomo_session}
 
             # Mock Checkin Cog with active session
             mock_checkin_cog = MagicMock()
             mock_checkin_session = MagicMock()
             mock_checkin_session.text_id = 777
+            mock_checkin_session.guild_id = 999
             mock_checkin_session.name = "Daily Sprint Standup"
             mock_checkin_session.next_reminder_time = 1788570000
             mock_checkin_session.member_statuses = {
@@ -467,34 +442,9 @@ class TestStudyGroupEmbedIntegration(unittest.TestCase):
             self.assertIn("On Break** (1)", checkin_field.value)
             self.assertIn("Absent** (1)", checkin_field.value)
 
-            # Test integrated callbacks
-            interaction = AsyncMock()
-            interaction.user.id = 123
-            interaction.user.mention = "<@123>"
-
-            # 1. Refresh GUI callback
-            await group.refresh_gui_callback(interaction)
-            interaction.response.send_message.assert_called_with("🔄 Study group dashboard refreshed!", ephemeral=True)
-
-            # 2. Checkin Present callback
-            interaction.response.send_message.reset_mock()
-            await group.checkin_present_callback(interaction)
-            interaction.response.send_message.assert_called_once()
-            self.assertIn("Present", interaction.response.send_message.call_args[0][0])
-            self.assertEqual(mock_checkin_session.member_statuses[123]["status"], "present")
-
-            # 3. Checkin Break callback
-            interaction.response.send_message.reset_mock()
-            await group.checkin_break_callback(interaction)
-            interaction.response.send_message.assert_called_once()
-            self.assertIn("Break", interaction.response.send_message.call_args[0][0])
-            self.assertEqual(mock_checkin_session.member_statuses[123]["status"], "break")
-
-            # 4. Pomodoro Toggle callback
-            interaction.response.send_message.reset_mock()
-            await group.pomo_toggle_callback(interaction)
-            interaction.response.send_message.assert_called_once()
-            self.assertTrue(mock_pomo_session.is_paused)
+            labels = {item.label for item in group.view.children}
+            self.assertFalse(any(label.startswith(("Check-in:", "Pomo:")) for label in labels))
+            self.assertEqual(len(labels), 9)
 
         asyncio.run(run_test())
 

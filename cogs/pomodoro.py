@@ -1,13 +1,26 @@
+import asyncio
 import logging
 import random
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Set, Tuple
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from utils import acknowledge_interaction, check_manager, send_response, should_use_ephemeral
+from cogs._session_controls import request_session_end
+from utils import (
+    acknowledge_interaction,
+    check_manager,
+    is_guild_manager,
+    send_response,
+    should_use_ephemeral,
+)
+
+MIN_STAGE_MINUTES = 2
+MAX_STAGE_MINUTES = 240
+DEFAULT_SESSION_DURATION = 86400
+RENEWAL_NOTICE_SECONDS = 3600
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -170,45 +183,45 @@ def calculate_pomodoro_ratio(
     provided = [x is not None for x in (focus, short_break, long_break)]
 
     if all(provided):
-        return (max(1, focus), max(1, short_break), max(1, long_break))  # type: ignore
+        return (max(2, focus), max(2, short_break), max(2, long_break))  # type: ignore
 
     if not any(provided):
         return (25, 5, 15)
 
     if focus is not None and short_break is None and long_break is None:
-        f = max(1, focus)
-        sb = max(1, round(f * 1 / 5))
-        lb = max(1, round(f * 3 / 5))
+        f = max(2, focus)
+        sb = max(2, f // 5)
+        lb = max(2, f * 3 // 5)
         return (f, sb, lb)
 
     if short_break is not None and focus is None and long_break is None:
-        sb = max(1, short_break)
-        f = max(1, round(sb * 5 / 1))
-        lb = max(1, round(sb * 3 / 1))
+        sb = max(2, short_break)
+        f = max(2, round(sb * 5 / 1))
+        lb = max(2, round(sb * 3 / 1))
         return (f, sb, lb)
 
     if long_break is not None and focus is None and short_break is None:
-        lb = max(1, long_break)
-        f = max(1, round(lb * 5 / 3))
-        sb = max(1, round(lb * 1 / 3))
+        lb = max(2, long_break)
+        f = max(2, round(lb * 5 / 3))
+        sb = max(2, round(lb * 1 / 3))
         return (f, sb, lb)
 
     if focus is not None and short_break is not None and long_break is None:
-        f = max(1, focus)
-        sb = max(1, short_break)
-        lb = max(1, round(f * 3 / 5))
+        f = max(2, focus)
+        sb = max(2, short_break)
+        lb = max(2, f * 3 // 5)
         return (f, sb, lb)
 
     if focus is not None and long_break is not None and short_break is None:
-        f = max(1, focus)
-        lb = max(1, long_break)
-        sb = max(1, round(f * 1 / 5))
+        f = max(2, focus)
+        lb = max(2, long_break)
+        sb = max(2, f // 5)
         return (f, sb, lb)
 
     if short_break is not None and long_break is not None and focus is None:
-        sb = max(1, short_break)
-        lb = max(1, long_break)
-        f = max(1, round(sb * 5 / 1))
+        sb = max(2, short_break)
+        lb = max(2, long_break)
+        f = max(2, round(sb * 5 / 1))
         return (f, sb, lb)
 
     return (25, 5, 15)
@@ -225,12 +238,19 @@ class PomodoroSession:
         text_id: Optional[int] = None,
         vc_id: Optional[int] = None,
         require_vc: bool = True,
+        owner_id: Optional[int] = None,
+        lifetime_seconds: int = DEFAULT_SESSION_DURATION,
     ):
         self.group_id = group_id
         self.guild_id = guild_id
         self.text_id = text_id
         self.vc_id = vc_id
         self.require_vc = require_vc
+        self.owner_id = owner_id
+        self.participants: Set[int] = {owner_id} if owner_id is not None else set()
+        self.expires_at = datetime.now(timezone.utc) + timedelta(seconds=lifetime_seconds)
+        self.warned_deadline: Optional[datetime] = None
+        self.renew_lock = asyncio.Lock()
         self.focus = focus
         self.short_break = short_break
         self.long_break = long_break
@@ -255,6 +275,11 @@ class PomodoroPresenceView(discord.ui.View):
 
     @discord.ui.button(label="Present", style=discord.ButtonStyle.green, custom_id="pomo_present")
     async def present_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in self.session.participants:
+            await interaction.response.send_message(
+                "Join this Pomodoro session before marking attendance.", ephemeral=True
+            )
+            return
         if interaction.user.id in self.session.dropped_out_members:
             await interaction.response.send_message(
                 "You dropped out of this session. Use /resume_pomodoro to rejoin.",
@@ -267,6 +292,11 @@ class PomodoroPresenceView(discord.ui.View):
 
     @discord.ui.button(label="Absent", style=discord.ButtonStyle.red, custom_id="pomo_absent")
     async def absent_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in self.session.participants:
+            await interaction.response.send_message(
+                "Join this Pomodoro session before marking attendance.", ephemeral=True
+            )
+            return
         if interaction.user.id in self.session.dropped_out_members:
             await interaction.response.send_message("You have already dropped out.", ephemeral=True)
             return
@@ -285,23 +315,144 @@ class PomodoroPresenceView(discord.ui.View):
             )
 
 
+class PomodoroInvitationView(discord.ui.View):
+    def __init__(self, cog: "Pomodoro", session: PomodoroSession, invitee_id: int):
+        super().__init__(timeout=3600)
+        self.cog = cog
+        self.session = session
+        self.invitee_id = invitee_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invitee_id:
+            await interaction.response.send_message("This invitation is for someone else.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.green)
+    async def join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.defer(ephemeral=True)
+        if interaction.user.id != self.invitee_id:
+            await send_response(interaction, "This invitation is for someone else.", ephemeral=True)
+            return
+        session = self.session
+        if (
+            not any(existing is session for existing in self.cog.sessions.values())
+            or datetime.now(timezone.utc) >= session.expires_at
+        ):
+            await send_response(interaction, "This Pomodoro session has ended.", ephemeral=True)
+            return
+        guild = self.cog.bot.get_guild(session.guild_id)
+        if guild is None or guild.get_member(interaction.user.id) is None:
+            await send_response(interaction, "You must still be a member of the server.", ephemeral=True)
+            return
+        if interaction.user.id in session.participants:
+            await send_response(interaction, "You already joined this Pomodoro session.", ephemeral=True)
+            return
+        session.participants.add(interaction.user.id)
+        member = guild.get_member(interaction.user.id)
+        destination = guild.get_channel(session.vc_id) if session.vc_id else None
+        if (
+            session.require_vc
+            and isinstance(member, discord.Member)
+            and member.voice
+            and isinstance(destination, discord.VoiceChannel)
+        ):
+            try:
+                await member.move_to(destination)
+            except discord.HTTPException:
+                logger.warning(
+                    "Could not move opted-in participant guild_id=%s group_id=%s user_id=%s",
+                    session.guild_id,
+                    session.group_id,
+                    interaction.user.id,
+                )
+        await send_response(interaction, "You joined the Pomodoro session.", ephemeral=True)
+        self.stop()
+
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.grey)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if interaction.user.id != self.invitee_id:
+            await interaction.response.send_message("This invitation is for someone else.", ephemeral=True)
+            return
+        await interaction.response.send_message("Invitation declined.", ephemeral=True)
+        self.stop()
+
+
+class PomodoroRenewView(discord.ui.View):
+    def __init__(self, cog: "Pomodoro", session: PomodoroSession, deadline: datetime):
+        super().__init__(timeout=3600)
+        self.cog = cog
+        self.session = session
+        self.deadline = deadline
+
+    @discord.ui.button(label="Renew for 24 hours", style=discord.ButtonStyle.green)
+    async def renew(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.defer(ephemeral=True)
+        session = self.session
+        async with session.renew_lock:
+            if (
+                not any(existing is session for existing in self.cog.sessions.values())
+                or datetime.now(timezone.utc) >= session.expires_at
+            ):
+                await send_response(interaction, "This Pomodoro session has ended.", ephemeral=True)
+                return
+            if isinstance(interaction.guild_id, int) and interaction.guild_id != session.guild_id:
+                await send_response(interaction, "This session belongs to another server.", ephemeral=True)
+                return
+            if interaction.user.id not in session.participants and not await is_guild_manager(interaction):
+                await send_response(
+                    interaction, "Only participants or server managers can renew this session.", ephemeral=True
+                )
+                return
+            if session.expires_at != self.deadline:
+                await send_response(interaction, "This renewal has already been used.", ephemeral=True)
+                return
+            session.expires_at += timedelta(hours=24)
+            session.warned_deadline = None
+        await send_response(interaction, "Pomodoro session renewed for 24 hours.", ephemeral=True)
+        self.stop()
+
+
 class Pomodoro(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.sessions: Dict[Any, PomodoroSession] = {}
         logger.info("Pomodoro cog initialized")
 
+    def _remove_session(self, session: PomodoroSession) -> None:
+        for key, existing in list(self.sessions.items()):
+            if existing is session:
+                self.sessions.pop(key, None)
+        if not self.sessions and self.run_timer.is_running():
+            self.run_timer.stop()
+
+    async def set_paused(self, session: PomodoroSession, paused: bool) -> bool:
+        """Change an active session's timer state for dashboard controls."""
+        if not any(existing is session for existing in self.sessions.values()):
+            return False
+        if datetime.now(timezone.utc) >= session.expires_at:
+            return False
+        session.is_paused = paused
+        await self._update_group_gui(session.group_id)
+        return True
+
+    async def finish_session(
+        self, interaction: discord.Interaction, group: Dict[str, Any], session: PomodoroSession
+    ) -> None:
+        """End the resolved session and acknowledge a dashboard interaction."""
+        await self._finish_pomodoro(interaction, group, session)
+
     async def _resolve_group(self, interaction: discord.Interaction) -> Optional[Dict[str, Any]]:
         """Resolve target study group for the interaction."""
         # 1. Check if user is a member of an active group
         group = await self.bot.db.get_user_group(interaction.user.id, interaction.channel_id)
-        if group:
+        if group and group.get("guild_id", interaction.guild_id) == interaction.guild_id:
             return group
 
         # 2. Check if user is currently in a VC associated with an active study group
         if isinstance(interaction.user, discord.Member) and interaction.user.voice and interaction.user.voice.channel:
             vc_group = await self.bot.db.get_study_group_by_channel(interaction.user.voice.channel.id)
-            if vc_group:
+            if vc_group and vc_group.get("guild_id", interaction.guild_id) == interaction.guild_id:
                 is_manager = await check_manager(interaction)
                 members = await self.bot.db.fetch_members_of_group(vc_group.get("group_id") or str(vc_group.get("id")))
                 if (
@@ -314,7 +465,7 @@ class Pomodoro(commands.Cog):
         # 3. Check channel context (text channel or VC channel chat)
         if interaction.channel_id:
             channel_group = await self.bot.db.get_study_group_by_channel(interaction.channel_id)
-            if channel_group:
+            if channel_group and channel_group.get("guild_id", interaction.guild_id) == interaction.guild_id:
                 is_manager = await check_manager(interaction)
                 members = await self.bot.db.fetch_members_of_group(
                     channel_group.get("group_id") or str(channel_group.get("id"))
@@ -329,7 +480,7 @@ class Pomodoro(commands.Cog):
         # 4. If user is a server manager or server owner, fallback to the guild's active group
         if interaction.guild_id and await check_manager(interaction):
             guild_group = await self.bot.db.get_study_group(interaction.guild_id)
-            if guild_group:
+            if guild_group and guild_group.get("guild_id") == interaction.guild_id:
                 return guild_group
 
         return None
@@ -415,8 +566,22 @@ class Pomodoro(commands.Cog):
                 await interaction.response.send_message(msg, ephemeral=True)
             return
 
+        if any(
+            value is not None and not MIN_STAGE_MINUTES <= value <= MAX_STAGE_MINUTES
+            for value in (focus, short_break, long_break)
+        ):
+            await send_response(
+                interaction, "Focus and both breaks must each be between 2 minutes and 4 hours.", ephemeral=True
+            )
+            return
+
         # Auto-calculate timings using 5:1:3 ratio
         focus_calc, short_calc, long_calc = calculate_pomodoro_ratio(focus, short_break, long_break)
+        if not all(MIN_STAGE_MINUTES <= value <= MAX_STAGE_MINUTES for value in (focus_calc, short_calc, long_calc)):
+            await send_response(
+                interaction, "Focus and both breaks must each be between 2 minutes and 4 hours.", ephemeral=True
+            )
+            return
 
         if not interaction.guild:
             msg = "This command can only be used in a server."
@@ -430,8 +595,18 @@ class Pomodoro(commands.Cog):
         if require_vc:
             voice_channel_id = group.get("vc_id")
             if not voice_channel_id:
-                voice_channel = await interaction.guild.create_voice_channel(f"{group['name']} VC")
+                category_id = group.get("category_id") or await self.bot.db.get_group_category(interaction.guild.id)
+                category = interaction.guild.get_channel(category_id) if category_id else None
+                if not isinstance(category, discord.CategoryChannel):
+                    await send_response(
+                        interaction, "This group has no configured category for its voice channel.", ephemeral=True
+                    )
+                    return
+                voice_channel = await category.create_voice_channel(
+                    f"{group['name']} VC", overwrites=category.overwrites
+                )
                 await self.bot.db.update_voice_channel(group["id"], voice_channel.id)
+                group["vc_id"] = voice_channel.id
                 logger.info(f"Created new voice channel {voice_channel.id} for group {group['id']}")
             else:
                 ch = interaction.guild.get_channel(voice_channel_id)
@@ -461,6 +636,10 @@ class Pomodoro(commands.Cog):
                     await interaction.response.send_message(msg, ephemeral=True)
                 return
 
+        duration_getter = getattr(self.bot.db, "get_default_pomodoro_duration", None)
+        lifetime_seconds = await duration_getter(interaction.guild_id) if duration_getter else DEFAULT_SESSION_DURATION
+        if not isinstance(lifetime_seconds, int) or lifetime_seconds <= 0:
+            lifetime_seconds = DEFAULT_SESSION_DURATION
         session = PomodoroSession(
             group_id=group.get("group_id") or group["id"],
             focus=focus_calc,
@@ -470,6 +649,8 @@ class Pomodoro(commands.Cog):
             text_id=group.get("text_id"),
             vc_id=group.get("vc_id"),
             require_vc=require_vc,
+            owner_id=interaction.user.id,
+            lifetime_seconds=lifetime_seconds or DEFAULT_SESSION_DURATION,
         )
 
         gid = group.get("id")
@@ -513,6 +694,25 @@ class Pomodoro(commands.Cog):
         )
 
         await self._update_group_gui(group.get("group_id") or group["id"])
+        members = await self.bot.db.fetch_members_of_group(group.get("group_id") or group["id"])
+        for member_id in members:
+            if member_id == interaction.user.id:
+                continue
+            member = interaction.guild.get_member(member_id)
+            if member is None:
+                continue
+            try:
+                await member.send(
+                    f"You are invited to join the Pomodoro session in **{group['name']}**. Joining is optional.",
+                    view=PomodoroInvitationView(self, session, member_id),
+                )
+            except discord.HTTPException:
+                logger.warning(
+                    "Could not DM Pomodoro invitation guild_id=%s group_id=%s user_id=%s",
+                    interaction.guild_id,
+                    session.group_id,
+                    member_id,
+                )
 
     @app_commands.command(
         name="edit_pomodoro",
@@ -558,6 +758,14 @@ class Pomodoro(commands.Cog):
 
         # Handle timing changes
         if any(x is not None for x in (focus, short_break, long_break)):
+            if any(
+                value is not None and not MIN_STAGE_MINUTES <= value <= MAX_STAGE_MINUTES
+                for value in (focus, short_break, long_break)
+            ):
+                await send_response(
+                    interaction, "Focus and both breaks must each be between 2 minutes and 4 hours.", ephemeral=True
+                )
+                return
             # If only one was provided, auto-calculate with ratio
             f_calc, sb_calc, lb_calc = calculate_pomodoro_ratio(
                 (
@@ -568,6 +776,11 @@ class Pomodoro(commands.Cog):
                 short_break if short_break is not None else None,
                 long_break if long_break is not None else None,
             )
+            if not all(MIN_STAGE_MINUTES <= value <= MAX_STAGE_MINUTES for value in (f_calc, sb_calc, lb_calc)):
+                await send_response(
+                    interaction, "Focus and both breaks must each be between 2 minutes and 4 hours.", ephemeral=True
+                )
+                return
             session.focus = f_calc
             session.short_break = sb_calc
             session.long_break = lb_calc
@@ -609,8 +822,6 @@ class Pomodoro(commands.Cog):
     async def end_pomodoro(self, interaction: discord.Interaction):
         if not interaction.response.is_done():
             await acknowledge_interaction(interaction)
-        ephemeral = await should_use_ephemeral(interaction, self.bot.db)
-
         logger.info(f"Attempt to end Pomodoro session by user {interaction.user.id}")
         group = await self._resolve_group(interaction)
         session = self._get_session(group)
@@ -623,28 +834,35 @@ class Pomodoro(commands.Cog):
                 await interaction.response.send_message(msg, ephemeral=True)
             return
 
-        gid = group.get("id")
-        uuid_str = group.get("group_id")
-        keys_to_pop = [
-            c
-            for c in [
-                uuid_str,
-                str(uuid_str) if uuid_str else None,
-                gid,
-                str(gid) if gid else None,
-            ]
-            if c is not None
-        ]
-        for k in keys_to_pop:
-            self.sessions.pop(k, None)
+        if interaction.user.id != session.owner_id and not await is_guild_manager(interaction):
+            if interaction.user.id not in session.participants:
+                await send_response(interaction, "Only participants can request to end this session.", ephemeral=True)
+                return
+            owner_id = session.owner_id
+            if not isinstance(owner_id, int):
+                await send_response(interaction, "The session owner is unavailable.", ephemeral=True)
+                return
+            await request_session_end(
+                interaction,
+                owner_id=owner_id,
+                label="Pomodoro session",
+                is_active=lambda: (
+                    any(existing is session for existing in self.sessions.values()) and session.owner_id == owner_id
+                ),
+                on_confirm=lambda owner_interaction: self._finish_pomodoro(owner_interaction, group, session),
+            )
+            return
+        await self._finish_pomodoro(interaction, group, session)
 
-        if not self.sessions and self.run_timer.is_running():
-            self.run_timer.stop()
+    async def _finish_pomodoro(
+        self, interaction: discord.Interaction, group: Dict[str, Any], session: PomodoroSession
+    ) -> None:
+        if not any(existing is session for existing in self.sessions.values()):
+            await send_response(interaction, "This Pomodoro session has already ended.", ephemeral=True)
+            return
+        self._remove_session(session)
         logger.info(f"Ended Pomodoro session for group {group['id']}")
-        if interaction.response.is_done():
-            await send_response(interaction, "Pomodoro session ended.", ephemeral=ephemeral)
-        else:
-            await interaction.response.send_message("Pomodoro session ended.", ephemeral=ephemeral)
+        await send_response(interaction, "Pomodoro session ended.", ephemeral=True)
 
         await self._update_group_gui(group.get("group_id") or group["id"])
 
@@ -744,6 +962,25 @@ class Pomodoro(commands.Cog):
                 continue
             seen_sessions.add(id(session))
 
+            now = datetime.now(timezone.utc)
+            if now >= session.expires_at:
+                self._remove_session(session)
+                await self.send_notification(session.guild_id, session.group_id, "Pomodoro session expired.")
+                await self._update_group_gui(session.group_id)
+                continue
+            if (
+                session.expires_at - now <= timedelta(seconds=RENEWAL_NOTICE_SECONDS)
+                and session.warned_deadline != session.expires_at
+            ):
+                deadline = session.expires_at
+                session.warned_deadline = deadline
+                await self.send_notification(
+                    session.guild_id,
+                    session.group_id,
+                    f"Pomodoro session ends <t:{int(deadline.timestamp())}:R>. Renew to add 24 hours.",
+                    view=PomodoroRenewView(self, session, deadline),
+                )
+
             if session.is_paused:
                 continue
 
@@ -756,7 +993,7 @@ class Pomodoro(commands.Cog):
                 guild_id = session.guild_id
                 if session.current_stage == "focus":
                     # Process absences
-                    group_members_all = await self.bot.db.fetch_members_of_group(group_id)
+                    group_members_all = session.participants
                     for m_id in group_members_all:
                         if m_id not in session.dropped_out_members and m_id not in session.current_session_marked:
                             count = session.absent_counts.get(m_id, 0) + 1
@@ -798,7 +1035,7 @@ class Pomodoro(commands.Cog):
 
                 await self._update_group_gui(session.group_id)
 
-    async def send_notification(self, guild_id, group_id, message, send_ui=False, ping_group=False):
+    async def send_notification(self, guild_id, group_id, message, send_ui=False, ping_group=False, view=None):
         """Strictly route Pomodoro notifications to the group's text or VC channel."""
         if not guild_id:
             return
@@ -820,22 +1057,12 @@ class Pomodoro(commands.Cog):
 
         # Format ping mention
         role_mention = ""
-        if ping_group:
-            _, session_role_id = await self.bot.db.get_group_roles(group_id)
-            if session_role_id:
-                role = guild.get_role(session_role_id)
-                if role:
-                    role_mention = f"{role.mention} "
-        else:
-            group_members = await self.bot.db.fetch_members_of_group(group_id)
-            if hasattr(session, "dropped_out_members"):
-                active_members = [m for m in group_members if m not in session.dropped_out_members]
-            else:
-                active_members = group_members
+        if session:
+            active_members = [m for m in session.participants if m not in session.dropped_out_members]
             if active_members:
-                role_mention = " ".join([f"<@{uid}>" for uid in active_members]) + " "
+                role_mention = " ".join(f"<@{uid}>" for uid in active_members) + " "
 
-        view = PomodoroPresenceView(self, session) if send_ui and session else None
+        view = view or (PomodoroPresenceView(self, session) if send_ui and session else None)
 
         notification_sent = False
 
@@ -925,66 +1152,6 @@ class Pomodoro(commands.Cog):
             await send_response(interaction, embed=embed, ephemeral=ephemeral)
         else:
             await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
-
-    @commands.Cog.listener()
-    async def on_voice_state_update(self, member, before, after):
-        if after.channel and (not before.channel or before.channel.id != after.channel.id):
-            # Checking if someone joined a group VC
-            group = await self.bot.db.get_study_group_by_channel(after.channel.id)
-            if group:
-                if hasattr(group, "keys") and not isinstance(group, dict):
-                    group = dict(group)
-                gid = group.get("id")
-                uuid_str = group.get("group_id")
-                group_id = uuid_str or gid
-                session = self._get_session(group)
-                if not session:
-                    focus, short_break, long_break = 25, 5, 15
-                    new_session = PomodoroSession(
-                        group_id=group_id,
-                        focus=focus,
-                        short_break=short_break,
-                        long_break=long_break,
-                        guild_id=member.guild.id,
-                        text_id=group.get("text_id"),
-                        vc_id=after.channel.id,
-                        require_vc=True,
-                    )
-                    keys_to_set = [
-                        c
-                        for c in [
-                            uuid_str,
-                            str(uuid_str) if uuid_str else None,
-                            gid,
-                            str(gid) if gid else None,
-                        ]
-                        if c is not None
-                    ]
-                    for k in keys_to_set:
-                        self.sessions[k] = new_session
-
-                    if not self.run_timer.is_running():
-                        self.run_timer.start()
-
-                    logger.info(
-                        f"Auto-started Pomodoro session for group {group_id} because member {member.id} joined VC"
-                    )
-
-                    response_msg = (
-                        f"🍅 **Pomodoro session automatically started!**\n"
-                        f"• **Focus**: {focus}m\n"
-                        f"• **Short Break**: {short_break}m\n"
-                        f"• **Long Break**: {long_break}m (every 4 cycles)\n"
-                        f"• **Mode**: 🔊 Voice Channel Required"
-                    )
-                    await self.send_notification(
-                        member.guild.id,
-                        group_id,
-                        response_msg,
-                        send_ui=True,
-                        ping_group=False,
-                    )
-                    await self._update_group_gui(group_id)
 
 
 async def setup(bot):

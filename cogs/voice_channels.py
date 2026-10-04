@@ -1,11 +1,12 @@
 import logging
-from typing import Optional, Union
+import sqlite3
+from typing import Optional
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils import acknowledge_interaction, is_group_creator, send_response, should_use_ephemeral
+from utils import acknowledge_interaction, get_context_group, is_group_creator, send_response, should_use_ephemeral
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ class VoiceChannels(commands.Cog):
             await send_response(interaction, "This command can only be used in a server.", ephemeral=True)
             return
 
-        group = await self.bot.db.get_study_group(interaction.guild_id)
+        group = await get_context_group(interaction, self.bot.db)
         if not group:
             logger.warning(f"No study group exists in server {interaction.guild_id}")
             await send_response(interaction, "No study group exists in this server.", ephemeral=True)
@@ -43,46 +44,58 @@ class VoiceChannels(commands.Cog):
 
         channel_name = name or f"{group_name} VC"
         logger.debug(f"Creating voice channel '{channel_name}'")
-        overwrites: dict[
-            Union[discord.Role, discord.Member, discord.Object],
-            discord.PermissionOverwrite,
-        ] = {
-            interaction.guild.default_role: discord.PermissionOverwrite(connect=False),
-            interaction.guild.me: discord.PermissionOverwrite(connect=True, manage_channels=True),
-        }
+        text_id = group.get("text_id")
+        source = interaction.guild.get_channel(text_id) if isinstance(text_id, int) else None
+        category = getattr(source, "category", None)
+        if not isinstance(category, discord.CategoryChannel):
+            category_id = await self.bot.db.get_group_category(interaction.guild.id)
+            category = interaction.guild.get_channel(category_id) if category_id else None
+        if not isinstance(category, discord.CategoryChannel):
+            await send_response(interaction, "Choose a study category in /setup first.")
+            return
+        me = interaction.guild.me
+        if me is None or not category.permissions_for(me).manage_channels:
+            await send_response(interaction, "I need Manage Channels in the study category.")
+            return
 
-        _, session_role_id = await self.bot.db.get_group_roles(group_id)
-        session_role = interaction.guild.get_role(session_role_id) if session_role_id else None
-        if session_role:
-            overwrites[session_role] = discord.PermissionOverwrite(connect=True)
-            logger.debug(f"Added connect permission for role {session_role.name}")
-
+        channel = None
         try:
-            channel = await interaction.guild.create_voice_channel(channel_name, overwrites=overwrites)
+            channel = await interaction.guild.create_voice_channel(
+                channel_name, category=category, reason="Study group voice channel"
+            )
             await self.bot.db.update_voice_channel(group_id, channel.id)
-            logger.info(f"Voice channel {channel.id} created for group {group_id}")
-            if interaction.response.is_done():
-                await send_response(
-                    interaction, f"Voice channel {channel.mention} created for the study group.", ephemeral=ephemeral
-                )
-            else:
-                await send_response(
-                    interaction, f"Voice channel {channel.mention} created for the study group.", ephemeral=ephemeral
-                )
-        except discord.HTTPException as e:
-            logger.error(f"Failed to create voice channel: {str(e)}")
-            if interaction.response.is_done():
-                await send_response(
-                    interaction,
-                    "Failed to create the voice channel. Please try again later.",
-                    ephemeral=True,
-                )
-            else:
-                await send_response(
-                    interaction,
-                    "Failed to create the voice channel. Please try again later.",
-                    ephemeral=True,
-                )
+        except (discord.HTTPException, sqlite3.Error, RuntimeError, OSError):
+            logger.exception("Voice channel creation failed guild_id=%s group_id=%s", interaction.guild.id, group_id)
+            retained = ""
+            if channel is not None:
+                try:
+                    await channel.delete(reason="Study group voice channel persistence failed")
+                except discord.HTTPException:
+                    logger.exception(
+                        "Voice channel rollback failed guild_id=%s group_id=%s channel_id=%s",
+                        interaction.guild.id,
+                        group_id,
+                        channel.id,
+                    )
+                    retained = f" Channel ID {channel.id} remains and needs moderator cleanup."
+            await send_response(interaction, "Failed to create the voice channel. Please try again later." + retained)
+            return
+
+        group_cog = self.bot.get_cog("StudyGroupCog")
+        groups = getattr(group_cog, "active_study_groups", None)
+        if isinstance(groups, dict):
+            live_group = groups.get(str(group_id))
+            if live_group is not None:
+                live_group.vc_id = channel.id
+        logger.info(
+            "Voice channel created guild_id=%s group_id=%s channel_id=%s",
+            interaction.guild.id,
+            group_id,
+            channel.id,
+        )
+        await send_response(
+            interaction, f"Voice channel {channel.mention} created for the study group.", ephemeral=ephemeral
+        )
 
     @app_commands.command(name="delete_vc", description="Delete the selected VC from the Server")
     @app_commands.default_permissions(manage_channels=True)
@@ -96,7 +109,7 @@ class VoiceChannels(commands.Cog):
             return
         logger.info(f"delete_vc command invoked by {interaction.user.display_name} in guild {interaction.guild.name}")
 
-        group = await self.bot.db.get_study_group(interaction.guild_id)
+        group = await get_context_group(interaction, self.bot.db)
         if not group:
             logger.warning(f"No study group found in server {interaction.guild_id}")
             await send_response(interaction, "No study group exists for this server.", ephemeral=True)
@@ -149,7 +162,7 @@ class VoiceChannels(commands.Cog):
             return
         logger.info(f"delete_role command invoked by {interaction.user.display_name} in guild {interaction.guild.name}")
 
-        group = await self.bot.db.get_study_group(interaction.guild_id)
+        group = await get_context_group(interaction, self.bot.db)
         if not group:
             logger.warning(f"No study group found in server {interaction.guild_id}")
             await send_response(interaction, "No study group exists for this server.", ephemeral=True)
@@ -199,7 +212,7 @@ class VoiceChannels(commands.Cog):
             f"delete_text_channel command invoked by {interaction.user.display_name} in guild {interaction.guild.name}"
         )
 
-        group = await self.bot.db.get_study_group(interaction.guild_id)
+        group = await get_context_group(interaction, self.bot.db)
         if not group:
             logger.warning(f"No study group found in server {interaction.guild_id}")
             await send_response(interaction, "No study group exists for this server.", ephemeral=True)
@@ -243,5 +256,8 @@ class VoiceChannels(commands.Cog):
 
 
 async def setup(bot):
-    await bot.add_cog(VoiceChannels(bot))
-    logger.info("VoiceChannels cog loaded")
+    cog = VoiceChannels(bot)
+    await bot.add_cog(cog)
+    for command in cog.get_app_commands():
+        bot.tree.remove_command(command.name)
+    logger.info("VoiceChannels maintenance helpers loaded without public slash commands")

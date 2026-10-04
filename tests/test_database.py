@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from database import DBHandler
@@ -60,6 +61,124 @@ class TestDBHandler(unittest.TestCase):
             await self.db.remove_manager(user_id=999, guild_id=100)
             manager_after = await self.db.get_manager(user_id=999, guild_id=100)
             self.assertIsNone(manager_after)
+
+        asyncio.run(run_test())
+
+    def test_manager_grants_keep_global_developers_and_guild_staff_distinct(self):
+        async def run_test():
+            await self.db.connect()
+            await self.db.add_manager(123, 101, 3)
+            await self.db.add_manager(123, None, 4)
+            await self.db.add_manager(123, None, 4)
+            await self.db.add_manager(456, 101, 2)
+            await self.db.add_manager(789, 102, 3)
+
+            guild_managers = await self.db.get_all_managers(101)
+            self.assertEqual(
+                {(row["user_id"], row["guild_id"], row["permission_level"]) for row in guild_managers},
+                {(123, 101, 3), (123, None, 4), (456, 101, 3)},
+            )
+            self.assertEqual(len(guild_managers), 3)
+            self.assertEqual((await self.db.get_manager(123, 101))["permission_level"], 4)
+            self.assertEqual((await self.db.get_manager(123, 102))["permission_level"], 4)
+            self.assertIsNone(await self.db.get_manager(456, 102))
+
+            await self.db.add_manager(456, 101, 3)
+            await self.db.add_manager(123, None, 3)
+            self.assertEqual((await self.db.get_manager(456, 101))["permission_level"], 3)
+            self.assertEqual((await self.db.get_manager(123, 101))["permission_level"], 3)
+            self.assertIsNone(await self.db.get_manager(123, 102))
+            self.assertEqual(len(await self.db.get_all_managers(101)), 2)
+
+            await self.db.remove_manager(123, None)
+            self.assertEqual((await self.db.get_manager(123, 101))["permission_level"], 3)
+
+        asyncio.run(run_test())
+
+    def test_manager_grant_source_migrates_legacy_rows_and_survives_restart(self):
+        async def run_test(db_path):
+            db = DBHandler(str(db_path))
+            await db.connect()
+            row = await db.get_manager(123, 101)
+            self.assertEqual((row["permission_level"], row["grant_source"]), (3, "explicit"))
+            await db.create_tables()
+            self.assertEqual((await db.get_manager(123, 101))["grant_source"], "explicit")
+            await db.close()
+
+            reopened = DBHandler(str(db_path))
+            await reopened.connect()
+            self.assertEqual((await reopened.get_manager(123, 101))["grant_source"], "explicit")
+            await reopened.close()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "legacy.sqlite"
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.execute(
+                    "CREATE TABLE managers (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, "
+                    "guild_id INTEGER, permission_level INTEGER NOT NULL)"
+                )
+                conn.execute(
+                    "INSERT INTO managers (user_id, guild_id, permission_level) VALUES (?, ?, ?)",
+                    (123, 101, 2),
+                )
+                conn.commit()
+            asyncio.run(run_test(db_path))
+
+    def test_native_staff_sync_preserves_explicit_and_other_guild_grants(self):
+        async def run_test():
+            await self.db.connect()
+            await self.db.add_manager(10, None, 4)
+            await self.db.add_manager(20, 101, 3)
+            await self.db.add_manager(30, 102, 2, grant_source="server_sync")
+            await self.db.add_manager(40, 101, 2, grant_source="server_sync")
+            await self.db.sync_guild_manager_grants(101, {20: 2, 50: 3})
+            self.assertIsNone(await self.db.get_manager(40, 101))
+            self.assertEqual((await self.db.get_manager(20, 101))["permission_level"], 3)
+            self.assertEqual((await self.db.get_manager(20, 101))["grant_source"], "explicit")
+            self.assertEqual((await self.db.get_manager(50, 101))["grant_source"], "server_sync")
+            self.assertEqual((await self.db.get_manager(30, 102))["grant_source"], "server_sync")
+            self.assertEqual((await self.db.get_manager(10, 102))["permission_level"], 4)
+
+            await self.db.add_manager(50, 101, 2)
+            await self.db.sync_guild_manager_grants(101, {})
+            self.assertEqual((await self.db.get_manager(50, 101))["grant_source"], "explicit")
+            self.assertEqual((await self.db.get_manager(50, 101))["permission_level"], 3)
+            await self.db.add_manager(50, 101, 3, grant_source="server_sync")
+            self.assertEqual((await self.db.get_manager(50, 101))["permission_level"], 3)
+
+        asyncio.run(run_test())
+
+    def test_native_staff_sync_invalid_level_does_not_change_grants(self):
+        async def run_test():
+            await self.db.connect()
+            await self.db.sync_guild_manager_grants(101, {20: 2})
+            with self.assertRaises(ValueError):
+                await self.db.sync_guild_manager_grants(101, {30: 4})
+            with self.assertRaises(ValueError):
+                await self.db.add_manager(30, 101, 2, grant_source="unknown")
+            self.assertEqual(
+                [(r["user_id"], r["grant_source"]) for r in await self.db.get_all_managers(101)], [(20, "server_sync")]
+            )
+
+        asyncio.run(run_test())
+
+    def test_native_staff_sync_rolls_back_cleanup_if_insert_fails(self):
+        async def run_test():
+            await self.db.connect()
+            await self.db.sync_guild_manager_grants(101, {20: 2})
+            async with self.db.lock:
+                self.db.conn.execute(
+                    "CREATE TRIGGER reject_native_staff BEFORE INSERT ON managers "
+                    "WHEN NEW.user_id = 30 BEGIN SELECT RAISE(ABORT, 'sync failed'); END"
+                )
+                self.db.conn.commit()
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                await self.db.sync_guild_manager_grants(101, {30: 3})
+            self.assertEqual(
+                [(r["user_id"], r["grant_source"]) for r in await self.db.get_all_managers(101)],
+                [(20, "server_sync")],
+            )
 
         asyncio.run(run_test())
 
@@ -136,15 +255,50 @@ class TestDBHandler(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_group_names_include_retired_groups_but_only_requested_guild(self):
+        async def run_test():
+            await self.db.connect()
+            for group_id, guild_id, name, active in (
+                ("one", 101, "alex-studysession-1", 0),
+                ("two", 101, "alex-studysession-2", 1),
+                ("three", 102, "alex-studysession-3", 1),
+            ):
+                await self.db.save_study_group(
+                    {
+                        "group_id": group_id,
+                        "guild_id": guild_id,
+                        "name": name,
+                        "creator_id": 123,
+                        "active": active,
+                    }
+                )
+            self.assertEqual(
+                await self.db.get_guild_group_names(101),
+                ["alex-studysession-1", "alex-studysession-2"],
+            )
+            self.assertEqual(await self.db.get_guild_group_names(103), [])
+
+        asyncio.run(run_test())
+
     def test_commands_channel_migration_preserves_legacy_settings_on_restart(self):
         async def run_test(db_path):
             db = DBHandler(db_name=str(db_path))
             await db.connect()
             self.assertIsNone(await db.get_commands_channel(101))
             self.assertIsNone(await db.get_commands_channel(999))
+            self.assertEqual(await db.get_default_group_duration(101), 86400)
+            self.assertEqual(await db.get_default_pomodoro_duration(999), 86400)
             self.assertEqual(await db.get_group_category(101), 201)
             self.assertEqual(await db.get_vc_cleanup_time(101), 900)
-            await db.save_setup(101, 202, 303, 12, log_channel_id=601)
+            await db.save_setup(
+                101,
+                202,
+                303,
+                12,
+                log_channel_id=601,
+                default_group_duration=7200,
+                default_pomodoro_duration=10800,
+            )
             await db.close()
 
             reopened = DBHandler(db_name=str(db_path))
@@ -155,10 +309,14 @@ class TestDBHandler(unittest.TestCase):
             self.assertEqual(await reopened.get_vc_cleanup_time(101), 900)
             self.assertEqual(await reopened.get_vc_category(101), 501)
             self.assertEqual(await reopened.get_mod_log_channel(101), 601)
+            self.assertEqual(await reopened.get_default_group_duration(101), 7200)
+            self.assertEqual(await reopened.get_default_pomodoro_duration(101), 10800)
             await reopened.create_tables()
             self.assertEqual(await reopened.get_commands_channel(101), 303)
             await reopened.save_setup(101, 203, 304, 13)
             self.assertEqual(await reopened.get_mod_log_channel(101), 601)
+            self.assertEqual(await reopened.get_default_group_duration(101), 7200)
+            self.assertEqual(await reopened.get_default_pomodoro_duration(101), 10800)
             await reopened.close()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -209,13 +367,37 @@ class TestDBHandler(unittest.TestCase):
             await self.db.save_setup(102, 203, 303, 17, log_channel_id=603)
             self.assertEqual(await self.db.get_mod_log_channel(102), 603)
             self.assertEqual(await self.db.get_vc_cleanup_time(102), 600)
+            self.assertEqual(await self.db.get_default_group_duration(102), 86400)
+            self.assertEqual(await self.db.get_default_pomodoro_duration(102), 86400)
+            await self.db.save_setup(
+                101,
+                204,
+                304,
+                18,
+                default_group_duration=14400,
+                default_pomodoro_duration=21600,
+            )
+            self.assertEqual(await self.db.get_default_group_duration(101), 14400)
+            self.assertEqual(await self.db.get_default_pomodoro_duration(101), 21600)
+            self.assertEqual(await self.db.get_default_group_duration(102), 86400)
+            self.assertEqual(await self.db.get_default_pomodoro_duration(102), 86400)
+            self.assertEqual(await self.db.get_vc_category(101), 502)
+            self.assertEqual(await self.db.get_mod_log_channel(101), 602)
 
         asyncio.run(run_test())
 
     def test_failed_setup_commit_rolls_back_before_retry(self):
         async def run_test():
             await self.db.connect()
-            await self.db.save_setup(101, 201, 301, 15, log_channel_id=601)
+            await self.db.save_setup(
+                101,
+                201,
+                301,
+                15,
+                log_channel_id=601,
+                default_group_duration=7200,
+                default_pomodoro_duration=10800,
+            )
             async with self.db.lock:
                 self.db.conn.execute("PRAGMA foreign_keys = ON")
                 self.db.conn.execute("CREATE TABLE allowed_setup (id INTEGER PRIMARY KEY)")
@@ -230,21 +412,56 @@ class TestDBHandler(unittest.TestCase):
                 )
 
             with self.assertRaises(sqlite3.IntegrityError):
-                await self.db.save_setup(101, 999, 302, 16, log_channel_id=602)
+                await self.db.save_setup(
+                    101,
+                    999,
+                    302,
+                    16,
+                    log_channel_id=602,
+                    default_group_duration=14400,
+                    default_pomodoro_duration=21600,
+                )
 
             self.assertFalse(self.db.conn.in_transaction)
             self.assertEqual(await self.db.get_group_category(101), 201)
             self.assertEqual(await self.db.get_commands_channel(101), 301)
             self.assertEqual(await self.db.get_default_max_members(101), 15)
             self.assertEqual(await self.db.get_mod_log_channel(101), 601)
+            self.assertEqual(await self.db.get_default_group_duration(101), 7200)
+            self.assertEqual(await self.db.get_default_pomodoro_duration(101), 10800)
             async with self.db.lock:
                 self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM setup_guard").fetchone()[0], 0)
 
-            await self.db.save_setup(101, 202, 302, 16, log_channel_id=602)
+            await self.db.save_setup(
+                101,
+                202,
+                302,
+                16,
+                log_channel_id=602,
+                default_group_duration=14400,
+                default_pomodoro_duration=21600,
+            )
             self.assertEqual(await self.db.get_group_category(101), 202)
             self.assertEqual(await self.db.get_commands_channel(101), 302)
             self.assertEqual(await self.db.get_default_max_members(101), 16)
             self.assertEqual(await self.db.get_mod_log_channel(101), 602)
+            self.assertEqual(await self.db.get_default_group_duration(101), 14400)
+            self.assertEqual(await self.db.get_default_pomodoro_duration(101), 21600)
+
+        asyncio.run(run_test())
+
+    def test_setup_rejects_invalid_lifetimes_without_changing_settings(self):
+        async def run_test():
+            await self.db.connect()
+            await self.db.save_setup(101, 201, 301, 15, default_group_duration=7200)
+            invalid_values: tuple[Any, ...] = (0, -1, True, 10**30, "3600")
+            for invalid in invalid_values:
+                with self.assertRaises(ValueError):
+                    await self.db.save_setup(101, 202, 302, 16, default_pomodoro_duration=invalid)
+            self.assertEqual(await self.db.get_group_category(101), 201)
+            self.assertEqual(await self.db.get_commands_channel(101), 301)
+            self.assertEqual(await self.db.get_default_group_duration(101), 7200)
+            self.assertEqual(await self.db.get_default_pomodoro_duration(101), 86400)
 
         asyncio.run(run_test())
 

@@ -1,9 +1,13 @@
 import asyncio
 import logging
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import discord
+
+from cogs._staff_roles import StaffRoleSyncError, sync_staff_roles
+from utils import DEFAULT_SESSION_DURATION, parse_duration, parse_seconds_to_hms
 
 if TYPE_CHECKING:
     from cogs.manager import Manager
@@ -75,6 +79,47 @@ class NewCategoryModal(discord.ui.Modal, title="Create a study group category"):
         await interaction.followup.send("Category staged. Save to create it.", ephemeral=True)
 
 
+class DurationModal(discord.ui.Modal, title="Default session lifetimes"):
+    def __init__(self, view: "SetupView"):
+        super().__init__()
+        self.setup_view = view
+        self.group_duration: discord.ui.TextInput[DurationModal] = discord.ui.TextInput(
+            label="Study group lifetime", default=parse_seconds_to_hms(view.group_duration), max_length=100
+        )
+        self.pomodoro_duration: discord.ui.TextInput[DurationModal] = discord.ui.TextInput(
+            label="Pomodoro lifetime", default=parse_seconds_to_hms(view.pomodoro_duration), max_length=100
+        )
+        self.add_item(self.group_duration)
+        self.add_item(self.pomodoro_duration)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await self.setup_view.allowed(interaction):
+            return
+        if self.setup_view.saving:
+            await interaction.response.send_message("Save is in progress.", ephemeral=True)
+            return
+        group_duration = parse_duration(str(self.group_duration.value).strip())
+        pomodoro_duration = parse_duration(str(self.pomodoro_duration.value).strip())
+        if not group_duration or not pomodoro_duration or max(group_duration, pomodoro_duration) > 2**63 - 1:
+            await interaction.response.send_message("Enter positive lifetimes such as 24h or 1d 12h.", ephemeral=True)
+            return
+        try:
+            now = datetime.now(timezone.utc)
+            now + timedelta(seconds=group_duration)
+            now + timedelta(seconds=pomodoro_duration)
+        except OverflowError:
+            await interaction.response.send_message(
+                "Those lifetimes are too large. Enter a shorter duration.", ephemeral=True
+            )
+            return
+        self.setup_view.group_duration = group_duration
+        self.setup_view.pomodoro_duration = pomodoro_duration
+        await interaction.response.defer(ephemeral=True)
+        if self.setup_view.message:
+            await self.setup_view.message.edit(embed=self.setup_view.render(), view=self.setup_view)
+        await interaction.followup.send("Lifetimes staged. Save to apply them to new sessions.", ephemeral=True)
+
+
 class SetupView(discord.ui.View):
     def __init__(
         self,
@@ -85,12 +130,23 @@ class SetupView(discord.ui.View):
         commands_channel_id: int | None,
         max_members: int,
         log_channel_id: int | None = None,
+        group_duration: int = DEFAULT_SESSION_DURATION,
+        pomodoro_duration: int = DEFAULT_SESSION_DURATION,
     ) -> None:
         super().__init__(timeout=300)
         self.manager = manager
         self.guild = guild
         self.owner_id = owner_id
-        self.snapshot = (category_id, commands_channel_id, log_channel_id, max_members)
+        self.snapshot = (
+            category_id,
+            commands_channel_id,
+            log_channel_id,
+            max_members,
+            group_duration,
+            pomodoro_duration,
+        )
+        self.group_duration = group_duration
+        self.pomodoro_duration = pomodoro_duration
         self.category_id = category_id
         self.new_category_name: str | None = None
         self.max_members = max_members
@@ -119,19 +175,21 @@ class SetupView(discord.ui.View):
         logs = f"<#{self.log_channel_id}>" if self.log_channel_id else "Create **#cpo-logs**"
         embed = discord.Embed(
             title="Server setup",
-            description="Review the study group category and command channel, then save.",
+            description="Choose the category, review channels and defaults, then save. All channels inherit the category permissions.",
             color=discord.Color.blue(),
         )
         embed.add_field(name="Study group category", value=category, inline=False)
         embed.add_field(name="Commands channel", value=channel, inline=False)
         embed.add_field(name="Moderator logs", value=logs, inline=False)
         embed.add_field(name="Default group size", value=str(self.max_members), inline=True)
+        embed.add_field(name="Group lifetime", value=parse_seconds_to_hms(self.group_duration), inline=True)
+        embed.add_field(name="Pomodoro lifetime", value=parse_seconds_to_hms(self.pomodoro_duration), inline=True)
         if self.commands_channel_id and self.category_id:
             channel_obj = self.guild.get_channel(self.commands_channel_id)
             if isinstance(channel_obj, discord.TextChannel) and channel_obj.category_id != self.category_id:
                 embed.add_field(
                     name="On save",
-                    value="Move the recorded commands channel into the selected category. Its permission overwrites stay in place.",
+                    value="Move the recorded commands channel into the selected category. Its permissions will sync to the category.",
                     inline=False,
                 )
         if self.log_channel_id and self.category_id:
@@ -139,13 +197,13 @@ class SetupView(discord.ui.View):
             if isinstance(log_channel, discord.TextChannel) and log_channel.category_id != self.category_id:
                 embed.add_field(
                     name="Log channel move",
-                    value="Move the recorded log channel into the selected category, retaining its permission overwrites.",
+                    value="Move the recorded log channel into the selected category, syncing its permissions to the category.",
                     inline=False,
                 )
         if self.new_category_name and (self.commands_channel_id or self.log_channel_id):
             embed.add_field(
                 name="On save",
-                value="Move the recorded channels into the new category, retaining their permission overwrites.",
+                value="Move the recorded channels into the new category, syncing their permissions to the category.",
                 inline=False,
             )
         embed.set_footer(text="Nothing changes until Save. This wizard expires in five minutes.")
@@ -170,31 +228,6 @@ class SetupView(discord.ui.View):
             )
         )
 
-    def log_overwrites(
-        self, me: discord.Member
-    ) -> dict[discord.Role | discord.Member | discord.Object, discord.PermissionOverwrite]:
-        overwrites: dict[discord.Role | discord.Member | discord.Object, discord.PermissionOverwrite] = {
-            self.guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            me: discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                read_message_history=True,
-                embed_links=True,
-                manage_channels=True,
-            ),
-        }
-        owner = self.guild.get_member(self.owner_id)
-        if owner is not None and owner != me:
-            overwrites[owner] = discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, read_message_history=True
-            )
-        for role in self.guild.roles:
-            if role.permissions.administrator or role.permissions.manage_guild:
-                overwrites[role] = discord.PermissionOverwrite(
-                    view_channel=True, send_messages=True, read_message_history=True
-                )
-        return overwrites
-
     async def allowed(self, interaction: discord.Interaction) -> bool:
         if interaction.guild_id != self.guild.id or interaction.user.id != self.owner_id:
             await interaction.response.send_message("This setup session belongs to another user.", ephemeral=True)
@@ -211,7 +244,7 @@ class SetupView(discord.ui.View):
             )
             await interaction.response.send_message("Could not verify permissions. Try again.", ephemeral=True)
             return False
-        if level < 2:
+        if level < 3:
             await interaction.response.send_message(
                 "You no longer have permission to configure this server.", ephemeral=True
             )
@@ -232,6 +265,13 @@ class SetupView(discord.ui.View):
             )
             return
         await interaction.response.send_modal(NewCategoryModal(self))
+
+    @discord.ui.button(label="Edit lifetimes", style=discord.ButtonStyle.secondary, row=1)
+    async def edit_lifetimes(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if self.saving:
+            await interaction.response.send_message("Save is in progress.", ephemeral=True)
+            return
+        await interaction.response.send_modal(DurationModal(self))
 
     @discord.ui.button(label="Save", style=discord.ButtonStyle.primary, row=1)
     async def save(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -257,6 +297,8 @@ class SetupView(discord.ui.View):
                     await db.get_commands_channel(self.guild.id),
                     await db.get_mod_log_channel(self.guild.id),
                     await db.get_default_max_members(self.guild.id),
+                    await db.get_default_group_duration(self.guild.id),
+                    await db.get_default_pomodoro_duration(self.guild.id),
                 )
             except (discord.HTTPException, sqlite3.Error, OSError, RuntimeError, ValueError):
                 logger.exception("Could not read setup settings guild_id=%s", self.guild.id)
@@ -313,6 +355,8 @@ class SetupView(discord.ui.View):
                     )
                     return
 
+                category = await sync_staff_roles(self.manager.bot, self.guild, category)
+
                 channel_id = self.created_channel_id or self.commands_channel_id
                 channel = self.guild.get_channel(channel_id) if channel_id is not None else None
                 if not isinstance(channel, discord.TextChannel):
@@ -320,10 +364,10 @@ class SetupView(discord.ui.View):
                         "cpo-commands", category=category, reason="CPO server setup"
                     )
                     self.created_channel_id = channel.id
-                elif channel.category_id != category.id:
+                elif channel.category_id != category.id or not channel.permissions_synced:
                     previous_category_id = channel.category_id
                     edited_channel = await channel.edit(
-                        category=category, sync_permissions=False, reason="CPO server setup"
+                        category=category, sync_permissions=True, reason="CPO server setup"
                     )
                     self.moved_channel_id = channel.id
                     self.previous_category_id = previous_category_id
@@ -343,14 +387,14 @@ class SetupView(discord.ui.View):
                     log_channel = await self.guild.create_text_channel(
                         "cpo-logs",
                         category=category,
-                        overwrites=self.log_overwrites(me),
+                        overwrites=category.overwrites,
                         reason="CPO server setup",
                     )
                     self.created_log_channel_id = log_channel.id
-                elif log_channel.category_id != category.id:
+                elif log_channel.category_id != category.id or not log_channel.permissions_synced:
                     previous_log_category_id = log_channel.category_id
                     edited_log = await log_channel.edit(
-                        category=category, sync_permissions=False, reason="CPO server setup"
+                        category=category, sync_permissions=True, reason="CPO server setup"
                     )
                     self.moved_log_channel_id = log_channel.id
                     self.previous_log_category_id = previous_log_category_id
@@ -364,7 +408,19 @@ class SetupView(discord.ui.View):
                         ephemeral=True,
                     )
                     return
-                await db.save_setup(self.guild.id, category.id, channel.id, self.max_members, log_channel.id)
+                await db.save_setup(
+                    self.guild.id,
+                    category.id,
+                    channel.id,
+                    self.max_members,
+                    log_channel.id,
+                    default_group_duration=self.group_duration,
+                    default_pomodoro_duration=self.pomodoro_duration,
+                )
+            except StaffRoleSyncError as error:
+                logger.exception("Setup staff-role sync failed guild_id=%s", self.guild.id)
+                await interaction.followup.send(str(error) + self.retained_resources(), ephemeral=True)
+                return
             except (discord.HTTPException, sqlite3.Error, OSError, RuntimeError, ValueError):
                 logger.exception("Setup save failed for guild_id=%s user_id=%s", self.guild.id, self.owner_id)
                 await interaction.followup.send(

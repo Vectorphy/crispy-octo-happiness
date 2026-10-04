@@ -10,9 +10,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- `/setup` now opens a private, invoker-owned wizard on every invocation. Managers can choose an existing category or name a new one, review the staged settings, and save dedicated `#cpo-commands` and staff-only `#cpo-logs` channels with the category and default group size. Group activity logs use the existing moderator log setting.
-- Normal slash command success replies are public only in the exact saved commands channel. Threads, other channels, DMs, and unconfigured servers receive private replies; errors and sensitive results remain private everywhere. Operational dashboards, reminders, logs, and invitation DMs retain their destinations.
-- Added a nullable commands channel setting through an additive SQLite migration. Existing installations keep replies private until setup is saved.
+- `/setup` opens a private wizard for moderators, with category selection or creation, commands and logs channels, group size, and default group/Pomodoro lifetimes. Both lifetimes default to 24 hours and apply to new sessions. Saving synchronizes recorded channels with the category permissions, including logs already in that category.
+- Ordinary command replies are public in active study-group channels and the exact configured commands channel. Other channels, threads, and DMs use private replies; help, errors, and sensitive menus stay private everywhere.
+- Mentioned group and check-in invitees receive DM Join/Decline controls. Pomodoro group members receive separate opt-in invitations. Only the creator joins automatically; entering voice does not start or join a Pomodoro.
+- Check-in reminder intervals and each Pomodoro focus/break stage accept 2 minutes through 4 hours. Automatic breaks retain the 5:1:3 calculation with a two-minute minimum.
+- Current owners and guild staff can end groups and sessions directly. Ordinary participants request the current owner's approval by DM; outsiders cannot request an end. Former owners do not retain an ending override.
+- New groups use `{user-name}-studysession-{number}` when unnamed. Duplicate custom names receive numeric suffixes; guild creation locks serialize name allocation and provisioning while UUIDs stay unchanged.
+- Force Video accepts a camera or screen sharing.
+- Authorization labels use Server Member (0), contextual Group Member (1), contextual Owner (2), Manager/Admin/Mod (3), and Bot Developer (4), with the highest level taking precedence. `/user_level` uses a fixed title and does not expose unrelated group membership outside that group's channels.
+- Removed check-in and Pomodoro action buttons from the group dashboard while retaining their status fields. Standalone voice/channel/role maintenance commands are hidden from the public command tree.
+
+### Added
+- A private `/help` command with everyday explanations of setup, groups, timers, tasks, invitations, and reply visibility.
+- Pomodoro lifetime expiry, including while paused, and a Renew control offered with one hour left. Renew adds 24 hours to the current deadline.
+- Approved additive SQLite settings columns `default_group_duration` and `default_pomodoro_duration`, stored in seconds with 86400 defaults. Setup saves both values atomically and checks them for stale drafts.
+- Approved `managers.grant_source` migration distinguishes explicit grants from server-synced staff. Sync revokes stale server-synced grants while preserving explicit grants; legacy moderator grants normalize to Level 3.
+- `CPO Manager` and `CPO Bot Developer` roles synchronize membership and scoped access to the configured CPO category and its channels during setup and staff grant updates.
+
+### Fixed
+- Full-unit and compound duration parsing, including `3 hours` and `1d 12h`.
+- Role-name guesses no longer confer moderator authority. Permission checks use actual Discord permissions or scoped stored grants; foreign-guild grants and member objects cannot escalate access.
+- `/list_managers` shows newly added guild managers and global developers immediately, with uncached-user labels, one entry per person at the highest grant, and untruncated multi-embed lists. Repeated global grants update rather than append, and permission lookup selects the highest valid grant.
+- `/invite_to_group` resolves trimmed, case-insensitive names and current group text/voice channels from active persisted records after a cache miss.
+- Voice-channel creation uses the configured category and rolls back if persistence fails.
+
+### Remaining limitations
+- Pomodoro runtime state remains memory-only and does not survive a restart. Live Discord provisioning has not been tested; see `KNOWN_ISSUES.md` for these and existing cleanup/persistence debt.
+- Default VC creation and relocation after video/microphone enforcement are recorded as requested follow-up work in `TODO.md`; current Force Video still disconnects noncompliant members.
+
+### Verification
+- All 224 offline tests pass on Python 3.12.14, including the standalone command matrix. Full Mypy, Ruff lint, formatting, and Git whitespace checks pass. No new dependencies or live Discord operations were used.
 
 ## [1.0.0-rc.4] - 2026-10-02
 

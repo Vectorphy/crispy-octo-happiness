@@ -10,9 +10,13 @@ from discord.ext import commands
 
 logger = logging.getLogger(__name__)
 
+MIN_STAGE_MINUTES = 2
+MAX_STAGE_MINUTES = 240
+DEFAULT_SESSION_DURATION = 24 * 60 * 60
+
 
 async def should_use_ephemeral(interaction: discord.Interaction, db) -> bool:
-    """Only the configured commands channel permits public command replies."""
+    """Allow ordinary replies in active group channels and the commands channel."""
     guild = getattr(interaction, "guild", None)
     if guild is None:
         return True
@@ -24,6 +28,15 @@ async def should_use_ephemeral(interaction: discord.Interaction, db) -> bool:
         channel_id = getattr(channel, "id", None)
     if not isinstance(channel_id, int):
         return True
+    get_group = getattr(db, "get_study_group_by_channel", None)
+    if callable(get_group):
+        try:
+            group = await get_group(channel_id)
+        except (sqlite3.Error, RuntimeError, OSError):
+            logger.exception("Group visibility lookup failed guild_id=%s channel_id=%s", guild.id, channel_id)
+            return True
+        if isinstance(group, dict) and group.get("guild_id") == guild.id and group.get("active", 1):
+            return False
     get_channel = getattr(db, "get_commands_channel", None)
     if not callable(get_channel):
         return True
@@ -78,30 +91,17 @@ def parse_seconds_to_hms(seconds: int) -> str:
 
 
 def parse_duration(duration_str: str) -> Optional[int]:
-    logger.debug(f"Attempting to parse duration: {duration_str}")
-    match = re.match(
-        r"(\d+)\s*(s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?)",
-        duration_str,
-        re.IGNORECASE,
-    )
-    if not match:
-        logger.warning(f"Failed to parse duration: {duration_str}")
-        return None
-    value_str, unit = match.groups()
-    value = int(value_str)
-    unit = unit.lower()
-    if "s" in unit:
-        result: Optional[int] = value
-    elif "m" in unit:
-        result = value * 60
-    elif "h" in unit:
-        result = value * 3600
-    elif "d" in unit:
-        result = value * 86400
-    else:
-        result = None
-    logger.debug(f"Parsed duration '{duration_str}' to {result} seconds")
-    return result
+    pattern = r"\s*(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\s*"
+    position = 0
+    total = 0
+    while position < len(duration_str):
+        match = re.match(pattern, duration_str[position:], re.IGNORECASE)
+        if match is None:
+            return None
+        value, unit = match.groups()
+        total += int(value) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit[0].lower()]
+        position += match.end()
+    return total if position else None
 
 
 ### Mentions Function
@@ -276,6 +276,53 @@ async def validate_parameters(
 ### Membership and Manager Functions
 
 
+async def has_guild_permissions(user, guild, bot) -> bool:
+    """Recognize server authority from permissions or explicit stored grants."""
+    if guild is None:
+        return False
+    user_id = getattr(user, "id", None)
+    if not isinstance(user_id, int):
+        return False
+    if user_id == getattr(bot, "bot_developer_id", None) or user_id == guild.owner_id:
+        return True
+    perms = getattr(user, "guild_permissions", None)
+    permission_names = (
+        "administrator",
+        "manage_guild",
+        "manage_channels",
+        "manage_roles",
+        "moderate_members",
+        "kick_members",
+        "ban_members",
+    )
+    if perms and any(getattr(perms, name, False) is True for name in permission_names):
+        return True
+    db = getattr(bot, "db", None)
+    get_manager = getattr(db, "get_manager", None)
+    if not callable(get_manager):
+        return False
+    try:
+        manager = await get_manager(user_id, guild.id)
+    except (sqlite3.Error, RuntimeError, OSError):
+        logger.exception("Manager lookup failed guild_id=%s user_id=%s", guild.id, user_id)
+        return False
+    if isinstance(manager, (dict, sqlite3.Row)):
+        if dict(manager).get("grant_source") == "server_sync":
+            return False
+        level = manager["permission_level"]
+        grant_guild_id = manager["guild_id"]
+        return (
+            isinstance(level, int)
+            and level >= 3
+            and (grant_guild_id == guild.id or (grant_guild_id is None and level == 4))
+        )
+    return False
+
+
+async def is_guild_manager(interaction: discord.Interaction) -> bool:
+    return await has_guild_permissions(interaction.user, interaction.guild, interaction.client)
+
+
 async def check_manager(ctx_or_interaction):
     if isinstance(ctx_or_interaction, discord.Interaction):
         bot = ctx_or_interaction.client
@@ -293,84 +340,7 @@ async def check_manager(ctx_or_interaction):
         logger.error("Guild is None in check_manager")
         return False
 
-    guild_id = guild.id
-    if not hasattr(bot, "manager_roles"):
-        logger.debug("Initializing bot.manager_roles")
-        bot.manager_roles = {}
-    if not hasattr(bot, "manager_members"):
-        logger.debug("Initializing bot.manager_members")
-        bot.manager_members = {}
-
-    if guild_id not in bot.manager_roles:
-        bot.manager_roles[guild_id] = []
-    if guild_id not in bot.manager_members:
-        bot.manager_members[guild_id] = []
-
-    # 1. Bot Developer Superuser
-    if getattr(bot, "bot_developer_id", None) == user.id:
-        logger.info(f"User {user.name} is bot developer (manager access granted)")
-        return True
-
-    # 2. Server Owner
-    if getattr(guild, "owner_id", None) == user.id:
-        logger.info(f"User {user.name} is server owner (manager access granted)")
-        return True
-
-    user_roles = getattr(user, "roles", [])
-    guild_perms = getattr(user, "guild_permissions", None)
-
-    # 3. Server Administrator or Moderator Level Permissions
-    is_admin = getattr(guild_perms, "administrator", False) if guild_perms else False
-    is_mod = bool(
-        is_admin
-        or (
-            guild_perms
-            and (
-                guild_perms.manage_guild
-                or guild_perms.manage_channels
-                or guild_perms.manage_roles
-                or guild_perms.moderate_members
-                or guild_perms.kick_members
-                or guild_perms.ban_members
-            )
-        )
-    )
-    if is_mod:
-        logger.info(f"User {user.name} has moderator/admin guild permissions (manager access granted)")
-        return True
-
-    # 4. Moderator / Admin / Staff Role Names
-    mod_role_keywords = {
-        "admin",
-        "administrator",
-        "mod",
-        "moderator",
-        "manager",
-        "lead",
-        "owner",
-        "staff",
-    }
-    has_mod_role = any(any(kw in role.name.lower() for kw in mod_role_keywords) for role in user_roles)
-    if has_mod_role:
-        logger.info(f"User {user.name} has a moderator/admin role by name (manager access granted)")
-        return True
-
-    # 5. Database Manager Lookup
-    if hasattr(bot, "db") and hasattr(bot.db, "get_manager"):
-        try:
-            db_manager = await bot.db.get_manager(user.id, guild_id)
-            if db_manager and (db_manager["permission_level"] >= 2 or db_manager["guild_id"] is None):
-                logger.info(f"User {user.name} is a registered manager in the database")
-                return True
-        except Exception as e:
-            logger.debug(f"Error querying db for manager status: {e}")
-
-    # 6. In-memory manager arrays
-    is_manager = (
-        any(role.id in bot.manager_roles[guild_id] for role in user_roles) or user.id in bot.manager_members[guild_id]
-    )
-    logger.info(f"User {user.name} is {'a' if is_manager else 'not a'} manager")
-    return is_manager
+    return await has_guild_permissions(user, guild, bot)
 
 
 def is_manager():
@@ -394,7 +364,7 @@ def is_group_creator():
             return True
         if await check_manager(interaction):
             return True
-        group = await interaction.client.db.get_study_group(interaction.guild_id)
+        group = await get_context_group(interaction, interaction.client.db)
         if not group:
             return False
         creator_id = group["creator_id"] if "creator_id" in group.keys() else group[4]
@@ -406,6 +376,18 @@ def is_group_creator():
         return is_creator_or_owner
 
     return app_commands.check(predicate)
+
+
+async def get_context_group(interaction: discord.Interaction, db) -> Optional[dict]:
+    guild = interaction.guild
+    if guild is None:
+        return None
+    group = await db.get_study_group_by_channel(interaction.channel_id)
+    if not isinstance(group, dict):
+        group = await db.get_user_group(interaction.user.id, interaction.channel_id)
+    if not isinstance(group, dict) or group.get("guild_id") != guild.id or not group.get("active", 1):
+        return None
+    return group
 
 
 class ProductivityService:

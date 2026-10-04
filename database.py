@@ -1,8 +1,8 @@
 import asyncio
 import logging
 import sqlite3
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -142,9 +142,19 @@ class DBHandler:
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 guild_id INTEGER,
-                permission_level INTEGER NOT NULL
+                permission_level INTEGER NOT NULL,
+                grant_source TEXT NOT NULL DEFAULT 'explicit'
             )
             """)
+
+            manager_columns = {column[1] for column in cursor.execute("PRAGMA table_info(managers)")}
+            if "grant_source" not in manager_columns:
+                cursor.execute("ALTER TABLE managers ADD COLUMN grant_source TEXT NOT NULL DEFAULT 'explicit'")
+                logger.info("Added manager grant source setting")
+            cursor.execute(
+                "UPDATE managers SET permission_level = ? WHERE permission_level = ?",
+                (3, 2),
+            )
 
             cursor.execute("""
                 DELETE FROM managers
@@ -180,7 +190,9 @@ class DBHandler:
                 vc_cleanup_time INTEGER DEFAULT 600,
                 vc_category_id INTEGER,
                 group_category_id INTEGER,
-                commands_channel_id INTEGER
+                commands_channel_id INTEGER,
+                default_group_duration INTEGER NOT NULL DEFAULT 86400,
+                default_pomodoro_duration INTEGER NOT NULL DEFAULT 86400
             )
             """)
             logger.info("Created 'guild_settings' table.")
@@ -200,6 +212,16 @@ class DBHandler:
             if "mod_log_channel_id" not in guild_settings_columns:
                 cursor.execute("ALTER TABLE guild_settings ADD COLUMN mod_log_channel_id INTEGER DEFAULT NULL;")
                 logger.info("Added moderator log channel setting")
+            if "default_group_duration" not in guild_settings_columns:
+                cursor.execute(
+                    "ALTER TABLE guild_settings ADD COLUMN default_group_duration INTEGER NOT NULL DEFAULT 86400"
+                )
+                logger.info("Added default group duration setting")
+            if "default_pomodoro_duration" not in guild_settings_columns:
+                cursor.execute(
+                    "ALTER TABLE guild_settings ADD COLUMN default_pomodoro_duration INTEGER NOT NULL DEFAULT 86400"
+                )
+                logger.info("Added default Pomodoro duration setting")
 
             ### TASKS
             cursor.execute("""
@@ -317,6 +339,20 @@ class DBHandler:
             ).fetchone()
             return row[0] if row else None
 
+    async def get_default_group_duration(self, guild_id: int) -> int:
+        async with self.lock:
+            row = self.conn.execute(
+                "SELECT default_group_duration FROM guild_settings WHERE guild_id = ?", (guild_id,)
+            ).fetchone()
+            return int(row[0]) if row and row[0] is not None else 86400
+
+    async def get_default_pomodoro_duration(self, guild_id: int) -> int:
+        async with self.lock:
+            row = self.conn.execute(
+                "SELECT default_pomodoro_duration FROM guild_settings WHERE guild_id = ?", (guild_id,)
+            ).fetchone()
+            return int(row[0]) if row and row[0] is not None else 86400
+
     async def save_setup(
         self,
         guild_id: int,
@@ -324,21 +360,49 @@ class DBHandler:
         commands_channel_id: int,
         max_members: int,
         log_channel_id: Optional[int] = None,
+        *,
+        default_group_duration: Optional[int] = None,
+        default_pomodoro_duration: Optional[int] = None,
     ) -> None:
+        for name, duration in (
+            ("default_group_duration", default_group_duration),
+            ("default_pomodoro_duration", default_pomodoro_duration),
+        ):
+            if duration is None:
+                continue
+            if isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0:
+                raise ValueError(f"{name} must be a positive integer number of seconds")
+            try:
+                datetime.now(timezone.utc) + timedelta(seconds=duration)
+            except OverflowError as exc:
+                raise ValueError(f"{name} exceeds the supported date range") from exc
         async with self.lock:
             with self.conn:
                 self.conn.execute(
                     """
                     INSERT INTO guild_settings (
-                        guild_id, group_category_id, commands_channel_id, default_max_members, mod_log_channel_id
-                    ) VALUES (?, ?, ?, ?, ?)
+                        guild_id, group_category_id, commands_channel_id, default_max_members,
+                        mod_log_channel_id, default_group_duration, default_pomodoro_duration
+                    ) VALUES (?, ?, ?, ?, ?, COALESCE(?, 86400), COALESCE(?, 86400))
                     ON CONFLICT(guild_id) DO UPDATE SET
                         group_category_id = excluded.group_category_id,
                         commands_channel_id = excluded.commands_channel_id,
                         default_max_members = excluded.default_max_members,
-                        mod_log_channel_id = COALESCE(excluded.mod_log_channel_id, guild_settings.mod_log_channel_id)
+                        mod_log_channel_id = COALESCE(excluded.mod_log_channel_id, guild_settings.mod_log_channel_id),
+                        default_group_duration = COALESCE(?, guild_settings.default_group_duration),
+                        default_pomodoro_duration = COALESCE(?, guild_settings.default_pomodoro_duration)
                     """,
-                    (guild_id, category_id, commands_channel_id, max_members, log_channel_id),
+                    (
+                        guild_id,
+                        category_id,
+                        commands_channel_id,
+                        max_members,
+                        log_channel_id,
+                        default_group_duration,
+                        default_pomodoro_duration,
+                        default_group_duration,
+                        default_pomodoro_duration,
+                    ),
                 )
 
     # TODO: saving pomodoro sessions
@@ -718,6 +782,14 @@ class DBHandler:
             logger.debug(f"Retrieved {len(groups)} study groups for guild {guild_id}")
             return [dict(group) for group in groups]
 
+    async def get_guild_group_names(self, guild_id: int) -> list[str]:
+        """Return active and retired group names for guild-local name allocation."""
+        async with self.lock:
+            rows = self.conn.execute(
+                "SELECT name FROM study_groups WHERE guild_id = ? ORDER BY id", (guild_id,)
+            ).fetchall()
+            return [row[0] for row in rows]
+
     async def get_all_study_groups(self, guild_id: int):
         """Alias for get_all_study_groups_of_guild."""
         return await self.get_all_study_groups_of_guild(guild_id)
@@ -1054,25 +1126,81 @@ class DBHandler:
             max_members = result["default_max_members"] if (result and "default_max_members" in result.keys()) else 10
             return max_members if max_members is not None else 10
 
-    async def add_manager(self, user_id, guild_id, permission_level):
+    async def add_manager(self, user_id, guild_id, permission_level, *, grant_source="explicit"):
+        if grant_source not in ("explicit", "server_sync"):
+            raise ValueError("grant_source must be explicit or server_sync")
+        level_val = permission_level.value if hasattr(permission_level, "value") else int(permission_level)
+        if level_val == 2:
+            level_val = 3
         async with self.lock:
             cursor = self.conn.cursor()
-            level_val = permission_level.value if hasattr(permission_level, "value") else int(permission_level)
-            cursor.execute(
-                """
-            INSERT OR REPLACE INTO managers (user_id, guild_id, permission_level)
-            VALUES (?, ?, ?)
-            """,
-                (user_id, guild_id, level_val),
+            with self.conn:
+                existing = cursor.execute(
+                    "SELECT grant_source FROM managers WHERE user_id = ? AND guild_id IS ?",
+                    (user_id, guild_id),
+                ).fetchone()
+                if existing and not (grant_source == "server_sync" and existing[0] == "explicit"):
+                    cursor.execute(
+                        "UPDATE managers SET permission_level = ?, grant_source = ? "
+                        "WHERE user_id = ? AND guild_id IS ?",
+                        (level_val, grant_source, user_id, guild_id),
+                    )
+                elif not existing:
+                    cursor.execute(
+                        "INSERT INTO managers (user_id, guild_id, permission_level, grant_source) VALUES (?, ?, ?, ?)",
+                        (user_id, guild_id, level_val, grant_source),
+                    )
+            logger.info(
+                "Manager grant saved: user_id=%s guild_id=%s permission_level=%s grant_source=%s",
+                user_id,
+                guild_id,
+                level_val,
+                grant_source,
             )
-            self.conn.commit()
-            logger.info(f"Added/Updated manager: user={user_id}, guild={guild_id}, permission_level={level_val}")
+
+    async def sync_guild_manager_grants(self, guild_id: int, grants: Mapping[int, int]) -> None:
+        """Replace a guild's native staff grants while retaining explicit grants."""
+        levels = {int(user_id): int(level) for user_id, level in grants.items()}
+        if any(level not in (2, 3) for level in levels.values()):
+            raise ValueError("server-synced manager levels must be 2 or 3")
+        levels = {user_id: 3 for user_id in levels}
+        async with self.lock:
+            with self.conn:
+                current = self.conn.execute(
+                    "SELECT user_id FROM managers WHERE guild_id = ? AND grant_source = ?",
+                    (guild_id, "server_sync"),
+                ).fetchall()
+                for row in current:
+                    if row[0] not in levels:
+                        self.conn.execute(
+                            "DELETE FROM managers WHERE guild_id = ? AND user_id = ? AND grant_source = ?",
+                            (guild_id, row[0], "server_sync"),
+                        )
+                for user_id, level in levels.items():
+                    existing = self.conn.execute(
+                        "SELECT grant_source FROM managers WHERE guild_id = ? AND user_id = ?",
+                        (guild_id, user_id),
+                    ).fetchone()
+                    if existing and existing[0] == "explicit":
+                        continue
+                    if existing:
+                        self.conn.execute(
+                            "UPDATE managers SET permission_level = ? WHERE guild_id = ? AND user_id = ?",
+                            (level, guild_id, user_id),
+                        )
+                    else:
+                        self.conn.execute(
+                            "INSERT INTO managers (user_id, guild_id, permission_level, grant_source) "
+                            "VALUES (?, ?, ?, ?)",
+                            (user_id, guild_id, level, "server_sync"),
+                        )
+        logger.info("Synchronized server staff grants: guild_id=%s count=%s", guild_id, len(levels))
 
     async def remove_manager(self, user_id, guild_id):
         async with self.lock:
             cursor = self.conn.cursor()
             cursor.execute(
-                "DELETE FROM managers WHERE user_id = ? AND guild_id = ?",
+                "DELETE FROM managers WHERE user_id = ? AND guild_id IS ?",
                 (user_id, guild_id),
             )
             self.conn.commit()
@@ -1082,7 +1210,9 @@ class DBHandler:
         async with self.lock:
             cursor = self.conn.cursor()
             cursor.execute(
-                "SELECT * FROM managers WHERE user_id = ? AND (guild_id = ? OR guild_id IS NULL)",
+                "SELECT * FROM managers WHERE user_id = ? AND "
+                "(guild_id = ? OR (guild_id IS NULL AND permission_level = 4)) "
+                "ORDER BY permission_level DESC, guild_id IS NULL ASC LIMIT 1",
                 (user_id, guild_id),
             )
             manager = cursor.fetchone()
@@ -1095,7 +1225,8 @@ class DBHandler:
         async with self.lock:
             cursor = self.conn.cursor()
             cursor.execute(
-                "SELECT * FROM managers WHERE guild_id = ? OR guild_id IS NULL",
+                "SELECT * FROM managers WHERE guild_id = ? OR (guild_id IS NULL AND permission_level = 4) "
+                "ORDER BY permission_level DESC, user_id",
                 (guild_id,),
             )
             managers = cursor.fetchall()

@@ -11,10 +11,13 @@ from discord import app_commands
 from discord.ext import commands
 from discord.ui import Button, Modal, TextInput, View
 
+from cogs._session_controls import request_session_end
 from database import DBHandler
 from utils import (
+    DEFAULT_SESSION_DURATION,
     acknowledge_interaction,
     check_manager,
+    has_guild_permissions,
     parse_mentions,
     parse_seconds_to_hms,
     send_response,
@@ -121,7 +124,7 @@ class StudyGroup:
 
         # Time related attributes
         self.start_time: float = datetime.now().timestamp()
-        self.duration: int = 12 * 60 * 60  # Default duration of 12 hours
+        self.duration: int = DEFAULT_SESSION_DURATION
         self.end_time: float = (datetime.fromtimestamp(self.start_time) + timedelta(seconds=self.duration)).timestamp()
         self.current_time: float = datetime.now().timestamp()
 
@@ -155,34 +158,48 @@ class StudyGroup:
         self.guild = interaction.guild
         logger.info(f"Starting resource setup for StudyGroup '{self.name}' in guild '{self.guild_id}'")
 
+        category = self.guild.get_channel(self.category_id)
+        if not isinstance(category, discord.CategoryChannel):
+            return "The configured study group category is unavailable. Run /setup again."
+        me = self.guild.me
+        if me is None or not me.guild_permissions.manage_roles:
+            return "I need Manage Roles to create and assign the study group role."
+        top_position = getattr(me.top_role, "position", None)
+        if isinstance(top_position, int) and top_position <= 0:
+            return "Move my bot role above the server's default role so I can assign study group roles."
+        category_permissions = category.permissions_for(me)
+        if not all(
+            (
+                category_permissions.manage_channels,
+                category_permissions.view_channel,
+                category_permissions.send_messages,
+                category_permissions.embed_links,
+            )
+        ):
+            return "I need Manage Channels, View Channel, Send Messages, and Embed Links in the study group category."
+
         # 1. Role and channel creation
         try:
             # Create group role
-            group_role = await self.guild.create_role(name=f"{self.name} Group", reason="Role for study group")
+            group_role = await self.guild.create_role(name=f"{self.name} Group"[:100], reason="Role for study group")
             self.group_role_id = group_role.id
             logger.info(f"Role '{group_role.name}' created for StudyGroup '{self.name}'")
 
-            # Create channels in the specified category
-            category = self.guild.get_channel(self.category_id)
-            if not category or not isinstance(category, discord.CategoryChannel):
-                logger.error(f"Category not found with ID {self.category_id} in {self.guild_id}")
-                raise ValueError(f"Invalid category: {self.category_id} for StudyGroup '{self.name}'")
-
             text_channel = await category.create_text_channel(
-                name=f"{self.name}-text", reason="Text channel for study group"
+                name=f"{self.name}-text"[:100],
+                overwrites=category.overwrites,
+                reason="Text channel for study group",
             )
             voice_channel = await category.create_voice_channel(
-                name=f"{self.name}-voice", reason="Voice channel for study group"
+                name=f"{self.name}-voice"[:100],
+                overwrites=category.overwrites,
+                reason="Voice channel for study group",
             )
             self.text_id = text_channel.id
             self.vc_id = voice_channel.id
             logger.info(
                 f"Text and voice channels created for StudyGroup '{self.name}': Text ID: {self.text_id}, Voice ID: {self.vc_id}"
             )
-
-            # Set permissions for group role in channels
-            await text_channel.set_permissions(group_role, read_messages=True, send_messages=True)
-            await voice_channel.set_permissions(group_role, connect=True, speak=True, stream=False)
 
         except discord.Forbidden as forbidden_e:
             logger.error(f"Permission error during role/channel setup: {forbidden_e}")
@@ -403,44 +420,9 @@ class StudyGroup:
     ## Permission Helper - Can Control Group
     async def can_control(self, user: Union[discord.Member, discord.User]) -> bool:
         """Determines if the given user has permission to manage/control the study group."""
-        if getattr(self.bot, "bot_developer_id", None) == user.id:
-            return True
         if user.id in (self.owner_id, self.creator_id):
             return True
-        if self.guild:
-            if getattr(self.guild, "owner_id", None) == user.id:
-                return True
-            member = user if isinstance(user, discord.Member) else self.guild.get_member(user.id)
-            if member:
-                perms = member.guild_permissions
-                if (
-                    perms.administrator
-                    or perms.manage_guild
-                    or perms.manage_channels
-                    or perms.manage_roles
-                    or perms.moderate_members
-                ):
-                    return True
-                mod_keywords = {
-                    "admin",
-                    "administrator",
-                    "mod",
-                    "moderator",
-                    "manager",
-                    "lead",
-                    "owner",
-                    "staff",
-                }
-                if any(any(kw in r.name.lower() for kw in mod_keywords) for r in member.roles):
-                    return True
-            if hasattr(self.db, "get_manager"):
-                try:
-                    mgr = await self.db.get_manager(user.id, self.guild.id)
-                    if mgr and (mgr["permission_level"] >= 3 or mgr["guild_id"] is None):
-                        return True
-                except Exception:
-                    pass
-        return False
+        return await has_guild_permissions(user, self.guild, self.bot)
 
     ## Membership - Transfer Ownership
     async def transfer_ownership(self, interaction: discord.Interaction, new_owner_id: int) -> None:
@@ -580,27 +562,6 @@ class StudyGroup:
             extend_button: Button[Any] = Button(label="Extend", style=discord.ButtonStyle.secondary, row=1)
             votekick_button: Button[Any] = Button(label="Votekick", style=discord.ButtonStyle.secondary, row=1)
 
-            # Row 2: Pomodoro & Check-in Integrated Controls
-            checkin_present_btn: Button[Any] = Button(
-                label="Check-in: Present",
-                style=discord.ButtonStyle.success,
-                emoji="✅",
-                row=2,
-            )
-            checkin_break_btn: Button[Any] = Button(
-                label="Check-in: Break",
-                style=discord.ButtonStyle.primary,
-                emoji="☕",
-                row=2,
-            )
-            pomo_toggle_btn: Button[Any] = Button(
-                label="Pomo: Pause/Resume",
-                style=discord.ButtonStyle.secondary,
-                emoji="⏯️",
-                row=2,
-            )
-            pomo_end_btn: Button[Any] = Button(label="Pomo: End", style=discord.ButtonStyle.danger, emoji="⏹️", row=2)
-
             # Assign Callbacks
             leave_button.callback = self.leave_group_callback  # type: ignore[method-assign]
             end_button.callback = self.end_group_callback  # type: ignore[method-assign]
@@ -612,11 +573,6 @@ class StudyGroup:
             video_toggle_button.callback = self.video_toggle_callback  # type: ignore[method-assign]
             extend_button.callback = self.extend_duration_callback  # type: ignore[method-assign]
             votekick_button.callback = self.votekick_callback  # type: ignore[method-assign]
-
-            checkin_present_btn.callback = self.checkin_present_callback  # type: ignore[method-assign]
-            checkin_break_btn.callback = self.checkin_break_callback  # type: ignore[method-assign]
-            pomo_toggle_btn.callback = self.pomo_toggle_callback  # type: ignore[method-assign]
-            pomo_end_btn.callback = self.pomo_end_callback  # type: ignore[method-assign]
 
             # Create View and add all components
             self.view = View()
@@ -630,11 +586,6 @@ class StudyGroup:
             self.view.add_item(video_toggle_button)
             self.view.add_item(extend_button)
             self.view.add_item(votekick_button)
-
-            self.view.add_item(checkin_present_btn)
-            self.view.add_item(checkin_break_btn)
-            self.view.add_item(pomo_toggle_btn)
-            self.view.add_item(pomo_end_btn)
 
             # self.view.add_item(select)
 
@@ -900,12 +851,14 @@ class StudyGroup:
     ## Callback - End Group
     async def end_group_callback(self, interaction: discord.Interaction):
         await acknowledge_interaction(interaction)
-        if not await self.can_control(interaction.user):
-            await send_response(
-                interaction,
-                "Only the group owner, creator, or server managers/moderators can end this study group.",
-                ephemeral=True,
-            )
+        if interaction.user.id != self.owner_id and not await has_guild_permissions(
+            interaction.user, self.guild, self.bot
+        ):
+            await self.request_end(interaction)
+            return
+
+        if not self.active:
+            await send_response(interaction, "This study group has already ended.", ephemeral=True)
             return
 
         role = self.guild.get_role(self.group_role_id) if self.guild else None
@@ -917,9 +870,29 @@ class StudyGroup:
             f"❗❗Attention❗❗\n{role_mention}\nThe group will be destroyed in 60 seconds.\nPlease disconnect from the VCs and wrap up your activities.",
             ephemeral=ephemeral,
         )
-        asyncio.create_task(self.end_group(actor_id=interaction.user.id))
+        await self.end_group(actor_id=interaction.user.id)
         logger.info(
             f"User: {interaction.user.name} has called for the closure of Group'{self.name}', End Group function has started. The group will end shortly."
+        )
+
+    async def request_end(self, interaction: discord.Interaction) -> None:
+        if not interaction.response.is_done():
+            await acknowledge_interaction(interaction)
+        if not self.active or interaction.user.id not in self.member_ids:
+            await send_response(interaction, "Only current group members can request an end.", ephemeral=True)
+            return
+        owner_id = self.owner_id
+
+        async def confirm(owner_interaction: discord.Interaction) -> None:
+            await send_response(owner_interaction, f"Ending study group **{self.name}**...", ephemeral=True)
+            await self.end_group(delay=0, actor_id=owner_interaction.user.id)
+
+        await request_session_end(
+            interaction,
+            owner_id,
+            self.name,
+            lambda: self.active and self.owner_id == owner_id,
+            confirm,
         )
 
     ## Callback - Transfer Group
@@ -1177,7 +1150,7 @@ class StudyGroup:
             self.video_mode = changes["video_mode"]
             if enabled and isinstance(channel, discord.VoiceChannel):
                 for member in channel.members:
-                    if not member.bot and member.voice and not member.voice.self_video:
+                    if not member.bot and member.voice and not self.has_video(member.voice):
                         self._schedule_video_enforcement(member)
             else:
                 self._cancel_video_enforcement()
@@ -1198,6 +1171,10 @@ class StudyGroup:
         self._cancel_video_enforcement(member.id)
         self.video_enforcement_tasks[member.id] = asyncio.create_task(self._enforce_video(member))
 
+    @staticmethod
+    def has_video(voice_state: discord.VoiceState) -> bool:
+        return voice_state.self_video is True or voice_state.self_stream is True
+
     async def _enforce_video(self, member: discord.Member) -> None:
         user_id = member.id
         try:
@@ -1209,11 +1186,11 @@ class StudyGroup:
             voice_state = member.voice
             if not voice_state or not voice_state.channel or voice_state.channel.id != self.vc_id:
                 return
-            if voice_state.self_video:
+            if self.has_video(voice_state):
                 return
             try:
                 await member.send(
-                    f"Please turn on your camera in **{self.name}** within 30 seconds, "
+                    f"Please turn on your camera or screen sharing in **{self.name}** within 30 seconds, "
                     "or you will be disconnected from the study voice channel."
                 )
             except discord.HTTPException:
@@ -1229,7 +1206,7 @@ class StudyGroup:
             voice_state = member.voice
             if not voice_state or not voice_state.channel or voice_state.channel.id != self.vc_id:
                 return
-            if voice_state.self_video:
+            if self.has_video(voice_state):
                 return
             await member.move_to(None, reason=f"Video required in study group {self.group_id}")
             logger.info(
@@ -1253,7 +1230,7 @@ class StudyGroup:
     async def handle_voice_state_update(self, member: discord.Member, before, after) -> None:
         if not self.active or self.video_mode != "force" or member.bot:
             return
-        if after.channel is None or after.channel.id != self.vc_id or after.self_video:
+        if after.channel is None or after.channel.id != self.vc_id or self.has_video(after):
             self._cancel_video_enforcement(member.id)
             return
         self._schedule_video_enforcement(member)
@@ -1287,141 +1264,6 @@ class StudyGroup:
             logger.error(f"Error refreshing GUI for group '{self.name}': {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message("Failed to refresh dashboard.", ephemeral=True)
-
-    ## Callback - Check-in Present
-    async def checkin_present_callback(self, interaction: discord.Interaction):
-        try:
-            checkin_cog = self.bot.get_cog("CheckinCog") if self.bot else None
-            checkin_session = None
-            if checkin_cog:
-                for s in checkin_cog.active_sessions.values():
-                    if s.text_id == self.text_id:
-                        checkin_session = s
-                        break
-            if not checkin_session:
-                await interaction.response.send_message(
-                    "No active Check-in session in this group. Use `/checkin` to start one!",
-                    ephemeral=True,
-                )
-                return
-
-            uid = interaction.user.id
-            checkin_session.member_statuses[uid] = {"status": "present", "absences": 0}
-            if uid not in checkin_session.member_ids:
-                checkin_session.member_ids.append(uid)
-
-            await self.db.add_or_update_checkin_member(checkin_session.session_id, uid, "present", 0)
-            await interaction.response.send_message(
-                f"✅ {interaction.user.mention} marked **Present** for check-in!",
-                ephemeral=True,
-            )
-            await self.group_info_embed(update=True)
-        except Exception as e:
-            logger.error(f"Error in checkin_present_callback: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message("Error recording check-in status.", ephemeral=True)
-
-    ## Callback - Check-in Break
-    async def checkin_break_callback(self, interaction: discord.Interaction):
-        try:
-            checkin_cog = self.bot.get_cog("CheckinCog") if self.bot else None
-            checkin_session = None
-            if checkin_cog:
-                for s in checkin_cog.active_sessions.values():
-                    if s.text_id == self.text_id:
-                        checkin_session = s
-                        break
-            if not checkin_session:
-                await interaction.response.send_message(
-                    "No active Check-in session in this group. Use `/checkin` to start one!",
-                    ephemeral=True,
-                )
-                return
-
-            uid = interaction.user.id
-            checkin_session.member_statuses[uid] = {"status": "break", "absences": 1}
-            if uid not in checkin_session.member_ids:
-                checkin_session.member_ids.append(uid)
-
-            await self.db.add_or_update_checkin_member(checkin_session.session_id, uid, "break", 1)
-            await interaction.response.send_message(
-                f"☕ {interaction.user.mention} marked on **Break**!", ephemeral=True
-            )
-            await self.group_info_embed(update=True)
-        except Exception as e:
-            logger.error(f"Error in checkin_break_callback: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message("Error recording break status.", ephemeral=True)
-
-    ## Callback - Pomodoro Pause/Resume
-    async def pomo_toggle_callback(self, interaction: discord.Interaction):
-        try:
-            pomo_cog = self.bot.get_cog("Pomodoro") if self.bot else None
-            pomo_session = None
-            if pomo_cog:
-                pomo_session = pomo_cog.sessions.get(self.group_id)
-                if not pomo_session:
-                    for s in pomo_cog.sessions.values():
-                        s_group_id = str(getattr(s, "group_id", ""))
-                        s_text_id = getattr(s, "text_id", None)
-                        if s_group_id == str(self.group_id) or (s_text_id is not None and s_text_id == self.text_id):
-                            pomo_session = s
-                            break
-
-            if not pomo_session:
-                await interaction.response.send_message(
-                    "No active Pomodoro session in this group. Use `/start_pomodoro` to start one!",
-                    ephemeral=True,
-                )
-                return
-
-            pomo_session.is_paused = not pomo_session.is_paused
-            state_text = "paused ⏸️" if pomo_session.is_paused else "resumed ▶️"
-            await interaction.response.send_message(f"Pomodoro timer {state_text}!", ephemeral=True)
-            await self.group_info_embed(update=True)
-        except Exception as e:
-            logger.error(f"Error in pomo_toggle_callback: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message("Error toggling Pomodoro state.", ephemeral=True)
-
-    ## Callback - Pomodoro End
-    async def pomo_end_callback(self, interaction: discord.Interaction):
-        try:
-            if not await self.can_control(interaction.user):
-                await interaction.response.send_message(
-                    "You do not have permission to end the Pomodoro session for this group.",
-                    ephemeral=True,
-                )
-                return
-
-            pomo_cog = self.bot.get_cog("Pomodoro") if self.bot else None
-            pomo_session = None
-            if pomo_cog:
-                pomo_session = pomo_cog.sessions.get(self.group_id)
-                if not pomo_session:
-                    for s in pomo_cog.sessions.values():
-                        s_group_id = str(getattr(s, "group_id", ""))
-                        s_text_id = getattr(s, "text_id", None)
-                        if s_group_id == str(self.group_id) or (s_text_id is not None and s_text_id == self.text_id):
-                            pomo_session = s
-                            break
-
-            if not pomo_session:
-                await interaction.response.send_message("No active Pomodoro session in this group.", ephemeral=True)
-                return
-
-            if pomo_cog:
-                pomo_cog.sessions.pop(self.group_id, None)
-                pomo_cog.sessions.pop(getattr(pomo_session, "group_id", None), None)
-                if not pomo_cog.sessions and pomo_cog.run_timer.is_running():
-                    pomo_cog.run_timer.stop()
-
-            await interaction.response.send_message("Pomodoro session ended.", ephemeral=True)
-            await self.group_info_embed(update=True)
-        except Exception as e:
-            logger.error(f"Error in pomo_end_callback: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message("Error ending Pomodoro session.", ephemeral=True)
 
     ### --- END FUNCTIONS --- ###
     """
@@ -1714,6 +1556,7 @@ class StudyGroupCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.active_study_groups = {}
+        self._creation_locks: dict[int, asyncio.Lock] = {}
         logger.info("Study Group cog initialized")
 
     @commands.Cog.listener()
@@ -1723,7 +1566,6 @@ class StudyGroupCog(commands.Cog):
                 await group.handle_voice_state_update(member, before, after)
 
     @app_commands.command(name="set_mod_log_channel", description="Set or disable study group action logging")
-    @app_commands.default_permissions(manage_guild=True)
     async def set_mod_log_channel(
         self, interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None
     ):
@@ -1788,7 +1630,6 @@ class StudyGroupCog(commands.Cog):
         description="Set the default category for new study groups (Admin/Mod only)",
     )
     @app_commands.describe(category="The category to use for new study groups")
-    @app_commands.default_permissions(manage_guild=True)
     async def set_group_category(self, interaction: discord.Interaction, category: discord.CategoryChannel):
         await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
@@ -1798,8 +1639,7 @@ class StudyGroupCog(commands.Cog):
 
         manager_cog = self.bot.get_cog("Manager")
         if manager_cog:
-            # 2 is PermissionLevel.MODERATOR
-            if await manager_cog.get_permission_level(interaction.guild_id, interaction.user.id) < 2:
+            if await manager_cog.get_permission_level(interaction.guild_id, interaction.user.id) < 3:
                 await send_response(
                     interaction,
                     "You must be at least a Moderator to use this command.",
@@ -1825,7 +1665,6 @@ class StudyGroupCog(commands.Cog):
         name: Optional[str] = None,
         max_members: Optional[int] = None,
     ):
-        # Defer the message to prevent delays and avoid timeouts
         await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
 
@@ -1833,10 +1672,22 @@ class StudyGroupCog(commands.Cog):
             await send_response(interaction, "This command can only be used in a server.", ephemeral=True)
             return
 
-        import uuid
+        async with self._creation_locks.setdefault(interaction.guild.id, asyncio.Lock()):
+            await self._create_group_locked(interaction, mentions, name, max_members, ephemeral)
 
-        if not name:
-            name = f"Study Session - {str(uuid.uuid4())[:6]}"
+    async def _create_group_locked(
+        self,
+        interaction: discord.Interaction,
+        mentions: str,
+        name: Optional[str],
+        max_members: Optional[int],
+        ephemeral: bool,
+    ) -> None:
+        assert interaction.guild is not None
+        if name is not None and (not name.strip() or len(name.strip()) > 100):
+            await send_response(interaction, "Choose a group name between 1 and 100 characters.", ephemeral=True)
+            return
+        name = await self._next_group_name(interaction, name)
 
         category_id = await self.bot.db.get_group_category(interaction.guild.id)
         category = interaction.guild.get_channel(category_id) if category_id else None
@@ -1850,8 +1701,10 @@ class StudyGroupCog(commands.Cog):
 
         if max_members is None:
             max_members = await self.bot.db.get_default_max_members(interaction.guild.id)
+        if max_members < 1:
+            await send_response(interaction, "The group must allow at least its creator to join.", ephemeral=True)
+            return
 
-        # Parsing members list into member IDs (will incorporate into parse_mentions directly later)
         mentioned_member_ids: List[int] = list(
             dict.fromkeys([interaction.user.id, *parse_mentions(interaction, mentions)])
         )
@@ -1861,7 +1714,6 @@ class StudyGroupCog(commands.Cog):
             interaction=interaction,
             name=name,
             member_ids=mentioned_member_ids,
-            max_members=max_members,
             category=category,
         ):
             logger.error(f"Validation failed for {name} by user {interaction.user}")
@@ -1875,8 +1727,15 @@ class StudyGroupCog(commands.Cog):
             creator_id=interaction.user.id,
             category_id=category.id,
             max_members=max_members,
-            member_ids=mentioned_member_ids,
+            member_ids=[interaction.user.id],
         )
+
+        duration_getter = getattr(self.bot.db, "get_default_group_duration", None)
+        if callable(duration_getter):
+            duration = await duration_getter(interaction.guild.id)
+            if isinstance(duration, int) and duration > 0:
+                study_group.duration = duration
+                study_group.end_time = study_group.start_time + duration
 
         # Collect result messages
         result = await study_group.setup_group_resources(interaction)
@@ -1891,7 +1750,87 @@ class StudyGroupCog(commands.Cog):
             self.active_study_groups[study_group.group_id] = study_group
 
         # Send a single message to the user with the result of the operation
-        await send_response(interaction, result, ephemeral=ephemeral)
+        await send_response(interaction, result, ephemeral=ephemeral if study_group.active else True)
+        if study_group.active:
+            for member_id in mentioned_member_ids:
+                if member_id == interaction.user.id:
+                    continue
+                member = interaction.guild.get_member(member_id)
+                if member is not None:
+                    await study_group.send_invite(interaction, member, ephemeral=True)
+
+    async def _next_group_name(self, interaction: discord.Interaction, name: Optional[str]) -> str:
+        assert interaction.guild is not None
+        names = {value.casefold() for value in await self.bot.db.get_guild_group_names(interaction.guild.id)}
+        names.update(
+            group.name.casefold()
+            for group in self.active_study_groups.values()
+            if group.guild_id == interaction.guild.id
+        )
+        if name is None:
+            username = interaction.user.name
+            prefix = f"{username}-studysession-"
+            numbers = [
+                int(value[len(prefix) :])
+                for value in names
+                if value.startswith(prefix.casefold()) and value[len(prefix) :].isdigit()
+            ]
+            return f"{prefix}{max(numbers, default=0) + 1}"
+        base = name.strip()
+        candidate = base
+        suffix = 2
+        while candidate.casefold() in names:
+            ending = f"-{suffix}"
+            candidate = f"{base[: 100 - len(ending)]}{ending}"
+            suffix += 1
+        return candidate
+
+    async def _request_persisted_end(self, interaction: discord.Interaction, record: dict) -> None:
+        group_id = str(record.get("group_id") or record["id"])
+        members = await self.bot.db.fetch_members_of_group(group_id)
+        if interaction.user.id not in members:
+            await send_response(interaction, "Only current group members can request an end.", ephemeral=True)
+            return
+        owner_id = record["owner_id"]
+
+        async def confirm(owner_interaction: discord.Interaction) -> None:
+            current = await self.bot.db.fetch_study_group_by_id(group_id)
+            if not current or not current.get("active") or current.get("owner_id") != owner_id:
+                await send_response(owner_interaction, "This request is no longer active.", ephemeral=True)
+                return
+            assert interaction.guild is not None
+            group = self.active_study_groups.get(group_id)
+            if group is None:
+                group = StudyGroup(
+                    self.bot.db,
+                    self,
+                    interaction.guild.id,
+                    current["name"],
+                    current["creator_id"],
+                    current.get("category_id", 0),
+                    current["max_members"],
+                    members,
+                )
+                group.group_id = group_id
+                group.owner_id = owner_id
+                group.guild = interaction.guild
+                group.active = True
+                group.text_id = current.get("text_id", 0)
+                group.vc_id = current.get("vc_id", 0)
+                group.group_role_id = current.get("group_role_id", 0)
+            if not group.active or group.owner_id != owner_id:
+                await send_response(owner_interaction, "This request is no longer active.", ephemeral=True)
+                return
+            await send_response(owner_interaction, f"Ending study group **{group.name}**...", ephemeral=True)
+            await group.end_group(delay=0, actor_id=owner_id)
+
+        await request_session_end(
+            interaction,
+            owner_id,
+            record["name"],
+            lambda: bool(record.get("active")),
+            confirm,
+        )
 
     @app_commands.command(
         name="transfer_group",
@@ -1921,7 +1860,7 @@ class StudyGroupCog(commands.Cog):
                     break
         else:
             for grp in self.active_study_groups.values():
-                if grp.guild_id == interaction.guild.id and grp.text_id == interaction.channel_id:
+                if grp.guild_id == interaction.guild.id and interaction.channel_id in (grp.text_id, grp.vc_id):
                     target_group = grp
                     break
 
@@ -1974,7 +1913,6 @@ class StudyGroupCog(commands.Cog):
         name="purge_groups",
         description="Purge all active study groups in the server (Mods only)",
     )
-    @app_commands.default_permissions(manage_guild=True)
     async def purge_groups(self, interaction: discord.Interaction):
         await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
@@ -1985,7 +1923,7 @@ class StudyGroupCog(commands.Cog):
         manager_cog = self.bot.get_cog("Manager")
         if manager_cog:
             level = await manager_cog.get_permission_level(interaction.guild_id, interaction.user.id)
-            if level < 2:
+            if level < 3:
                 await send_response(
                     interaction,
                     "You must be at least a Moderator to use this command.",
@@ -2059,13 +1997,15 @@ class StudyGroupCog(commands.Cog):
                     break
         else:
             for grp in self.active_study_groups.values():
-                if grp.guild_id == interaction.guild.id and grp.text_id == interaction.channel_id:
+                if grp.guild_id == interaction.guild.id and interaction.channel_id in (grp.text_id, grp.vc_id):
                     target_group = grp
                     break
 
         if target_group:
-            if not await target_group.can_control(interaction.user):
-                await send_response(interaction, "You don't have permission to end this group.", ephemeral=True)
+            if interaction.user.id != target_group.owner_id and not await has_guild_permissions(
+                interaction.user, interaction.guild, self.bot
+            ):
+                await target_group.request_end(interaction)
                 return
             await send_response(interaction, f"Ending study group **{target_group.name}**...", ephemeral=ephemeral)
             await target_group.end_group(delay=0, actor_id=interaction.user.id)
@@ -2081,9 +2021,14 @@ class StudyGroupCog(commands.Cog):
             await send_response(interaction, "No study group found to end.", ephemeral=True)
             return
 
+        record_guild = db_grp.get("guild_id")
+        if record_guild is not None and str(record_guild) != str(interaction.guild.id):
+            await send_response(interaction, "No study group found in this server.", ephemeral=True)
+            return
+
         is_mgr = await check_manager(interaction)
-        if interaction.user.id not in (db_grp.get("creator_id"), db_grp.get("owner_id")) and not is_mgr:
-            await send_response(interaction, "You don't have permission to end this group.", ephemeral=True)
+        if interaction.user.id != db_grp.get("owner_id") and not is_mgr:
+            await self._request_persisted_end(interaction, db_grp)
             return
 
         grp_id = db_grp.get("group_id") or db_grp.get("id")
@@ -2342,28 +2287,18 @@ class StudyGroupCog(commands.Cog):
         if not interaction.guild:
             await send_response(interaction, "This command can only be used in a server.", ephemeral=True)
             return
+        member = interaction.guild.get_member(user.id)
+        if member is None:
+            await send_response(interaction, "Invite a member from this server.", ephemeral=True)
+            return
 
-        target_group: Optional[StudyGroup] = None
-        if group_name:
-            for grp in self.active_study_groups.values():
-                if grp.guild_id == interaction.guild.id and grp.name.lower() == group_name.lower():
-                    target_group = grp
-                    break
-        else:
-            for grp in self.active_study_groups.values():
-                if grp.guild_id == interaction.guild.id and grp.text_id == interaction.channel_id:
-                    target_group = grp
-                    break
-
-        if not target_group:
-            user_grp = await self.bot.db.get_user_group(interaction.user.id, interaction.channel_id)
-            if user_grp:
-                target_group = self.active_study_groups.get(user_grp.get("group_id"))
+        async with self._creation_locks.setdefault(interaction.guild.id, asyncio.Lock()):
+            target_group = await self._resolve_invite_group(interaction, group_name)
 
         if not target_group:
             await send_response(
                 interaction,
-                "Could not locate your study group. Please specify `group_name` or run inside the group text channel.",
+                "Could not locate your study group. Specify `group_name` or use its text or voice channel.",
                 ephemeral=True,
             )
             return
@@ -2376,10 +2311,10 @@ class StudyGroupCog(commands.Cog):
             )
             return
 
-        if user.id in target_group.member_ids:
+        if member.id in target_group.member_ids:
             await send_response(
                 interaction,
-                f"{user.display_name} is already a member of **{target_group.name}**.",
+                f"{member.display_name} is already a member of **{target_group.name}**.",
                 ephemeral=True,
             )
             return
@@ -2392,7 +2327,69 @@ class StudyGroupCog(commands.Cog):
             )
             return
 
-        await target_group.send_invite(interaction, user, ephemeral=ephemeral)
+        await target_group.send_invite(interaction, member, ephemeral=ephemeral)
+
+    async def _resolve_invite_group(
+        self, interaction: discord.Interaction, group_name: Optional[str]
+    ) -> Optional[StudyGroup]:
+        guild = interaction.guild
+        if guild is None:
+            return None
+        normalized_name = group_name.strip() if group_name is not None else None
+        if normalized_name == "":
+            return None
+        for group in self.active_study_groups.values():
+            if not group.active or group.guild_id != guild.id:
+                continue
+            if normalized_name is not None and group.name.casefold() == normalized_name.casefold():
+                return group
+            if normalized_name is None and interaction.channel_id in (group.text_id, group.vc_id):
+                return group
+
+        record = None
+        if normalized_name is not None:
+            record = await self.bot.db.fetch_study_group_by_name(normalized_name, str(guild.id))
+        elif interaction.channel_id:
+            record = await self.bot.db.get_study_group_by_channel(interaction.channel_id)
+        if record is None and normalized_name is None:
+            record = await self.bot.db.get_user_group(interaction.user.id, interaction.channel_id)
+        if not record or not record.get("active") or str(record.get("guild_id")) != str(guild.id):
+            return None
+        group_id = str(record.get("group_id") or record["id"])
+        existing = self.active_study_groups.get(group_id)
+        if existing is not None and existing.active:
+            return existing
+
+        members = await self.bot.db.fetch_members_of_group(group_id)
+        group = StudyGroup(
+            self.bot.db,
+            self,
+            guild.id,
+            record["name"],
+            record["creator_id"],
+            record.get("category_id") or 0,
+            record["max_members"],
+            members,
+        )
+        group.group_id = group_id
+        group.member_ids = list(dict.fromkeys(members))
+        group.owner_id = record["owner_id"]
+        group.guild = guild
+        group.active = True
+        group.text_id = record.get("text_id") or 0
+        group.vc_id = record.get("vc_id") or 0
+        group.group_role_id = record.get("group_role_id") or 0
+        group.info_embed_id = record.get("info_embed_id") or 0
+        group.start_time = record.get("start_time") or group.start_time
+        group.duration = record.get("duration") or group.duration
+        group.end_time = record.get("end_time") or group.end_time
+        group.speak_enabled = bool(record.get("speak_enabled", 1))
+        group.video_mode = record.get("video_mode") or "off"
+        group.video_timer = record.get("video_timer") or 60
+        self.active_study_groups[group_id] = group
+        asyncio.create_task(group.check_end_condition())
+        logger.info("Study group hydrated for invite guild_id=%s group_id=%s", guild.id, group_id)
+        return group
 
 
 async def setup(bot):
