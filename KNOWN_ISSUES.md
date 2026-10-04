@@ -1,6 +1,6 @@
 # Known Issues and Debt (Audit Scope)
 
-Verification (2026-10-04 antigravity-fix): all 277 offline tests pass, including Pomodoro recovery, default VC, focus-time DAL, help/setup regression suites, and session-controls AsyncMock fix. Mypy reports zero errors; Ruff lint and formatting pass. Live Discord provisioning has not been exercised. The existing `audioop` deprecation warning remains.
+Verification (2026-10-04 antigravity-fix): all 281 offline tests pass, including Pomodoro recovery, default VC selection/relocation, focus-time DAL, help/setup regression suites, and session-controls AsyncMock fix. Mypy reports zero errors; Ruff lint and formatting pass. Live Discord provisioning has not been exercised. The existing `audioop` deprecation warning remains.
 
 ## 1. Functional & Technical Deficiencies
 
@@ -169,13 +169,13 @@ The rc3 candidate builds on `c7bdca3`. On bundled Python 3.12.14 with the origin
 - **Affected Files**: `cogs/manager.py`, `database.py`
 - **Details**: Approved `grant_source` tracking now distinguishes `server_sync` from `explicit`. Native authority is checked at evaluation time; staff sync removes stale server-synced rows without removing explicit grants. Legacy rows migrate as explicit because their original source cannot be inferred; review old grants manually if they were originally imported from Discord permissions.
 
-### UX-01: Default voice destination — partially implemented
+### UX-01: Default voice destination
 - **Severity**: Low (P2)
-- **Status**: **IN PROGRESS (2026-10-04)**
-- **Affected Files**: `cogs/_setup_view.py`, `cogs/_voice_relocation.py`, `cogs/study_groups.py`, `database.py`
-- **Details**: Setup now creates or reuses a `CPO Lobby` voice channel under the selected category and saves its ID as `default_vc_id` (backward-compatible additive column on `guild_settings`). `_voice_relocation.py` shared helper checks destination existence, guild, capacity, Connect/Move Members permissions, and member's current source before moving; failures log and DM the member without a disconnect fallback. `study_groups.py` calls the helper after the existing video grace period. Camera or screen sharing still qualifies. Microphone enforcement is intentionally disabled per user approval. Full grace-period DM notification, microphone-requirement, and retry-on-failure flow remain follow-up work. Covered by `tests/test_default_vc.py`.
+- **Status**: **RESOLVED (2026-10-04)**
+- **Affected Files**: `cogs/_setup_view.py`, `cogs/_voice_relocation.py`, `cogs/manager.py`, `cogs/study_groups.py`, `database.py`
+- **Details**: Setup supports an optional `default_vc` slash command parameter and interactive `VoiceSelect` channel picker in `SetupView`. It creates or reuses `CPO Lobby` (or the selected voice channel) under the category and saves its ID as `default_vc_id` (`guild_settings`). `SetupView.render()` alerts if the default VC will be moved across categories, and `_save_locked` validates `view_channel`, `connect`, and `move_members` bot permissions on the destination. `_voice_relocation.py` moves video-noncompliant members after the grace period and sends a DM notification on success or actionable guidance on failure without disconnecting. Microphone enforcement is intentionally disabled per user directive. Covered by `tests/test_default_vc.py` and `tests/test_setup.py` (281 total tests pass).
 
-Owner-approval controls, invitation consent, group naming, dashboard delegation, category permission inheritance, bounded intervals, paused expiry, Pomodoro recovery, and focus-time analytics now have offline regression coverage. Live Discord DM delivery, provisioning, and hierarchy behavior remain unverified.
+Owner-approval controls, invitation consent, group naming, dashboard delegation, category permission inheritance, bounded intervals, paused expiry, Pomodoro recovery, default voice relocation, and focus-time analytics now have offline regression coverage. Live Discord DM delivery, provisioning, and hierarchy behavior remain unverified.
 
 ### DATA-01: Productivity time is a placeholder
 - **Severity**: Medium (P2)

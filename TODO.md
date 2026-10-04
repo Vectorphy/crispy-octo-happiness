@@ -70,13 +70,13 @@ Updated on 2026-10-04 for the antigravity-fix / codex/default-vc-pomodoro-recove
 - [x] Synchronize CPO Manager and Bot Developer roles with category/channel access and stored staff grants.
 - [x] Resolve group invitations from persisted records, case-insensitive names, and text/voice channel context.
 - [x] Remove check-in/Pomodoro buttons from the group dashboard and hide standalone resource maintenance commands.
-- [ ] Add a default voice channel to `/setup`, create or reuse it under the selected category, and synchronize its permissions with that category. Persist its destination with a backward-compatible schema change after approval. When video or microphone participation enforcement removes a member from a study VC, move them to this default VC; handle missing destinations, full channels, and Move Members permission failures. Keep camera or screen sharing acceptable for video. Define and test the microphone requirement and grace period before enabling it.
-  - **Partial (2026-10-04)**: Setup creates/reuses `CPO Lobby` VC under the selected category; destination saved atomically as `default_vc_id`; `_voice_relocation.py` helper moves video-noncompliant members there. Microphone enforcement is intentionally disabled per user request. Full grace-period, DM notification, and microphone flow remain follow-up work.
+- [x] Add a default voice channel to `/setup`, create or reuse it under the selected category, and synchronize its permissions with that category. Persist its destination with a backward-compatible schema change after approval. When video participation enforcement removes a member from a study VC, move them to this default VC; handle missing destinations, full channels, and Move Members permission failures. Keep camera or screen sharing acceptable for video. (Microphone enforcement intentionally disabled per user directive).
+  - **Completed (2026-10-04)**: `/setup` supports optional `default_vc` parameter; `SetupView` includes interactive `VoiceSelect`, cross-category move notices, and `connect`/`move_members` permission checks on save; `_voice_relocation.py` notifies relocated members via DM on move. 281 tests pass.
 
 ## Release verification
 
 - [x] Verify the 2026-10-04 combined implementation: 224 offline tests, full Mypy, Ruff lint/format, and whitespace checks. Live Discord behavior still requires staging validation.
-- [x] Verify the 2026-10-04 antigravity-fix batch: 277 offline tests pass (includes Pomodoro recovery, default VC, focus-time DAL, help/setup regression suites, and `AsyncMock` mock-fix in session-controls). No new dependencies.
+- [x] Verify the 2026-10-04 antigravity-fix batch: 281 offline tests pass (includes Pomodoro recovery, full default VC selection/relocation, focus-time DAL, help/setup regression suites, and session-controls AsyncMock fix). No new dependencies.
 
 - [x] Prevent default task-list results from exposing group tasks; require `all_groups: true` for cross-group listing and make cross-group results ephemeral.
 - [x] Scope task persistence and default listings by `guild_id`, preventing cross-server task leaks.
