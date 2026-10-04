@@ -64,7 +64,7 @@ C4Context
         
         Container(domain_services, "Utils & Domain Logic", "Python", "Parameter validation, regex duration parsers, mention resolution, efficiency calculation.")
         
-        ContainerDb(sqlite_db, "Persistence Engine", "SQLite 3 / asyncio.Lock()", "Stores study groups, members, standups, managers, guild settings, and user tasks.")
+        ContainerDb(sqlite_db, "Persistence Engine", "SQLite 3 / asyncio.to_thread / asyncio.Lock()", "Stores study groups, members, standups, managers, guild settings, and user tasks off the main event loop.")
     }
 
     System_Ext(discord_api, "Discord Gateway & REST API", "WebSockets / HTTPS API for Discord interactions, voice states, channels, and embeds.")
@@ -371,7 +371,7 @@ graph TD
 | Component | Path | Responsibility |
 |---|---|---|
 | **Core Entry Point** | [`bot.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/bot.py) | Bot lifecycle, cog discovery, tree synchronization, error listeners. |
-| **Data Access Layer** | [`database.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/database.py) | SQLite schema creation, CRUD methods, `asyncio.Lock` concurrency. |
+| **Data Access Layer** | [`database.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/database.py) | SQLite schema creation, CRUD methods, `asyncio.to_thread` worker thread execution, and `asyncio.Lock` serialization. |
 | **Domain Utilities** | [`utils.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/utils.py) | Parsing, input validation, permission predicates, `ProductivityService`. |
 | **Check-in Standups** | [`cogs/checkin.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/checkin.py) | Time-boxed standup loops, status tracking buttons, strike counters. |
 | **Study Groups** | [`cogs/study_groups.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/study_groups.py) | Channel and role provisioning, group dashboards, member limits. |

@@ -25,7 +25,7 @@ Updated on 2026-10-04 for the antigravity-fix / codex/default-vc-pomodoro-recove
 
 ## Technical debt
 
-- [ ] Move SQLite I/O off the event loop using `asyncio.to_thread` or an approved async driver.
+- [x] Move SQLite I/O off the event loop using `asyncio.to_thread` or an approved async driver.
 - [x] Replace placeholder productivity hours with measured, persisted session/voice time before presenting efficiency as real analytics.
 - [ ] Decompose complex group and Pomodoro handlers into services.
 - [x] Include the standalone command matrix in pytest discovery.

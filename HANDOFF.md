@@ -20,13 +20,13 @@ The current branch starts from that commit. New work is dirty and not committed 
 
 ## Current changes
 
-- database.py: default_vc_id migration/getter/save_setup optional keyword; pomodoro_runtime JSON snapshots plus save/load/retire methods; group deletion retires runtimes; runtime saves reject inactive/missing same-guild groups. New productivity_focus_time table with cumulative per-session/per-user seconds, monotonic MAX upsert, finite/nonnegative validation and seconds aggregate getter. Existing data preserved, queries parameterized and locked.
+- database.py: default_vc_id migration/getter/save_setup optional keyword; pomodoro_runtime JSON snapshots plus save/load/retire methods; group deletion retires runtimes; runtime saves reject inactive/missing same-guild groups. New productivity_focus_time table with cumulative per-session/per-user seconds, monotonic MAX upsert, finite/nonnegative validation and seconds aggregate getter. All SQLite queries, transactions, and schema creation/migrations moved off the asyncio event loop via asyncio.to_thread with check_same_thread=False connection configuration and main-thread fallback for legacy test fixtures. Parameterized and locked.
 - cogs/_setup_view.py and manager.py: setup provides optional default_vc slash parameter and interactive VoiceSelect dropdown in SetupView; creates/reuses CPO Lobby or selected VC under category, checks connect/move_members bot permissions, alerts on cross-category VC moves, inherits/synchronizes permissions, saves destination atomically as default_vc_id, includes it in stale snapshots, retains resource IDs on failed saves, and displays destination and safety/privacy wording.
 - cogs/_voice_relocation.py: shared relocation helper checks destination, guild, capacity, Connect/Move Members, and current source before moving. Moves noncompliant video members after grace period, sends DM notification on success, and logs/DMs on failure; no disconnect fallback. Camera OR screen sharing qualifies. Microphone enforcement intentionally disabled per user directive.
 - bot.py: on_ready invokes Pomodoro hydration.
 - cogs/help.py: private immediate defer, runtime-level filtering of setup/staff descriptions, report-to-staff wording. Regular members retain ordinary session/task guidance. Staff see elevated descriptions but execution permissions remain unchanged.
 - utils.py and cogs/productivity_tracker.py: design agent replaced random hours with DB-measured attended focus, exact unrounded efficiency calculation, zero when untracked, labelled measured-focus embed.
-- Tests: setup/relocation/helper/help fixtures updated; tests/test_default_vc.py, tests/test_setup.py, and tests/test_productivity_time.py added/extended (281 tests passing).
+- Tests: setup/relocation/helper/help fixtures updated; tests/test_default_vc.py, tests/test_setup.py, tests/test_productivity_time.py, and tests/test_database.py added/extended (283 tests passing).
 
 ## Agents and ownership
 
@@ -40,7 +40,7 @@ The current branch starts from that commit. New work is dirty and not committed 
 1. [COMPLETED] Review real-DB recovery and analytics tests: unique tracking ID survives restart, cumulative focus seconds counted once for opted-in voice-present members, no offline focus time awarded, final counters persisted before retirement, group cleanup retires snapshots.
 2. [COMPLETED] Inspect bot.py on_ready hydration and timer/group lifecycle: foreign/inactive group rejection, channel permissions, paused state, stage advancement, reconnect idempotence, and retirement verified.
 3. [COMPLETED] Update documentation: CHANGELOG.md [Unreleased], KNOWN_ISSUES.md (ARC-07, DATA-01, and UX-01 resolved), TODO.md, KNOWLEDGE_GRAPH.md, commands.md, ARCHITECTURE.md, and knowledge_graph.json updated with pomodoro_runtime, full default VC selection/relocation, and measured focus metrics.
-4. [COMPLETED] Run full verification: 281/281 offline tests pass (zero failures), Mypy static typing 0 errors across 31 source files, Ruff lint and format check clean, git diff --check clean.
+4. [COMPLETED] Run full verification: 283/283 offline tests pass (zero failures), Mypy static typing 0 errors across 31 source files, Ruff lint and format check clean, git diff --check clean.
 5. [PENDING USER APPROVAL] Commit/push new branch: local atomic commits complete; remote push deferred awaiting user orders (no push on remote per user instruction). Remote origin: https://github.com/Vectorphy/crispy-octo-happiness.git.
 
 ## Commands and constraints
