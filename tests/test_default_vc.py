@@ -28,6 +28,8 @@ async def test_relocation_moves_to_saved_destination():
     member, db, destination = relocation_fixture()
     assert await relocate_to_default_vc(member, db, 40, "group")
     member.move_to.assert_awaited_once_with(destination, reason="Video required in study group group")
+    member.send.assert_awaited_once()
+    assert "moved to" in member.send.call_args.args[0]
 
 
 @pytest.mark.asyncio

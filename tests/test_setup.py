@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from cogs._setup_view import DurationModal, NewCategoryModal, SetupView
+from cogs._setup_view import DurationModal, NewCategoryModal, SetupView, VoiceSelect
 from cogs.manager import Manager, PermissionLevel
 
 
@@ -507,3 +507,69 @@ async def test_new_setup_session_invalidates_older_wizard():
     await button(older, "Save").callback(make_interaction(guild))
 
     manager.bot.db.save_setup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_setup_with_default_vc_parameter():
+    manager, guild, _, _ = make_setup()
+    voice = MagicMock(spec=discord.VoiceChannel, id=77, guild=guild)
+    interaction = make_interaction(guild)
+
+    await Manager.setup.callback(manager, interaction, default_vc=voice)
+
+    view = manager._setup_views[guild.id]
+    assert view.default_vc_id == 77
+
+
+@pytest.mark.asyncio
+async def test_setup_rejects_foreign_default_vc():
+    manager, guild, _, _ = make_setup()
+    foreign_guild = MagicMock(id=99)
+    foreign_voice = MagicMock(spec=discord.VoiceChannel, id=88, guild=foreign_guild)
+    interaction = make_interaction(guild)
+
+    await Manager.setup.callback(manager, interaction, default_vc=foreign_voice)
+
+    assert guild.id not in manager._setup_views
+    assert "Choose a voice channel in this server." in interaction.followup.send.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_setup_voice_select_stages_default_vc_and_renders_move_notice():
+    manager, guild, _, _ = make_setup()
+    other_voice = MagicMock(spec=discord.VoiceChannel, id=88, category_id=99, guild=guild)
+    guild.get_channel.side_effect = lambda identifier: {88: other_voice}.get(identifier)
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30)
+    voice_select = next(item for item in view.children if isinstance(item, VoiceSelect))
+
+    voice_select._values = [MagicMock(id=88)]
+    interaction = make_interaction(guild)
+    interaction.response.edit_message = AsyncMock()
+
+    await voice_select.callback(interaction)
+
+    assert view.default_vc_id == 88
+    interaction.response.edit_message.assert_awaited_once()
+    embed = interaction.response.edit_message.call_args.kwargs["embed"]
+    assert any(field.name == "Default VC move" for field in embed.fields)
+
+
+@pytest.mark.asyncio
+async def test_setup_save_requires_bot_voice_permissions():
+    manager, guild, _, _ = make_setup()
+    manager.bot.db.get_default_vc.return_value = 50
+    voice = guild.get_channel(50)
+    voice_perms = MagicMock()
+    voice_perms.view_channel = True
+    voice_perms.connect = False
+    voice_perms.move_members = True
+    voice.permissions_for.return_value = voice_perms
+
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30, default_vc_id=50)
+    manager._setup_views[guild.id] = view
+    interaction = make_interaction(guild)
+
+    await button(view, "Save").callback(interaction)
+
+    manager.bot.db.save_setup.assert_not_awaited()
+    assert "Connect, and Move Members permissions" in interaction.followup.send.call_args.args[0]
