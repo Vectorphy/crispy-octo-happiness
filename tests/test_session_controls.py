@@ -350,7 +350,9 @@ async def test_renew_button_rejects_unjoined_user():
 
 @pytest.mark.asyncio
 async def test_pomodoro_lifetime_warns_and_expires_even_when_paused():
-    cog = Pomodoro(MagicMock())
+    bot = MagicMock()
+    bot.db = AsyncMock()
+    cog = Pomodoro(bot)
     cog.send_notification = AsyncMock()
     cog._update_group_gui = AsyncMock()
     session = PomodoroSession("group", 25, 5, 15, guild_id=42, owner_id=10)
@@ -369,7 +371,9 @@ async def test_pomodoro_lifetime_warns_and_expires_even_when_paused():
 
 @pytest.mark.asyncio
 async def test_dashboard_pause_rejects_expired_session_and_end_removes_all_aliases():
-    cog = Pomodoro(MagicMock())
+    bot = MagicMock()
+    bot.db = AsyncMock()
+    cog = Pomodoro(bot)
     cog._update_group_gui = AsyncMock()
     session = PomodoroSession("group", 25, 5, 15, guild_id=42, owner_id=10)
     cog.sessions.update({"group": session, 7: session, "7": session})
