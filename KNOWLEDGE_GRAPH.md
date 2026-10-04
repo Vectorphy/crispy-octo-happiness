@@ -27,17 +27,26 @@ Chief-Productivity-Officer/
 │   ├── study_groups.py        # Dedicated study rooms, dynamic role/channel provisioning, dashboard
 │   ├── pomodoro.py            # Focus/Break timer state machine, VC auto-move, 5:1:3 ratio calculation
 │   ├── manager.py             # 5-tier permission hierarchy, session limits, command authorization
-│   ├── _setup_view.py         # Private staged setup wizard and lifetime editor
+│   ├── _setup_view.py         # Private staged setup wizard and lifetime editor; creates CPO Lobby VC
 │   ├── _staff_roles.py        # Staff role membership and scoped category/channel access
 │   ├── _session_controls.py   # Current-owner DM approval controls
-│   ├── help.py                # Private everyday command guide
+│   ├── _voice_relocation.py   # Shared helper: move video-noncompliant members to default VC
+│   ├── help.py                # Level-aware private everyday command guide (Levels 0-2 / 3-4)
 │   ├── tasklist.py            # Personal task CRUD with channel-aware study group scoping
-│   ├── productivity_tracker.py# Productivity metrics calculation and Discord embed formatting
+│   ├── productivity_tracker.py# DB-measured focus-time metrics and Discord embed formatting
 │   └── voice_channels.py      # Dedicated voice channel provisioning and lifecycle cleanup
 ├── tests/                     # [Verification Suite] Offline mock-safe unit tests
 │   ├── test_database.py       # Direct SQLite DAL transaction and CRUD tests
 │   ├── test_new_features.py   # Pomodoro ratios, channel scoping, and permission matrix tests
 │   ├── test_productivity_tracker.py # Productivity metric and embed calculation tests
+│   ├── test_productivity_time.py    # Focus-time DAL: monotonic upsert, multi-user, invalid values, restart
+│   ├── test_default_vc.py     # Default VC migration, getter, save_setup keyword, and relocation
+│   ├── test_pomodoro_recovery.py    # 9 Pomodoro restart-recovery scenarios (real-DB fixture)
+│   ├── test_session_controls.py     # Pomodoro/check-in session lifecycle and control tests
+│   ├── test_setup.py          # Setup wizard, category provisioning, stale-draft, and save tests
+│   ├── test_shared_controls.py      # Shared owner-DM approval controls tests
+│   ├── test_group_controls.py # Group creation, naming, invitation, and cleanup tests
+│   ├── test_release_fixes.py  # Standalone 54-flow command matrix (pytest-discovered)
 │   ├── test_tasklist.py       # Task list creation and completion logic tests
 │   └── test_utils.py          # Time parser and validation utility tests
 └── docs/                      # [Developer Documentation]
@@ -289,6 +298,7 @@ erDiagram
         int default_max_members "Default member limit for new study groups"
         int default_group_duration "Seconds; defaults to 86400"
         int default_pomodoro_duration "Seconds; defaults to 86400"
+        int default_vc_id "Nullable; CPO Lobby VC ID saved by /setup"
     }
 
     VOICE_CHANNEL_LOGS {
@@ -297,6 +307,22 @@ erDiagram
         int channel_id "Discord Voice Channel ID"
         int creator_id "Discord User Snowflake ID"
         timestamp create_time "Timestamp"
+    }
+
+    POMODORO_RUNTIME {
+        text session_key PK "Group UUID string used as lookup key"
+        text group_id "Study group UUID"
+        int guild_id "Discord Guild Snowflake ID"
+        text state "JSON snapshot: stage, timer, cycles, pause, participants, focus_seconds, tracking_id, etc."
+        int active "1 = live runtime; 0 = retired"
+    }
+
+    PRODUCTIVITY_FOCUS_TIME {
+        text tracking_id PK "Unique per-Pomodoro session UUID"
+        int guild_id PK "Discord Guild Snowflake ID"
+        text group_id PK "Study group UUID string"
+        int user_id PK "Discord User Snowflake ID"
+        real focus_seconds "Cumulative attended focus seconds (monotonic MAX upsert)"
     }
 ```
 
@@ -328,7 +354,7 @@ erDiagram
 | Component | State Medium | Concurrency & Sync Mechanism | Invariant Rules |
 |---|---|---|---|
 | **Study Groups** | In-Memory (`StudyGroupCog.sessions`) & SQLite (`study_groups`) | Synchronized during lifecycle events; hydrated from SQLite on startup. | An active study group must hold valid `text_id`, `vc_id`, and `group_role_id`. When terminated, channels and roles must be deleted, `active` set to `0`, and memory references popped. |
-| **Pomodoro Engine** | In-memory (`Pomodoro.sessions`); existing SQLite save stub is unused | Tick evaluation checks UTC expiry even while paused; reminders go to the group channel. | Each stage is 2–240 minutes; automatic breaks use the 5:1:3 ratio with a two-minute minimum. Every fourth cycle has a long break. Renew adds 24 hours; runtime state is lost on restart. |
+| **Pomodoro Engine** | In-memory (`Pomodoro.sessions`) + SQLite (`pomodoro_runtime`) | Tick evaluation checks UTC expiry even while paused; reminders go to the group channel. `_runtime_lock` serializes concurrent persist/retire; `load_active_sessions_from_db` hydrates on `on_ready`. | Each stage is 2–240 minutes; automatic breaks use the 5:1:3 ratio with a two-minute minimum. Every fourth cycle has a long break. Renew adds 24 hours; crash-loss window is ≤15 s (one snapshot interval). Offline-elapsed time advances stages but does not count focus credit. |
 | **Check-in Standups** | In-Memory (`CheckinCog.active_sessions`) & SQLite (`checkin_sessions`) | Periodic `asyncio.sleep` reminder loop with member state dict. | Member absences cannot be negative. If absences exceed `max_absences`, member status transitions to `exited` or is kicked from group. |
 | **Task Lists** | SQLite (`tasks`) | Atomic parameterized SQL queries under `async with self.lock:`. | If invoked inside a study group channel (`channel_id`), tasks are strictly scoped to `group_id`. Global tasks are isolated from group tasks. |
 | **Permission Controls** | Memory Cache & SQLite (`managers`) | Dynamic permission resolution cascading across 5 tiers. | Superuser `BOT_DEVELOPER` (ID in `.env`) unconditionally overrides all guild-level and group-level permissions. |
