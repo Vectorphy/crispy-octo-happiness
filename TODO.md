@@ -32,7 +32,7 @@ Updated on 2026-10-04 for the antigravity-fix / codex/default-vc-pomodoro-recove
 - [ ] Add explicit timeouts around external resource provisioning calls.
 - [x] Validate `BOT_DEVELOPER_ID` and reject placeholder or invalid values.
 - [x] Add persistent retry tracking for Discord resources left behind when group cleanup lacks permissions.
-- [ ] Add recovery for setup resources retained after failed saves, with explicit ownership checks before resource deletion.
+- [x] Add recovery for setup resources retained after failed saves, with explicit ownership checks before resource deletion.
 
 ## Release audit findings
 

@@ -383,7 +383,7 @@ graph TD
 | **Productivity Tracker** | [`cogs/productivity_tracker.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/productivity_tracker.py) | Metric aggregation and embed presentation with measured focus time. |
 | **Voice Channels** | [`cogs/voice_channels.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/voice_channels.py) | Dedicated VC provisioning and cleanup. |
 | **Voice Relocation** | [`cogs/_voice_relocation.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/_voice_relocation.py) | Non-compliant video relocation to default VC with permission and capacity guards. |
-| **Setup Wizard** | [`cogs/_setup_view.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/_setup_view.py) | Interactive `/setup` UI staging category, text channels, and default VC. |
+| **Setup Wizard** | [`cogs/_setup_view.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/_setup_view.py) | Interactive `/setup` UI staging category, channels, default VC, and resource recovery. |
 | **Staff Roles** | [`cogs/_staff_roles.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/_staff_roles.py) | Staff role provisioning, hierarchy validation, and channel permission merging. |
 | **Session Controls** | [`cogs/_session_controls.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/_session_controls.py) | Shared UI controls for join/decline invitations and owner ending approvals. |
 | **Help System** | [`cogs/help.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/help.py) | Dynamic level-aware `/help` filtering elevated staff docs from member view. |

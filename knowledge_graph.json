@@ -36,7 +36,8 @@
         "guild_settings",
         "tasks",
         "checkin_sessions",
-        "checkin_members"
+        "checkin_members",
+        "pending_resource_cleanups"
       ]
     },
     {
@@ -116,7 +117,8 @@
         {"name": "add_guild_manager", "description": "Add server-level guild manager."},
         {"name": "remove_guild_manager", "description": "Remove server-level guild manager."},
         {"name": "list_managers", "description": "List all managers for the server."},
-        {"name": "set_permission_level", "description": "Explicitly set permission level for a user."}
+        {"name": "set_permission_level", "description": "Explicitly set permission level for a user."},
+        {"name": "setup", "description": "Interactive server setup wizard with staged settings and resource recovery."}
       ]
     },
     {

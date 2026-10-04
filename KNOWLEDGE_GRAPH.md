@@ -27,7 +27,7 @@ Chief-Productivity-Officer/
 │   ├── study_groups.py        # Dedicated study rooms, dynamic role/channel provisioning, dashboard
 │   ├── pomodoro.py            # Focus/Break timer state machine, VC auto-move, 5:1:3 ratio calculation
 │   ├── manager.py             # 5-tier permission hierarchy, session limits, command authorization
-│   ├── _setup_view.py         # Private staged setup wizard and lifetime editor; creates CPO Lobby VC
+│   ├── _setup_view.py         # Private staged setup wizard, lifetime editor, and resource recovery
 │   ├── _staff_roles.py        # Staff role membership and scoped category/channel access
 │   ├── _session_controls.py   # Current-owner DM approval controls
 │   ├── _voice_relocation.py   # Shared helper: move video-noncompliant members to default VC

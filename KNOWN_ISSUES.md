@@ -64,9 +64,9 @@ Verification (2026-10-04 antigravity-fix): all 281 offline tests pass, including
 
 ### ARC-06: Failed setup saves can retain provisioned resources
 - **Severity**: Low (P2)
-- **Status**: **OPEN**
-- **Affected File**: `cogs/_setup_view.py`
-- **Details**: Changing Discord resources and saving SQLite settings cannot share one transaction. If Save creates a category, commands channel, or logs channel and the settings write fails, those resources remain. Existing recorded channels can also remain moved to the draft category. Staff roles, membership, and permission changes can likewise outlive a failed settings save. The wizard retains channel/category resource IDs for retry, blocks changing the draft category after resource creation, and discloses created or moved resources on cancellation or expiry. Automatic deletion and restoration are not implemented.
+- **Status**: **RESOLVED (2026-10-04)**
+- **Affected File**: `cogs/_setup_view.py`, `cogs/manager.py`
+- **Details**: Added explicit setup resource recovery via interactive `Recover` button on `SetupView` and programmatic `recover_retained_resources` method. Enforces strict explicit ownership checks before resource deletion: verifies resources were created in the active session, verifies IDs are not saved in active database settings (`group_category_id`, `commands_channel_id`, `mod_log_channel_id`, `default_vc_id`), verifies channels do not belong to active study groups, checks that created categories are empty before deletion, reverts moved channels back to their previous categories without deletion, and restricts interactive recovery to session owners or Tier 3+ managers. Superseded setup sessions in `Manager.setup` automatically recover uncommitted resources. Covered by 6 dedicated unit tests in `tests/test_setup.py`.
 
 ---
 
