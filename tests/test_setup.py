@@ -573,3 +573,176 @@ async def test_setup_save_requires_bot_voice_permissions():
 
     manager.bot.db.save_setup.assert_not_awaited()
     assert "Connect, and Move Members permissions" in interaction.followup.send.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_setup_recover_button_cleans_created_and_reverts_moved():
+    manager, guild, _, _ = make_setup()
+    manager.bot.db.get_study_group_by_channel.return_value = None
+
+    cat = MagicMock(spec=discord.CategoryChannel, id=100, guild=guild)
+    cat.channels = []
+    cat.delete = AsyncMock()
+
+    cmd = MagicMock(spec=discord.TextChannel, id=101, guild=guild)
+    cmd.delete = AsyncMock()
+
+    log_ch = MagicMock(spec=discord.TextChannel, id=102, guild=guild)
+    log_ch.delete = AsyncMock()
+
+    vc = MagicMock(spec=discord.VoiceChannel, id=103, guild=guild)
+    vc.delete = AsyncMock()
+
+    old_cat = MagicMock(spec=discord.CategoryChannel, id=99, guild=guild)
+    moved_cmd = MagicMock(spec=discord.TextChannel, id=20, category_id=100, guild=guild)
+    moved_cmd.edit = AsyncMock()
+
+    channels_map = {100: cat, 101: cmd, 102: log_ch, 103: vc, 99: old_cat, 20: moved_cmd}
+    guild.get_channel.side_effect = lambda cid: channels_map.get(cid)
+
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30)
+    manager._setup_views[guild.id] = view
+
+    view.created_category_id = 100
+    view.created_channel_id = 101
+    view.created_log_channel_id = 102
+    view.created_vc_id = 103
+    view.moved_channel_id = 20
+    view.previous_category_id = 99
+
+    assert view.has_pending_resources() is True
+
+    interaction = make_interaction(guild, user_id=5)
+    await button(view, "Recover").callback(interaction)
+
+    cmd.delete.assert_awaited_once()
+    log_ch.delete.assert_awaited_once()
+    vc.delete.assert_awaited_once()
+    cat.delete.assert_awaited_once()
+    moved_cmd.edit.assert_awaited_once_with(
+        category=old_cat, sync_permissions=True, reason="CPO setup rollback: revert moved channel"
+    )
+
+    assert view.has_pending_resources() is False
+    assert view.created_category_id is None
+    assert view.created_channel_id is None
+    assert view.created_log_channel_id is None
+    assert view.created_vc_id is None
+    assert view.moved_channel_id is None
+    assert view.previous_category_id is None
+
+    interaction.followup.send.assert_awaited_once()
+    report = interaction.followup.send.call_args.args[0]
+    assert "Deleted 4 uncommitted resource(s)" in report
+    assert "Restored 1 moved channel(s)" in report
+
+
+@pytest.mark.asyncio
+async def test_setup_recover_skips_resources_matching_active_db_settings():
+    manager, guild, _, _ = make_setup()
+    manager.bot.db.get_study_group_by_channel.return_value = None
+
+    manager.bot.db.get_commands_channel.return_value = 101
+    manager.bot.db.get_group_category.return_value = 100
+
+    cat = MagicMock(spec=discord.CategoryChannel, id=100, guild=guild)
+    cat.channels = []
+    cat.delete = AsyncMock()
+
+    cmd = MagicMock(spec=discord.TextChannel, id=101, guild=guild)
+    cmd.delete = AsyncMock()
+
+    guild.get_channel.side_effect = lambda cid: {100: cat, 101: cmd}.get(cid)
+
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30)
+    view.created_category_id = 100
+    view.created_channel_id = 101
+
+    results = await view.recover_retained_resources()
+
+    cat.delete.assert_not_awaited()
+    cmd.delete.assert_not_awaited()
+    assert 100 in results["skipped"]
+    assert 101 in results["skipped"]
+    assert results["deleted"] == []
+
+
+@pytest.mark.asyncio
+async def test_setup_recover_skips_category_with_remaining_channels():
+    manager, guild, _, _ = make_setup()
+    manager.bot.db.get_study_group_by_channel.return_value = None
+
+    cat = MagicMock(spec=discord.CategoryChannel, id=100, guild=guild)
+    other_channel = MagicMock(spec=discord.TextChannel, id=999)
+    cat.channels = [other_channel]
+    cat.delete = AsyncMock()
+
+    guild.get_channel.side_effect = lambda cid: {100: cat}.get(cid)
+
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30)
+    view.created_category_id = 100
+
+    results = await view.recover_retained_resources()
+
+    cat.delete.assert_not_awaited()
+    assert 100 in results["skipped"]
+
+
+@pytest.mark.asyncio
+async def test_setup_recover_skips_channel_in_active_study_group():
+    manager, guild, _, _ = make_setup()
+    manager.bot.db.get_study_group_by_channel.return_value = {"id": 1, "group_id": "grp1", "active": 1}
+
+    cmd = MagicMock(spec=discord.TextChannel, id=101, guild=guild)
+    cmd.delete = AsyncMock()
+
+    guild.get_channel.side_effect = lambda cid: {101: cmd}.get(cid)
+
+    view = SetupView(manager, guild, 5, 10, 20, 10, 30)
+    view.created_channel_id = 101
+
+    results = await view.recover_retained_resources()
+
+    cmd.delete.assert_not_awaited()
+    assert 101 in results["skipped"]
+
+
+@pytest.mark.asyncio
+async def test_setup_recover_rejects_unauthorized_user():
+    manager, guild, _, _ = make_setup()
+    manager.get_permission_level.return_value = PermissionLevel.REGULAR_USER
+
+    cmd = MagicMock(spec=discord.TextChannel, id=101, guild=guild)
+    cmd.delete = AsyncMock()
+    guild.get_channel.side_effect = lambda cid: {101: cmd}.get(cid)
+
+    view = SetupView(manager, guild, owner_id=5, category_id=10, commands_channel_id=20, max_members=10)
+    view.created_channel_id = 101
+
+    interaction = make_interaction(guild, user_id=999)
+    results = await view.recover_retained_resources(interaction=interaction)
+
+    assert results["success"] is False
+    assert results["error"] == "unauthorized"
+    cmd.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_setup_superseded_session_recovers_uncommitted_resources():
+    manager, guild, _, _ = make_setup()
+    manager.bot.db.get_study_group_by_channel.return_value = None
+
+    cmd = MagicMock(spec=discord.TextChannel, id=101, guild=guild)
+    cmd.delete = AsyncMock()
+    guild.get_channel.side_effect = lambda cid: {101: cmd, 10: MagicMock(spec=discord.CategoryChannel, id=10)}.get(cid)
+
+    first_interaction = make_interaction(guild)
+    await Manager.setup.callback(manager, first_interaction)
+    first_view = manager._setup_views[guild.id]
+    first_view.created_channel_id = 101
+
+    second_interaction = make_interaction(guild)
+    await Manager.setup.callback(manager, second_interaction)
+
+    cmd.delete.assert_awaited_once()
+    assert first_view.created_channel_id is None

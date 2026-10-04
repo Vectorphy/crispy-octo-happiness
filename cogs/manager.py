@@ -412,6 +412,8 @@ class Manager(commands.Cog):
             prior = self._setup_views.get(interaction.guild_id)
             if prior:
                 prior.stop()
+                if prior.has_pending_resources():
+                    await prior.recover_retained_resources()
             self._setup_views[interaction.guild_id] = view
         view.message = await interaction.followup.send(embed=view.render(), view=view, ephemeral=True, wait=True)
 

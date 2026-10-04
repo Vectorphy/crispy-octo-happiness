@@ -2,7 +2,7 @@ import asyncio
 import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 
@@ -34,7 +34,8 @@ class CategorySelect(discord.ui.ChannelSelect):
             return
         if self.setup_view.has_pending_resources():
             await interaction.response.send_message(
-                "Resources were already created. Retry Save or cancel and review the retained IDs.", ephemeral=True
+                "Resources were already created. Retry Save, click 'Recover' to clean them up, or 'Cancel'.",
+                ephemeral=True,
             )
             return
         guild = interaction.guild
@@ -66,7 +67,8 @@ class VoiceSelect(discord.ui.ChannelSelect):
             return
         if self.setup_view.has_pending_resources():
             await interaction.response.send_message(
-                "Resources were already created. Retry Save or cancel and review the retained IDs.", ephemeral=True
+                "Resources were already created. Retry Save, click 'Recover' to clean them up, or 'Cancel'.",
+                ephemeral=True,
             )
             return
         guild = interaction.guild
@@ -95,7 +97,8 @@ class NewCategoryModal(discord.ui.Modal, title="Create a study group category"):
             return
         if self.setup_view.has_pending_resources():
             await interaction.response.send_message(
-                "Resources were already created. Retry Save or cancel and review the retained IDs.", ephemeral=True
+                "Resources were already created. Retry Save, click 'Recover' to clean them up, or 'Cancel'.",
+                ephemeral=True,
             )
             return
         name = str(self.name.value).strip()
@@ -202,8 +205,14 @@ class SetupView(discord.ui.View):
         self.add_item(CategorySelect(self, category if isinstance(category, discord.CategoryChannel) else None))
         voice = guild.get_channel(default_vc_id) if default_vc_id is not None else None
         self.add_item(VoiceSelect(self, voice if isinstance(voice, discord.VoiceChannel) else None))
+        for child in self.children:
+            if isinstance(child, discord.ui.Button) and child.label == "Recover":
+                child.disabled = not self.has_pending_resources()
 
     def render(self) -> discord.Embed:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button) and child.label == "Recover":
+                child.disabled = not self.has_pending_resources()
         if self.new_category_name:
             category = f"Create **{self.new_category_name}** when saved"
         elif self.category_id:
@@ -320,7 +329,8 @@ class SetupView(discord.ui.View):
             return
         if self.has_pending_resources():
             await interaction.response.send_message(
-                "Resources were already created. Retry Save or cancel and review the retained IDs.", ephemeral=True
+                "Resources were already created. Retry Save, click 'Recover' to clean them up, or 'Cancel'.",
+                ephemeral=True,
             )
             return
         await interaction.response.send_modal(NewCategoryModal(self))
@@ -552,6 +562,24 @@ class SetupView(discord.ui.View):
                 log_channel.id,
             )
 
+    @discord.ui.button(label="Recover", style=discord.ButtonStyle.danger, row=1)
+    async def recover(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if self.saving:
+            await interaction.response.send_message("Save is in progress.", ephemeral=True)
+            return
+        if not self.has_pending_resources():
+            await interaction.response.send_message("No retained resources to recover.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        results = await self.recover_retained_resources(interaction=interaction)
+        summary = self.format_recovery_summary(results)
+        if self.message:
+            try:
+                await self.message.edit(embed=self.render(), view=self)
+            except discord.HTTPException:
+                logger.warning("Could not update setup view after recovery guild_id=%s", self.guild.id)
+        await interaction.followup.send(summary, ephemeral=True)
+
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=1)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if self.saving:
@@ -580,6 +608,221 @@ class SetupView(discord.ui.View):
                     )
                 except discord.HTTPException:
                     logger.warning("Could not update expired setup view guild_id=%s", self.guild.id)
+
+    async def recover_retained_resources(self, interaction: discord.Interaction | None = None) -> dict[str, Any]:
+        if interaction is not None:
+            actor_id = interaction.user.id
+            is_owner = actor_id == self.owner_id
+            member = interaction.user if isinstance(interaction.user, discord.Member) else None
+            try:
+                level = await self.manager.get_permission_level(self.guild.id, actor_id, member=member)
+                has_manager_level = level >= 3
+            except (discord.HTTPException, sqlite3.Error, OSError, RuntimeError, ValueError):
+                logger.exception("Could not check permission level during recovery")
+                has_manager_level = False
+            if not is_owner and not has_manager_level:
+                logger.warning(
+                    "Setup recovery rejected for unauthorized user_id=%s in guild_id=%s",
+                    actor_id,
+                    self.guild.id,
+                )
+                return {
+                    "success": False,
+                    "error": "unauthorized",
+                    "deleted": [],
+                    "reverted": [],
+                    "skipped": [],
+                }
+
+        deleted: list[int] = []
+        reverted: list[int] = []
+        skipped: list[int] = []
+
+        db = self.manager.bot.db
+        active_settings_ids: set[int] = set()
+        try:
+            raw_settings = (
+                await db.get_group_category(self.guild.id),
+                await db.get_commands_channel(self.guild.id),
+                await db.get_mod_log_channel(self.guild.id),
+                await db.get_default_vc(self.guild.id),
+            )
+            active_settings_ids = {cid for cid in raw_settings if cid is not None}
+        except Exception as err:
+            logger.exception(
+                "Failed to query active guild settings during setup recovery guild_id=%s: %s",
+                self.guild.id,
+                err,
+            )
+
+        moved_targets = [
+            (self.moved_channel_id, self.previous_category_id, "commands channel"),
+            (self.moved_log_channel_id, self.previous_log_category_id, "log channel"),
+            (self.moved_vc_id, self.previous_vc_category_id, "voice channel"),
+        ]
+        for channel_id, prev_cat_id, label in moved_targets:
+            if channel_id is not None:
+                ch = self.guild.get_channel(channel_id)
+                if ch is not None and isinstance(ch, (discord.TextChannel, discord.VoiceChannel)):
+                    if ch.category_id != prev_cat_id:
+                        prev_cat = self.guild.get_channel(prev_cat_id) if prev_cat_id is not None else None
+                        target_category = prev_cat if isinstance(prev_cat, discord.CategoryChannel) else None
+                        try:
+                            await ch.edit(
+                                category=target_category,
+                                sync_permissions=True,
+                                reason="CPO setup rollback: revert moved channel",
+                            )
+                            reverted.append(channel_id)
+                        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as err:
+                            logger.warning(
+                                "Could not revert moved %s id=%s guild_id=%s: %s",
+                                label,
+                                channel_id,
+                                self.guild.id,
+                                err,
+                            )
+                            skipped.append(channel_id)
+                    else:
+                        reverted.append(channel_id)
+
+        self.moved_channel_id = None
+        self.previous_category_id = None
+        self.moved_log_channel_id = None
+        self.previous_log_category_id = None
+        self.moved_vc_id = None
+        self.previous_vc_category_id = None
+
+        created_targets = [
+            (self.created_channel_id, "commands channel"),
+            (self.created_log_channel_id, "log channel"),
+            (self.created_vc_id, "voice channel"),
+        ]
+        for created_id, label in created_targets:
+            if created_id is not None:
+                if created_id in active_settings_ids:
+                    logger.warning(
+                        "Skipping deletion of created %s id=%s in guild_id=%s: matches active DB setting",
+                        label,
+                        created_id,
+                        self.guild.id,
+                    )
+                    skipped.append(created_id)
+                    continue
+                try:
+                    study_group = await db.get_study_group_by_channel(created_id)
+                    if isinstance(study_group, dict):
+                        logger.warning(
+                            "Skipping deletion of created %s id=%s in guild_id=%s: channel is part of active study group",
+                            label,
+                            created_id,
+                            self.guild.id,
+                        )
+                        skipped.append(created_id)
+                        continue
+                except Exception as err:
+                    logger.warning("Could not check study group for channel id=%s: %s", created_id, err)
+
+                ch = self.guild.get_channel(created_id)
+                if ch is not None and isinstance(ch, (discord.TextChannel, discord.VoiceChannel)):
+                    try:
+                        await ch.delete(reason="CPO setup rollback: delete uncommitted channel")
+                        deleted.append(created_id)
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException) as err:
+                        logger.warning(
+                            "Could not delete created %s id=%s in guild_id=%s: %s",
+                            label,
+                            created_id,
+                            self.guild.id,
+                            err,
+                        )
+                        skipped.append(created_id)
+                else:
+                    deleted.append(created_id)
+
+        self.created_channel_id = None
+        self.created_log_channel_id = None
+        self.created_vc_id = None
+
+        if self.created_category_id is not None:
+            cat_id = self.created_category_id
+            if cat_id in active_settings_ids:
+                logger.warning(
+                    "Skipping deletion of created category id=%s in guild_id=%s: matches active DB setting",
+                    cat_id,
+                    self.guild.id,
+                )
+                skipped.append(cat_id)
+            else:
+                cat = self.guild.get_channel(cat_id)
+                if cat is not None and isinstance(cat, discord.CategoryChannel):
+                    channels = getattr(cat, "channels", [])
+                    if isinstance(channels, list):
+                        remaining_channels = [c for c in channels if getattr(c, "id", None) not in deleted]
+                    else:
+                        remaining_channels = []
+                    if remaining_channels:
+                        logger.warning(
+                            "Skipping deletion of category id=%s in guild_id=%s: contains %d non-deleted channel(s)",
+                            cat_id,
+                            self.guild.id,
+                            len(remaining_channels),
+                        )
+                        skipped.append(cat_id)
+                    else:
+                        try:
+                            await cat.delete(reason="CPO setup rollback: delete uncommitted category")
+                            deleted.append(cat_id)
+                        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as err:
+                            logger.warning(
+                                "Could not delete created category id=%s in guild_id=%s: %s",
+                                cat_id,
+                                self.guild.id,
+                                err,
+                            )
+                            skipped.append(cat_id)
+                else:
+                    deleted.append(cat_id)
+            self.created_category_id = None
+
+        self.new_category_name = None
+        self.category_id = self.snapshot[0]
+        self.commands_channel_id = self.snapshot[1]
+        self.log_channel_id = self.snapshot[2]
+        self.default_vc_id = self.snapshot[6]
+
+        logger.info(
+            "Setup retained resources recovery finished guild_id=%s deleted=%s reverted=%s skipped=%s",
+            self.guild.id,
+            deleted,
+            reverted,
+            skipped,
+        )
+        return {
+            "success": True,
+            "deleted": deleted,
+            "reverted": reverted,
+            "skipped": skipped,
+        }
+
+    def format_recovery_summary(self, results: dict[str, Any]) -> str:
+        if not results.get("success", False):
+            if results.get("error") == "unauthorized":
+                return "You do not have permission to recover or delete setup resources."
+            return "Recovery could not be completed."
+        parts: list[str] = []
+        deleted: list[int] = results.get("deleted", [])
+        reverted: list[int] = results.get("reverted", [])
+        skipped: list[int] = results.get("skipped", [])
+        if deleted:
+            parts.append(f"Deleted {len(deleted)} uncommitted resource(s)")
+        if reverted:
+            parts.append(f"Restored {len(reverted)} moved channel(s)")
+        if skipped:
+            parts.append(f"Retained {len(skipped)} resource(s) due to active ownership or errors")
+        if not parts:
+            return "No retained resources required recovery."
+        return "; ".join(parts) + "."
 
     async def on_error(
         self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item["SetupView"]
