@@ -56,6 +56,12 @@ class CPO(commands.Bot):
         pomodoro = self.get_cog("Pomodoro")
         if pomodoro is not None:
             await pomodoro.load_active_sessions_from_db()
+        study_groups = self.get_cog("StudyGroupCog")
+        if study_groups is not None and hasattr(study_groups, "process_pending_cleanups"):
+            try:
+                await study_groups.process_pending_cleanups()
+            except Exception as e:
+                logger.error(f"Error processing pending cleanups on startup: {e}")
         # Clear any guild-specific command registrations so only global commands remain
         for guild in self.guilds:
             try:

@@ -283,6 +283,25 @@ class DBHandler:
                 )
                 logger.info("Added default Pomodoro duration setting")
 
+            ### PENDING RESOURCE CLEANUPS (RETRY TRACKING)
+            cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS pending_resource_cleanups (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id INTEGER NOT NULL,
+                        group_id TEXT NOT NULL,
+                        resource_type TEXT NOT NULL,
+                        resource_id INTEGER NOT NULL,
+                        retry_count INTEGER NOT NULL DEFAULT 0,
+                        last_error TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        last_attempt_at TIMESTAMP,
+                        status TEXT NOT NULL DEFAULT 'pending'
+                    )
+                """)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cleanup_pending ON pending_resource_cleanups(status, guild_id)"
+            )
+
             ### TASKS
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -503,6 +522,119 @@ class DBHandler:
                 (user_id,),
             )
             return float(row[0]) if row else 0.0
+
+    async def record_pending_cleanup(
+        self,
+        guild_id: int,
+        group_id: str,
+        resource_type: str,
+        resource_id: int,
+        last_error: Optional[str] = None,
+    ) -> int:
+        """
+        Record a Discord resource left behind during group cleanup for future retry.
+        If an entry already exists for the resource_id with status='pending', update it.
+        """
+
+        def _sync() -> int:
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    "SELECT id FROM pending_resource_cleanups WHERE resource_id = ? AND status = 'pending'",
+                    (resource_id,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    cleanup_id = int(row[0])
+                    cursor.execute(
+                        "UPDATE pending_resource_cleanups SET "
+                        "guild_id = ?, group_id = ?, resource_type = ?, last_error = ?, "
+                        "last_attempt_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ?",
+                        (guild_id, str(group_id), resource_type, last_error, cleanup_id),
+                    )
+                    return cleanup_id
+                else:
+                    cursor.execute(
+                        "INSERT INTO pending_resource_cleanups "
+                        "(guild_id, group_id, resource_type, resource_id, last_error, status) "
+                        "VALUES (?, ?, ?, ?, ?, 'pending')",
+                        (guild_id, str(group_id), resource_type, resource_id, last_error),
+                    )
+                    last_id = cursor.lastrowid
+                    return int(last_id) if last_id is not None else 0
+
+        async with self.lock:
+            cleanup_id = await self._run_in_thread(_sync)
+            logger.info(
+                "Recorded pending cleanup id=%s guild_id=%s group_id=%s type=%s resource_id=%s",
+                cleanup_id,
+                guild_id,
+                group_id,
+                resource_type,
+                resource_id,
+            )
+            return cleanup_id
+
+    async def get_pending_cleanups(
+        self, guild_id: Optional[int] = None, status: str = "pending"
+    ) -> list[dict[str, Any]]:
+        """Retrieve pending resource cleanup records, optionally filtered by guild."""
+        if guild_id is not None:
+            query = "SELECT * FROM pending_resource_cleanups WHERE status = ? AND guild_id = ? ORDER BY id ASC"
+            params: tuple[Any, ...] = (status, guild_id)
+        else:
+            query = "SELECT * FROM pending_resource_cleanups WHERE status = ? ORDER BY id ASC"
+            params = (status,)
+
+        async with self.lock:
+            rows = await self._run_in_thread(self._fetchall_sync, query, params)
+        return [dict(row) for row in rows]
+
+    async def update_cleanup_retry(
+        self,
+        cleanup_id: int,
+        status: str = "pending",
+        last_error: Optional[str] = None,
+        increment_retry: bool = True,
+    ) -> None:
+        """Update retry attempt timestamp, error message, and optionally increment retry count."""
+        if increment_retry:
+            query = (
+                "UPDATE pending_resource_cleanups SET "
+                "status = ?, last_error = ?, last_attempt_at = CURRENT_TIMESTAMP, "
+                "retry_count = retry_count + 1 WHERE id = ?"
+            )
+        else:
+            query = (
+                "UPDATE pending_resource_cleanups SET "
+                "status = ?, last_error = ?, last_attempt_at = CURRENT_TIMESTAMP "
+                "WHERE id = ?"
+            )
+        async with self.lock:
+            await self._run_in_thread(self._execute_commit_sync, query, (status, last_error, cleanup_id))
+
+    async def delete_pending_cleanup(self, cleanup_id: int) -> None:
+        """Remove a pending resource cleanup record once successfully resolved."""
+        async with self.lock:
+            await self._run_in_thread(
+                self._execute_commit_sync,
+                "DELETE FROM pending_resource_cleanups WHERE id = ?",
+                (cleanup_id,),
+            )
+            logger.info("Deleted resolved pending cleanup id=%s", cleanup_id)
+
+    async def get_pending_cleanup_count(self, guild_id: Optional[int] = None) -> int:
+        """Count total unresolved pending cleanups."""
+        if guild_id is not None:
+            query = "SELECT COUNT(*) as count FROM pending_resource_cleanups WHERE status = 'pending' AND guild_id = ?"
+            params: tuple[Any, ...] = (guild_id,)
+        else:
+            query = "SELECT COUNT(*) as count FROM pending_resource_cleanups WHERE status = 'pending'"
+            params = ()
+        async with self.lock:
+            row = await self._run_in_thread(self._fetchone_sync, query, params)
+        return int(row["count"]) if row else 0
 
     async def get_default_group_duration(self, guild_id: int) -> int:
         async with self.lock:
