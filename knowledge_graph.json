@@ -29,6 +29,8 @@
         "study_groups",
         "study_groups_members",
         "pomodoro_sessions",
+        "pomodoro_runtime",
+        "productivity_focus_time",
         "managers",
         "voice_channel_logs",
         "guild_settings",
@@ -150,6 +152,16 @@
         {"name": "delete_vc", "description": "Delete voice channel associated with study group."},
         {"name": "delete_role", "description": "Delete custom role associated with study group."}
       ]
+    },
+    {
+      "id": "cog_help",
+      "name": "Help Cog",
+      "type": "FeatureModule",
+      "file": "cogs/help.py",
+      "class": "HelpCog",
+      "commands": [
+        {"name": "help", "description": "Display dynamic level-aware command list and productivity user guide embed."}
+      ]
     }
   ],
   "edges": [
@@ -161,6 +173,7 @@
     {"from": "bot_core", "to": "cog_tasklist", "relation": "loads_extension"},
     {"from": "bot_core", "to": "cog_productivity_tracker", "relation": "loads_extension"},
     {"from": "bot_core", "to": "cog_voice_channels", "relation": "loads_extension"},
+    {"from": "bot_core", "to": "cog_help", "relation": "loads_extension"},
     {"from": "cog_checkin", "to": "database_handler", "relation": "queries_and_persists"},
     {"from": "cog_study_groups", "to": "database_handler", "relation": "queries_and_persists"},
     {"from": "cog_pomodoro", "to": "database_handler", "relation": "queries_and_persists"},
