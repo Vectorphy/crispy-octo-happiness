@@ -46,8 +46,8 @@ The current branch starts from that commit. New work is dirty and not committed 
 5. [COMPLETED] Add recovery for setup resources retained after failed saves (ARC-06 resolved): added Recover button, recover_retained_resources with explicit ownership checks, superseded wizard cleanup, commands.md update, and 6 unit tests.
 6. [COMPLETED] Update documentation: CHANGELOG.md [Unreleased], KNOWN_ISSUES.md (ARC-05 & ARC-06 resolved), TODO.md, ARCHITECTURE.md, commands.md, KNOWLEDGE_GRAPH.md, knowledge_graph.json, and HANDOFF.md updated with 350 passing tests.
 7. [COMPLETED] Run full verification: 350/350 offline tests pass (zero failures), Mypy static typing 0 errors across 34 source files, Ruff lint and format check clean, git diff --check clean.
-8. [COMPLETED] Fixed integration bugs from QA: `invite_to_group` crashes when inviting bots, `transfer_ownership` silent failure, `/set_permission_level` failing to strip global Bot Developer grants, missing Pomodoro invitation syncs, and missing owner invitation DM notifications.
-9. [PENDING] Commit/push new branch to QA: local atomic commits complete; ready to push to remote QA branch for testing. Remote origin: https://github.com/Vectorphy/crispy-octo-happiness.git.
+8. [COMPLETED] Fixed integration bugs from QA **(Gemini changes yet to be tested)**: `invite_to_group` crashes when inviting bots, `transfer_ownership` silent failure, `/set_permission_level` failing to strip global Bot Developer grants, missing Pomodoro invitation syncs, and missing owner invitation DM notifications.
+9. [COMPLETED] Commit/push new branch to QA **(Gemini changes yet to be tested)**: local atomic commits complete; pushed to remote QA branch `antigravity-fix` for testing. Remote origin: https://github.com/Vectorphy/crispy-octo-happiness.git.
 
 ## Commands and constraints
 
