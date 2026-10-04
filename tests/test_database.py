@@ -3,6 +3,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -462,6 +463,42 @@ class TestDBHandler(unittest.TestCase):
             self.assertEqual(await self.db.get_commands_channel(101), 301)
             self.assertEqual(await self.db.get_default_group_duration(101), 7200)
             self.assertEqual(await self.db.get_default_pomodoro_duration(101), 86400)
+
+        asyncio.run(run_test())
+
+    def test_sqlite_io_runs_off_event_loop(self):
+        async def run_test():
+            await self.db.connect()
+            main_thread_ident = threading.get_ident()
+            worker_thread_ident = await self.db._run_in_thread(threading.get_ident)
+            self.assertNotEqual(main_thread_ident, worker_thread_ident)
+
+            # Test an actual DB operation off the main thread
+            def _get_thread_and_count():
+                cur = self.db.conn.execute("SELECT COUNT(*) FROM tasks")
+                return threading.get_ident(), cur.fetchone()[0]
+
+            op_thread, count = await self.db._run_in_thread(_get_thread_and_count)
+            self.assertNotEqual(main_thread_ident, op_thread)
+            self.assertEqual(count, 0)
+
+        asyncio.run(run_test())
+
+    def test_run_in_thread_fallback_on_same_thread_connection(self):
+        async def run_test():
+            # Create a DBHandler with check_same_thread=True explicitly
+            fallback_db = DBHandler(db_name=":memory:")
+            fallback_db.conn = sqlite3.connect(":memory:")  # check_same_thread=True by default
+            fallback_db.conn.row_factory = sqlite3.Row
+            await fallback_db.create_tables()
+
+            # Verify that fallback handles queries without raising ProgrammingError
+            task_id = await fallback_db.add_task(user_id=456, description="Fallback test")
+            self.assertIsNotNone(task_id)
+            tasks = await fallback_db.get_user_tasks(user_id=456)
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(tasks[0]["description"], "Fallback test")
+            await fallback_db.close()
 
         asyncio.run(run_test())
 

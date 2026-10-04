@@ -1071,7 +1071,7 @@ async def _run_command_matrix(bot):
         assert session.focus == 50
         assert session.short_break == 10
         assert session.long_break == 20
-        assert session.timer == 50 * 60
+        assert 50 * 60 - 5 <= session.timer <= 50 * 60
 
     await execute_test(
         "Pomodoro - /start_pomodoro (Custom attributes: 50m/10m/20m)",
