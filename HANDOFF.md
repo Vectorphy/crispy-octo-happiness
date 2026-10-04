@@ -4,7 +4,7 @@ Updated 2026-10-05. Branch: antigravity-fix. Workspace: C:\Users\Vector\Download
 
 ## Baseline and current work
 
-Antigravity's baseline is commit 16d7266. QA fixes and documentation were committed as `a01656c77c637bbf831624fa9b917d19961ae2b1`. Both authorized repositories now have `antigravity-fix` at `817cccfa350444b4e1f5a4b73c6e43e7a33a3e43`, which adds the deployment-only workflow correction. The earlier release baseline is 6b51722 on release/v1.0.0-rc.4. Origin is https://github.com/Vectorphy/crispy-octo-happiness.git.
+Antigravity's baseline is commit 16d7266. QA fixes and documentation were committed as `a01656c77c637bbf831624fa9b917d19961ae2b1`. Both authorized repositories contain the workflow correction `817cccf` and exact CI pin `10acee4`; subsequent closeout commits change documentation only. The earlier release baseline is 6b51722 on release/v1.0.0-rc.4. Origin is https://github.com/Vectorphy/crispy-octo-happiness.git.
 
 ## Scope and constraints
 
@@ -40,11 +40,11 @@ Independent final read-only QA: Pomodoro recovery 48 tests; setup/default VC 57 
 
 ## Published prerelease and downloaded verification
 
-Published [v1.0.0-rc.5](https://github.com/Vectorphy/Chief-Productivity-Officer/releases/tag/v1.0.0-rc.5) as a prerelease (`draft=false`, `prerelease=true`) only on Chief-Productivity-Officer. Its new tag remains at release source commit `a01656c77c637bbf831624fa9b917d19961ae2b1`; no tag was moved. Both branches contain the newer workflow repair `817cccfa350444b4e1f5a4b73c6e43e7a33a3e43`. No merge into main/master/release occurred.
+Published `v1.0.0-rc.5` as a prerelease (`draft=false`, `prerelease=true`) on [Chief-Productivity-Officer](https://github.com/Vectorphy/Chief-Productivity-Officer/releases/tag/v1.0.0-rc.5) and, after the additional user request, [crispy-octo-happiness](https://github.com/Vectorphy/crispy-octo-happiness/releases/tag/v1.0.0-rc.5). Both tags remain at identical release source commit `a01656c77c637bbf831624fa9b917d19961ae2b1`; no tag was moved. Branch workflows and closeout documents are newer than the released source. No merge into main/master/release occurred.
 
 Initial tag workflow failed test collection because the `pytest` console launcher omitted repository imports. The recovery [workflow run 37234471606](https://github.com/Vectorphy/Chief-Productivity-Officer/actions/runs/37234471606) succeeded using `python -m pytest` and explicitly checked out the unchanged release tag in both jobs: 402 tests passed, Mypy reported zero errors across 34 files, and Ruff passed. The workflow built and validated all packages before publication.
 
-Downloaded assets in ignored `dist/release-verified/` passed SHA-256 checks against GitHub asset digests, ZIP CRC checks, safe tar member checks, and exact allowlisted membership: 21 wheel files, 26 source-distribution files, 21 runtime ZIP files, and 26 files in GitHub's generated source ZIP. Wheel and sdist metadata report `1.0.0rc5`. Packaged source bytes match the tagged Git blobs, and GitHub's source ZIP equals the committed Git archive (with Windows CRLF conversion disabled). Tests, internal reports, secrets, databases, and caches are excluded. Uploaded `readme.md` and `commands.md` also match the tag.
+Chief downloaded assets in ignored `dist/release-verified/` passed SHA-256 checks against GitHub asset digests, ZIP CRC checks, safe tar member checks, and exact allowlisted membership: 21 wheel files, 26 source-distribution files, 21 runtime ZIP files, and 26 files in GitHub's generated source ZIP. Wheel and sdist metadata report `1.0.0rc5`. Packaged source bytes match the tagged Git blobs, and GitHub's source ZIP equals the committed Git archive (with Windows CRLF conversion disabled). Tests, internal reports, secrets, databases, and caches are excluded. Uploaded `readme.md` and `commands.md` also match the tag.
 
 Package SHA-256 values:
 
@@ -53,4 +53,8 @@ Package SHA-256 values:
 - Runtime ZIP: `0c437e7abd7e08f7dd6d7efb8c7c5d45890c52ebcecc6522522d0895d11d507a`
 - GitHub source ZIP: `46f78358d81de22344e61224b9ecaafc3b15f24a3735c20d01534364b9769384`
 
-The checked-TODO audit supports the earlier 53 ticks within corrected offline scopes; the verified deployment adds one completion tick. Default DM task purge remains unchecked. The database map covers all 81 DAL methods. Continue partial-implementation work with the same sequential agents, then verify and push the final branch to both authorized destinations. Keep rc.5 immutable; retain the live Discord limitations above.
+Crispy [release workflow 37235239110](https://github.com/Vectorphy/crispy-octo-happiness/actions/runs/37235239110) succeeded with exact CPython `3.11.17` in both validation and build jobs, both checking out `a01656c`. It passed 402 tests, zero Mypy errors, Ruff, package validation, and publication. The legacy tag-triggered workflow was cancelled before publication; the corrected branch workflow used the immutable tag. General CI passed all 3.10/3.11.17/3.12 jobs on [crispy run 37235241227](https://github.com/Vectorphy/crispy-octo-happiness/actions/runs/37235241227) and [Chief run 37235243120](https://github.com/Vectorphy/Chief-Productivity-Officer/actions/runs/37235243120). The existing Chief release assets were preserved.
+
+Crispy downloads in ignored `dist/crispy-release-verified/` passed the same version, digest, integrity, exact-member, and tagged-source-byte checks: wheel 21, sdist 26, runtime ZIP 21, GitHub source ZIP 26. SHA-256: wheel `4390cf0e0b1951227aa29eb9a99cf12c71da3163c11bbec9fa9af2ce16b58289`; sdist `add179896f34ba91b49629a0b8e2a8e8e0b518610a750f5bbbab7af6be63b4a7`; runtime ZIP `f7f70997925f7d07006403967d06eb3a6e5adaabc359752f9a58317aa1e8aec6`; GitHub source ZIP `7913becf48628dcf300900f9d5b5cb7082cb79ac36d19e8be9ca93660ac0054b`. Archive byte hashes differ between builds because of metadata and timestamps; the released runtime/source contents match the same tagged source. No later partial implementations are included in either rc.5 release.
+
+The checked-TODO audit supports the earlier 53 ticks within corrected offline scopes; verified deployment to both repositories adds two completion ticks. Default DM task purge remains unchecked. The database map covers all 81 DAL methods. Continue partial-implementation work with the same sequential agents, then verify and push the final branch to both authorized destinations. Keep rc.5 immutable; retain the live Discord limitations above.
