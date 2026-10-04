@@ -1,12 +1,13 @@
 import logging
 import os
+from typing import Any, Optional
 
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
 from database import DBHandler as Database
-from utils import send_response
+from utils import send_response, validate_bot_developer_id
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -15,7 +16,8 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-BOT_DEVELOPER_ID = os.getenv("BOT_DEVELOPER_ID")
+RAW_BOT_DEVELOPER_ID = os.getenv("BOT_DEVELOPER_ID")
+BOT_DEVELOPER_ID = validate_bot_developer_id(RAW_BOT_DEVELOPER_ID)
 
 # Set up intents
 intents = discord.Intents.default()
@@ -26,10 +28,13 @@ intents.voice_states = True
 
 
 class CPO(commands.Bot):
-    def __init__(self):
+    def __init__(self, bot_developer_id: Optional[Any] = None):
         super().__init__(command_prefix="!", intents=intents)
         self.db = Database()
-        self.bot_developer_id = int(BOT_DEVELOPER_ID) if BOT_DEVELOPER_ID else None
+        if bot_developer_id is not None:
+            self.bot_developer_id = validate_bot_developer_id(bot_developer_id, allow_mock=True)
+        else:
+            self.bot_developer_id = BOT_DEVELOPER_ID
 
     async def setup_hook(self):
         await self.db.connect()
@@ -111,7 +116,7 @@ if __name__ == "__main__":
     if not TOKEN:
         logger.error("DISCORD_BOT_TOKEN not found in .env file")
     elif not BOT_DEVELOPER_ID:
-        logger.warning("BOT_DEVELOPER_ID not found in .env file. Some features may be limited.")
+        logger.warning("BOT_DEVELOPER_ID not found or invalid in .env file. Some features may be limited.")
         cpo.run(TOKEN)
     else:
         logger.info("Starting the bot...")

@@ -1,7 +1,7 @@
 import logging
 import re
 import sqlite3
-from typing import List, Optional
+from typing import Any, List, Optional, Set
 
 import discord
 from discord import app_commands
@@ -414,3 +414,132 @@ class ProductivityService:
         if time <= 0:
             return 0.0
         return round(tasks / time, 2)
+
+
+KNOWN_BOT_DEV_PLACEHOLDERS: Set[str] = {
+    "your_discord_user_id_here",
+    "your_user_id_here",
+    "your_id_here",
+    "discord_user_id_here",
+    "bot_developer_id_here",
+    "your_bot_developer_id",
+    "123456789012345678",
+    "1234567890123456789",
+    "placeholder",
+    "changeme",
+    "none",
+    "null",
+    "undefined",
+    "todo",
+}
+
+DISCORD_SNOWFLAKE_MIN_DIGITS = 17
+DISCORD_SNOWFLAKE_MAX_DIGITS = 20
+DISCORD_SNOWFLAKE_MAX = (1 << 64) - 1
+
+
+def validate_bot_developer_id(
+    raw_id: Any,
+    *,
+    strict: bool = False,
+    allow_mock: bool = False,
+) -> Optional[int]:
+    """
+    Validate BOT_DEVELOPER_ID and reject placeholder or invalid values.
+
+    Returns the validated integer ID, or None if missing or invalid (when strict=False).
+    Raises ValueError when strict=True if the value is invalid or a placeholder.
+    """
+    if raw_id is None:
+        if strict:
+            raise ValueError("BOT_DEVELOPER_ID is not configured")
+        return None
+
+    if isinstance(raw_id, bool):
+        msg = f"BOT_DEVELOPER_ID cannot be a boolean: {raw_id!r}"
+        if strict:
+            raise ValueError(msg)
+        logger.warning(msg)
+        return None
+
+    if isinstance(raw_id, float):
+        msg = f"BOT_DEVELOPER_ID cannot be a float: {raw_id!r}"
+        if strict:
+            raise ValueError(msg)
+        logger.warning(msg)
+        return None
+
+    if isinstance(raw_id, int):
+        if raw_id <= 0:
+            msg = f"BOT_DEVELOPER_ID must be a positive integer, got: {raw_id}"
+            if strict:
+                raise ValueError(msg)
+            logger.warning(msg)
+            return None
+        cleaned_str = str(raw_id)
+    elif isinstance(raw_id, str):
+        cleaned_str = raw_id.strip().strip("\"'")
+        if cleaned_str.startswith("-"):
+            msg = f"BOT_DEVELOPER_ID must be a positive integer, got: {raw_id!r}"
+            if strict:
+                raise ValueError(msg)
+            logger.warning(msg)
+            return None
+    else:
+        msg = f"BOT_DEVELOPER_ID has unsupported type: {type(raw_id).__name__}"
+        if strict:
+            raise ValueError(msg)
+        logger.warning(msg)
+        return None
+
+    if not cleaned_str:
+        if strict:
+            raise ValueError("BOT_DEVELOPER_ID cannot be empty")
+        return None
+
+    if cleaned_str.lower() in KNOWN_BOT_DEV_PLACEHOLDERS:
+        msg = f"BOT_DEVELOPER_ID is set to a placeholder value: {raw_id!r}"
+        if strict:
+            raise ValueError(msg)
+        logger.warning(msg)
+        return None
+
+    if not cleaned_str.isdigit():
+        msg = f"BOT_DEVELOPER_ID must contain only digits, got: {raw_id!r}"
+        if strict:
+            raise ValueError(msg)
+        logger.warning(msg)
+        return None
+
+    if len(cleaned_str) >= 10 and len(set(cleaned_str)) == 1:
+        msg = f"BOT_DEVELOPER_ID is a repetitive placeholder value: {raw_id!r}"
+        if strict:
+            raise ValueError(msg)
+        logger.warning(msg)
+        return None
+
+    val = int(cleaned_str)
+    if val <= 0:
+        msg = f"BOT_DEVELOPER_ID must be a positive integer, got: {val}"
+        if strict:
+            raise ValueError(msg)
+        logger.warning(msg)
+        return None
+
+    if val > DISCORD_SNOWFLAKE_MAX:
+        msg = f"BOT_DEVELOPER_ID exceeds maximum 64-bit integer limit: {val}"
+        if strict:
+            raise ValueError(msg)
+        logger.warning(msg)
+        return None
+
+    if not allow_mock and (
+        len(cleaned_str) < DISCORD_SNOWFLAKE_MIN_DIGITS or len(cleaned_str) > DISCORD_SNOWFLAKE_MAX_DIGITS
+    ):
+        msg = f"BOT_DEVELOPER_ID must be a valid 17-20 digit Discord snowflake, got {len(cleaned_str)} digits: {val}"
+        if strict:
+            raise ValueError(msg)
+        logger.warning(msg)
+        return None
+
+    return val
