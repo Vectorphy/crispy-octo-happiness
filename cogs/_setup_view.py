@@ -47,6 +47,37 @@ class CategorySelect(discord.ui.ChannelSelect):
         await interaction.response.edit_message(embed=self.setup_view.render(), view=self.setup_view)
 
 
+class VoiceSelect(discord.ui.ChannelSelect):
+    def __init__(self, view: "SetupView", voice: discord.VoiceChannel | None):
+        defaults = [voice] if voice else []
+        super().__init__(
+            placeholder="Choose a default voice channel (optional)",
+            channel_types=[discord.ChannelType.voice],
+            default_values=defaults,
+            min_values=0,
+            max_values=1,
+            row=2,
+        )
+        self.setup_view = view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if self.setup_view.saving:
+            await interaction.response.send_message("Save is in progress.", ephemeral=True)
+            return
+        if self.setup_view.has_pending_resources():
+            await interaction.response.send_message(
+                "Resources were already created. Retry Save or cancel and review the retained IDs.", ephemeral=True
+            )
+            return
+        guild = interaction.guild
+        selected = guild.get_channel(self.values[0].id) if guild and self.values else None
+        if selected is not None and not isinstance(selected, discord.VoiceChannel):
+            await interaction.response.send_message("Choose a voice channel in this server.", ephemeral=True)
+            return
+        self.setup_view.default_vc_id = selected.id if selected is not None else None
+        await interaction.response.edit_message(embed=self.setup_view.render(), view=self.setup_view)
+
+
 class NewCategoryModal(discord.ui.Modal, title="Create a study group category"):
     def __init__(self, view: "SetupView"):
         super().__init__()
@@ -169,6 +200,8 @@ class SetupView(discord.ui.View):
         self.saving = False
         category = guild.get_channel(category_id) if category_id is not None else None
         self.add_item(CategorySelect(self, category if isinstance(category, discord.CategoryChannel) else None))
+        voice = guild.get_channel(default_vc_id) if default_vc_id is not None else None
+        self.add_item(VoiceSelect(self, voice if isinstance(voice, discord.VoiceChannel) else None))
 
     def render(self) -> discord.Embed:
         if self.new_category_name:
@@ -216,7 +249,15 @@ class SetupView(discord.ui.View):
                     value="Move the recorded log channel into the selected category, syncing its permissions to the category.",
                     inline=False,
                 )
-        if self.new_category_name and (self.commands_channel_id or self.log_channel_id):
+        if self.default_vc_id and self.category_id:
+            vc_channel = self.guild.get_channel(self.default_vc_id)
+            if isinstance(vc_channel, discord.VoiceChannel) and vc_channel.category_id != self.category_id:
+                embed.add_field(
+                    name="Default VC move",
+                    value="Move the recorded default voice channel into the selected category, syncing its permissions to the category.",
+                    inline=False,
+                )
+        if self.new_category_name and (self.commands_channel_id or self.log_channel_id or self.default_vc_id):
             embed.add_field(
                 name="On save",
                 value="Move the recorded channels into the new category, syncing their permissions to the category.",
@@ -445,6 +486,14 @@ class SetupView(discord.ui.View):
                     )
                     if updated_voice is not None:
                         voice = updated_voice
+                voice_perms = voice.permissions_for(me)
+                if not all((voice_perms.view_channel, voice_perms.connect, voice_perms.move_members)):
+                    await interaction.followup.send(
+                        "I need View Channel, Connect, and Move Members permissions in the default voice channel."
+                        + self.retained_resources(),
+                        ephemeral=True,
+                    )
+                    return
                 await db.save_setup(
                     self.guild.id,
                     category.id,

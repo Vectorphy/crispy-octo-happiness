@@ -343,12 +343,14 @@ class Manager(commands.Cog):
     @app_commands.describe(
         max_members="Default maximum members per study group (1-50)",
         category="Category where new study group channels will be placed",
+        default_vc="Default voice channel for relocations (creates CPO Lobby if omitted)",
     )
     async def setup(
         self,
         interaction: discord.Interaction,
         max_members: Optional[app_commands.Range[int, 1, 50]] = None,
         category: Optional[discord.CategoryChannel] = None,
+        default_vc: Optional[discord.VoiceChannel] = None,
     ):
         await interaction.response.defer(ephemeral=True)
         if interaction.guild is None or interaction.guild_id is None:
@@ -372,6 +374,12 @@ class Manager(commands.Cog):
             await interaction.followup.send("Choose a category in this server.", ephemeral=True)
             return
 
+        if default_vc is not None and (
+            not isinstance(default_vc, discord.VoiceChannel) or default_vc.guild.id != interaction.guild_id
+        ):
+            await interaction.followup.send("Choose a voice channel in this server.", ephemeral=True)
+            return
+
         async with self._setup_locks.setdefault(interaction.guild_id, asyncio.Lock()):
             current_cat_id = await self.bot.db.get_group_category(interaction.guild_id)
             current_channel_id = await self.bot.db.get_commands_channel(interaction.guild_id)
@@ -390,7 +398,7 @@ class Manager(commands.Cog):
                 current_log_channel_id,
                 current_group_duration,
                 current_pomodoro_duration,
-                current_default_vc_id,
+                default_vc.id if default_vc is not None else current_default_vc_id,
             )
             view.snapshot = (
                 current_cat_id,
