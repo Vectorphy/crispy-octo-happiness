@@ -9,8 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- A private `/help` command with everyday explanations of setup, groups, timers, tasks, invitations, and reply visibility. Staff (Level 3–4) see elevated descriptions; regular members (Level 0–2) see standard guidance only. `/help` defers privately immediately to avoid 3-second timeout.
+- Pomodoro lifetime expiry, including while paused, and a Renew control offered with one hour left. Renew adds 24 hours to the current deadline.
+- Approved additive SQLite settings columns `default_group_duration` and `default_pomodoro_duration`, stored in seconds with 86400 defaults. Setup saves both values atomically and checks them for stale drafts.
+- Approved `managers.grant_source` migration distinguishes explicit grants from server-synced staff. Sync revokes stale server-synced grants while preserving explicit grants; legacy moderator grants normalize to Level 3.
+- `CPO Manager` and `CPO Bot Developer` roles synchronize membership and scoped access to the configured CPO category and its channels during setup and staff grant updates.
+- **Pomodoro runtime persistence** (`database.py`, `cogs/pomodoro.py`): new `pomodoro_runtime` table stores `session_key`, `group_id`, `guild_id`, `state` JSON, and `active` flag. `save_pomodoro_runtime`, `retire_pomodoro_runtime`, and `retire_group_pomodoro_runtime` persist and clean up snapshots under the asyncio lock. `_runtime_lock` serializes concurrent persist/retire. `load_active_sessions_from_db` (called from `bot.py:on_ready`) hydrates deadlines, stage, cycles, timer, pause state, consent roster, dropout list, absence counts, and per-user focus-second accumulators. Offline-elapsed time advances stages without attendance or focus credit. Malformed or cross-guild/cross-UUID records are retired. Group deletion retires all group runtimes atomically. Crash-loss window is at most one snapshot interval (≤15 s). Runtime saves reject inactive or missing same-guild groups.
+- **Productivity focus-time analytics** (`database.py`, `utils.py`, `cogs/productivity_tracker.py`): new `productivity_focus_time` table accumulates per-session per-user seconds with a monotonic MAX upsert. `save_productivity_focus_time` validates finite non-negative values and rejects partial writes. `get_productivity_focus_seconds` aggregates cumulative seconds. `ProductivityService` computes exact unrounded efficiency from measured seconds and returns zero when no focus time is recorded. Embed labelled "measured-focus". Focus is counted only for consented + present + not-dropped-out members during active focus stages; breaks, pauses, dropout, and bot downtime are excluded.
+- **Default VC and video relocation** (`cogs/_setup_view.py`, `cogs/_voice_relocation.py`, `cogs/study_groups.py`, `database.py`): setup creates or reuses a `CPO Lobby` voice channel under the selected category; destination saved atomically as `default_vc_id` (backward-compatible additive column on `guild_settings`). `_voice_relocation.py` shared helper checks destination existence, guild, capacity, Connect/Move Members permissions, and member's current source before moving; failures log and DM the member without a disconnect fallback. `study_groups.py` calls the helper after the existing video grace period. Microphone enforcement intentionally disabled per user request.
+- New test modules: `tests/test_pomodoro_recovery.py` (9 recovery scenarios), `tests/test_default_vc.py` (default VC migration and relocation), `tests/test_productivity_time.py` (monotonic upsert, multiple users, invalid values, restart survival).
+
 ### Changed
-- `/setup` opens a private wizard for moderators, with category selection or creation, commands and logs channels, group size, and default group/Pomodoro lifetimes. Both lifetimes default to 24 hours and apply to new sessions. Saving synchronizes recorded channels with the category permissions, including logs already in that category.
+- `/setup` opens a private wizard for moderators, with category selection or creation, commands and logs channels, group size, and default group/Pomodoro lifetimes. Both lifetimes default to 24 hours and apply to new sessions. Saving synchronizes recorded channels with the category permissions, including logs already in that category. Setup now also creates/reuses `CPO Lobby` VC and saves its ID.
 - Ordinary command replies are public in active study-group channels and the exact configured commands channel. Other channels, threads, and DMs use private replies; help, errors, and sensitive menus stay private everywhere.
 - Mentioned group and check-in invitees receive DM Join/Decline controls. Pomodoro group members receive separate opt-in invitations. Only the creator joins automatically; entering voice does not start or join a Pomodoro.
 - Check-in reminder intervals and each Pomodoro focus/break stage accept 2 minutes through 4 hours. Automatic breaks retain the 5:1:3 calculation with a two-minute minimum.
@@ -20,26 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Authorization labels use Server Member (0), contextual Group Member (1), contextual Owner (2), Manager/Admin/Mod (3), and Bot Developer (4), with the highest level taking precedence. `/user_level` uses a fixed title and does not expose unrelated group membership outside that group's channels.
 - Removed check-in and Pomodoro action buttons from the group dashboard while retaining their status fields. Standalone voice/channel/role maintenance commands are hidden from the public command tree.
 
-### Added
-- A private `/help` command with everyday explanations of setup, groups, timers, tasks, invitations, and reply visibility.
-- Pomodoro lifetime expiry, including while paused, and a Renew control offered with one hour left. Renew adds 24 hours to the current deadline.
-- Approved additive SQLite settings columns `default_group_duration` and `default_pomodoro_duration`, stored in seconds with 86400 defaults. Setup saves both values atomically and checks them for stale drafts.
-- Approved `managers.grant_source` migration distinguishes explicit grants from server-synced staff. Sync revokes stale server-synced grants while preserving explicit grants; legacy moderator grants normalize to Level 3.
-- `CPO Manager` and `CPO Bot Developer` roles synchronize membership and scoped access to the configured CPO category and its channels during setup and staff grant updates.
-
 ### Fixed
 - Full-unit and compound duration parsing, including `3 hours` and `1d 12h`.
 - Role-name guesses no longer confer moderator authority. Permission checks use actual Discord permissions or scoped stored grants; foreign-guild grants and member objects cannot escalate access.
 - `/list_managers` shows newly added guild managers and global developers immediately, with uncached-user labels, one entry per person at the highest grant, and untruncated multi-embed lists. Repeated global grants update rather than append, and permission lookup selects the highest valid grant.
 - `/invite_to_group` resolves trimmed, case-insensitive names and current group text/voice channels from active persisted records after a cache miss.
 - Voice-channel creation uses the configured category and rolls back if persistence fails.
-
-### Remaining limitations
-- Pomodoro runtime state remains memory-only and does not survive a restart. Live Discord provisioning has not been tested; see `KNOWN_ISSUES.md` for these and existing cleanup/persistence debt.
-- Default VC creation and relocation after video/microphone enforcement are recorded as requested follow-up work in `TODO.md`; current Force Video still disconnects noncompliant members.
+- `test_session_controls.py`: two tests that constructed `Pomodoro(MagicMock())` without an async DB now use `bot.db = AsyncMock()` so that `_retire_runtime` and `_persist_session` can be awaited correctly (fixes `TypeError: object MagicMock can't be used in 'await' expression`).
 
 ### Verification
-- All 224 offline tests pass on Python 3.12.14, including the standalone command matrix. Full Mypy, Ruff lint, formatting, and Git whitespace checks pass. No new dependencies or live Discord operations were used.
+- All 277 offline tests pass on Python 3.12.14, including Pomodoro recovery, default VC migration, focus-time DAL, help/setup regression suites, and session-controls mock fix. No new dependencies introduced.
+
 
 ## [1.0.0-rc.4] - 2026-10-02
 
