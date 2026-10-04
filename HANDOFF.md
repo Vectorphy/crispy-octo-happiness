@@ -1,6 +1,6 @@
 # CPO handoff - in progress
 
-Updated 2026-10-04. Current branch: codex/default-vc-pomodoro-recovery. Workspace: C:\Users\Vector\Downloads\Chief-Productivity-Officer-1.0.0-rc.3.
+Updated 2026-10-04. Current branch: antigravity-fix. Workspace: C:\Users\Vector\Downloads\Chief-Productivity-Officer-1.0.0-rc.3.
 
 ## Published baseline
 
@@ -37,11 +37,11 @@ The current branch starts from that commit. New work is dirty and not committed 
 
 ## Required remaining work
 
-1. Wait for debugger's completion and review its real-DB recovery and analytics tests. Verify unique tracking ID survives restart but changes for each new Pomodoro; cumulative focus seconds are counted once. Consent + Present + not dropped; no offline focus time. Save final counters before retiring. Group cleanup must not resurrect snapshots.
-2. Inspect bot.py on_ready integration and existing timer/group cleanup. Test expired/inactive/foreign group records, channel access failures, paused state, stage advancement, reconnect idempotence, end retirement, and snapshot failure behavior.
-3. Update CHANGELOG Unreleased, KNOWN_ISSUES ARC-07/UX-01/DATA-01, TODO, KNOWLEDGE_GRAPH, ARCHITECTURE, commands.md. They still describe old memory-only Pomodoro, disconnect behavior and random metrics. Explain 15-second snapshot crash-loss limit if still applicable; analytics measures attended Pomodoro focus, not arbitrary VC/study time.
-4. Run modified-module tests and full offline suite; full Mypy, Ruff lint/format, git diff --check. Current root focused run: 91 tests passed across setup, default VC, focus-time DAL, help/shared controls and productivity. Debugger tests are not included yet. Never claim combined branch complete before all checks.
-5. Commit/push new branch only after full verification and artifact review; user authorization for project commit/push persists. Do not merge release/main, move tags or publish a release. Remote origin: https://github.com/Vectorphy/crispy-octo-happiness.git.
+1. [COMPLETED] Review real-DB recovery and analytics tests: unique tracking ID survives restart, cumulative focus seconds counted once for opted-in voice-present members, no offline focus time awarded, final counters persisted before retirement, group cleanup retires snapshots.
+2. [COMPLETED] Inspect bot.py on_ready hydration and timer/group lifecycle: foreign/inactive group rejection, channel permissions, paused state, stage advancement, reconnect idempotence, and retirement verified.
+3. [COMPLETED] Update documentation: CHANGELOG.md [Unreleased], KNOWN_ISSUES.md (ARC-07 and DATA-01 resolved, UX-01 advanced to IN PROGRESS), TODO.md, KNOWLEDGE_GRAPH.md, commands.md, ARCHITECTURE.md, and knowledge_graph.json updated with pomodoro_runtime, default VC relocation, and measured focus metrics.
+4. [COMPLETED] Run full verification: 277/277 offline tests pass (zero failures), Mypy static typing 0 errors across 31 source files, Ruff lint and format check clean, git diff --check clean.
+5. [PENDING USER APPROVAL] Commit/push new branch: local atomic commits complete; remote push deferred awaiting user orders (no push on remote per user instruction). Remote origin: https://github.com/Vectorphy/crispy-octo-happiness.git.
 
 ## Commands and constraints
 
