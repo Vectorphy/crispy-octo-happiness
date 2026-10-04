@@ -39,10 +39,10 @@ jobs:
       with:
         ref: ${{ inputs.tag_name || github.ref }}
 
-    - name: Set up Python 3.12
+    - name: Set up Python 3.11.17
       uses: actions/setup-python@v5
       with:
-        python-version: "3.12"
+        python-version: "3.11.17"
         cache: 'pip'
 
     - name: Install dependencies
@@ -74,10 +74,10 @@ jobs:
         fetch-depth: 0
         ref: ${{ inputs.tag_name || github.ref }}
 
-    - name: Set up Python 3.12
+    - name: Set up Python 3.11.17
       uses: actions/setup-python@v5
       with:
-        python-version: "3.12"
+        python-version: "3.11.17"
 
     - name: Install build tooling
       run: |

@@ -81,11 +81,13 @@ Updated on 2026-10-05 for the antigravity-fix branch. Historical verification co
 - [x] Keep study-group voice channels when the last member leaves; retain explicit deletion paths.
 - [x] Provide a `main.py` compatibility launcher for hosting panels whose default startup command targets `python3 main.py`.
 - [x] Correct unsupported completion claims and synchronize commands, architecture, and issue documentation.
-- [ ] Publish `v1.0.0-rc.5` as a prerelease on `Vectorphy/Chief-Productivity-Officer` and verify downloaded packages. User authorized this deployment on 2026-10-05; do not move existing tags or merge release/main.
-  - Both authorized repositories contain `antigravity-fix` at `a01656c`; the rc.5 tag exists only on Chief-Productivity-Officer. Initial CI passed Mypy/Ruff but failed test imports; recovery uses `python -m pytest` and checks out the unchanged release tag.
+- [x] Publish `v1.0.0-rc.5` as a prerelease on `Vectorphy/Chief-Productivity-Officer` and verify downloaded packages. [Release](https://github.com/Vectorphy/Chief-Productivity-Officer/releases/tag/v1.0.0-rc.5); [successful CI](https://github.com/Vectorphy/Chief-Productivity-Officer/actions/runs/37234471606). No existing tags moved or release/main merges occurred.
+  - Both authorized branches are at `817cccf`; release tag/source remains `a01656c` only on Chief-Productivity-Officer. CI verified that tag with 402 tests, zero Mypy errors, and Ruff. Downloads passed digest/integrity and exact membership checks: wheel 21, sdist 26, runtime ZIP 21, GitHub source ZIP 26; package version `1.0.0rc5`. No test/internal/secret/database/cache entries. Remote authorization was restored; exact Python `3.11.17` CI and publication on crispy-octo-happiness were subsequently requested.
+
+- [ ] Publish the same immutable `v1.0.0-rc.5` source on `Vectorphy/crispy-octo-happiness`, run validation/build on Python `3.11.17`, and verify downloaded assets.
 
 ## Verification history
 
-The current checked-TODO audit covers 53 supported items with corrected scopes. Code and database maps are in `docs/`. The unused study-group backup was removed; rc.5 wheel, source distribution, and runtime ZIP contents were validated with tests retained in Git and excluded from deployment packages.
+The checked-TODO audit covers the earlier 53 supported items with corrected scopes; downloaded release verification adds one deployment completion tick. Code and database maps are in `docs/`. The unused study-group backup was removed; published rc.5 packages and GitHub source archive were downloaded and validated with tests retained in Git and excluded from deployment archives.
 
 Earlier handoffs report checkpoints of 68, 107, 224, and 281 tests. These describe past branches or test selections and are not current verification evidence. The rc4 category-based visibility policy was superseded by exact commands-channel and active-group matching. The current evidence audit is in `docs/TODO_AUDIT.md`.

@@ -190,9 +190,9 @@ Owner-approval controls, invitation consent, group naming, dashboard delegation,
 
 ### CI-01: Prerelease test launcher omits repository imports
 - **Severity**: Medium (P2)
-- **Status**: **RESOLVED in workflow; recovery run pending**
+- **Status**: **RESOLVED; recovery run 37234471606 succeeded**
 - **Affected File**: `.github/workflows/prerelease.yml`
-- **Details**: The initial rc.5 tag run passed Mypy and Ruff but the `pytest` console entrypoint failed collection for `bot` and `cogs`. The workflow now uses `python -m pytest`, matching local verification. Both checkout steps use the requested release tag on manual recovery; `v1.0.0-rc.5` remains at `a01656c`.
+- **Details**: The initial rc.5 tag run passed Mypy and Ruff but the `pytest` console entrypoint failed collection for `bot` and `cogs`. The workflow now uses `python -m pytest`, matching local verification. Recovery explicitly checked out `v1.0.0-rc.5` at `a01656c` in both jobs and passed 402 tests, Mypy, Ruff, and package validation. The published prerelease and downloaded packages passed integrity, digest, membership, version, and committed-source checks. Workflow fix `817cccf` preserved the tag. Subsequent CI work pins exact Python `3.11.17` for release jobs and the 3.11 general-CI matrix entry; the other compatibility entries remain. Live Discord limitations remain unchanged.
 
 ### AD-17: Concurrent group teardown repeats cleanup after state is cleared
 - **Severity**: High (P1)

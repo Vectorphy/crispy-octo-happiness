@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### QA and packaging, 2026-10-05
+- Prerelease validation/build jobs now pin Python `3.11.17` on Ubuntu 24.04. General CI replaces its floating 3.11 entry with `3.11.17`, retains 3.10/3.12 coverage, and consistently invokes `python -m pytest`. Availability was verified against Python.org and the official Actions Python manifest.
+- Published prerelease `v1.0.0-rc.5` on Chief-Productivity-Officer from immutable source commit `a01656c`. Both authorized branches include workflow repair `817cccf`. Downloaded wheel, sdist, runtime ZIP, and GitHub source ZIP passed integrity, digest, membership, version, and source checks. The user subsequently authorized the same rc.5 prerelease on crispy-octo-happiness; this uses the same tagged source and preserves the existing Chief release.
 - Release verification invokes `python -m pytest` so repository imports resolve under the configured importlib test mode. Manual release recovery checks out the requested tag for both verification and packaging, preserving its immutable source commit.
 - Package version is `1.0.0rc5` for `v1.0.0-rc.5`. Wheel, source distribution, and hosting runtime ZIP exclude tests, caches, databases, secrets, governance reports, and development automation; release builds validate exact archive contents before upload. Git retains regression tests. Removed the unused `cogs/study_groups.txt` backup.
 - Added source-based code and database maps and a checked-TODO evidence audit. Corrected unsupported completion claims; 53 current checked items are supported within their documented offline scope. Default server task lists and action menus now select only that server's global tasks outside a group.
