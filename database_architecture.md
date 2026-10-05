@@ -1,30 +1,20 @@
 # Chief Productivity Officer (CPO) — Database Architecture & Data Dictionary
 
-Comprehensive technical documentation of the CPO SQLite persistence tier, data modeling, concurrency invariants, migration guarantees, and audit subsystems.
+Source-derived map of the CPO SQLite persistence tier. This document distinguishes observed behavior from intended invariants and records the audited source snapshot; open defects below mean the runtime is not deployment-ready.
 
 ---
 
 ## 1. Persistence Tier Overview & Invariants
 
-The **Chief Productivity Officer (CPO)** persistence layer is built on a hardened SQLite 3 asynchronous DAL (`database.py:DBHandler`). Because standard SQLite drivers in Python (`sqlite3`) are synchronous and thread-affine, the architecture enforces strict thread-isolation and concurrency guardrails.
+The CPO persistence layer is a single `sqlite3.Connection` (`check_same_thread=False`) wrapped by asynchronous `DBHandler` methods. Each DAL operation uses one `asyncio.Lock` and dispatches synchronous SQLite work with `asyncio.to_thread`; cancellation of a caller is shielded until the worker finishes. The lock serializes this process's operations. It does not prove cross-process serialization or eliminate SQLite lock errors caused by external writers.
 
 ### Core Architectural Invariants
 
-1. **Serialized Async Concurrency (`async with self.lock`)**:
-   - Every read and write transaction MUST acquire `asyncio.Lock` before dispatching to worker threads.
-   - Prevents `sqlite3.OperationalError: database is locked` across concurrent slash command handlers.
-2. **Dedicated Worker Thread Dispatch (`_run_in_thread`)**:
-   - Heavy disk I/O and SQL executions are dispatched to worker threads via `asyncio.to_thread` or thread pools.
-   - In-flight worker threads are shielded from cancellation: if an `asyncio.CancelledError` occurs, the DAL awaits the completion of the active worker before releasing the lock to prevent dangling cursors or corrupted shared state.
-3. **Parameterized SQL Queries**:
-   - 100% of queries use `?` placeholders. String formatting (f-strings) or concatenations are strictly forbidden to eliminate SQL injection risks.
-4. **Additive Migrations & Zero Data Loss**:
-   - `create_tables()` runs idempotently at bot startup.
-   - Legacy schemas are transformed in-place using `ALTER TABLE ADD COLUMN` with safe defaults.
-   - Tables are never dropped in production (`DROP TABLE` is strictly prohibited).
-5. **Guild Isolation**:
-   - All settings, rosters, sessions, journals, and audit records are strictly scoped by Discord snowflake `guild_id`.
-   - Cross-guild bleed is physically impossible by query construction.
+1. **Process-local serialization**: Public DAL methods acquire `self.lock` around SQLite worker calls. This serializes access through this `DBHandler` instance; it is not a cross-process lock and does not guarantee that SQLite can never report a lock error.
+2. **Worker completion on cancellation**: `_run_in_thread` shields the worker and drains it before propagating cancellation, so the surrounding DAL lock remains held until the SQLite call finishes.
+3. **Bound values**: Query values use SQLite parameters. A few update statements construct the column-assignment list from fixed, code-owned field names; values remain bound parameters.
+4. **Startup schema preparation**: `connect()` calls `create_tables()`. It creates the current tables, conditionally adds columns, renames two legacy tables when their replacements are absent, backfills identifiers and task guild IDs, and normalizes manager grants. The migration routine commits after manager normalization and again at the end; the complete migration is not one atomic transaction. No table-drop statement appears in this routine.
+5. **Guild keys are unevenly applied**: Settings, check-in sessions/settings, invitation transitions, audit rows, Pomodoro runtime saves, and manager grants have guild keys. Several group/task lookups deliberately accept only a group/user identifier and are not independently guild-scoped. Do not infer a universal cross-guild isolation guarantee from the schema.
 
 ---
 
@@ -292,7 +282,7 @@ Core registry of persistent study rooms, associated Discord resources, and runti
 Junction table tracking group membership rosters.
 | Column | Type | Nullable | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `group_id` | `TEXT` | No | None | Study group UUID string (Foreign Key -> `study_groups.group_id`). |
+| `group_id` | `INTEGER` | No | None | Declared SQLite affinity is INTEGER; current code writes canonical group ID strings. The DDL declares a foreign key to `study_groups.group_id`, but connection setup does not enable FK enforcement. |
 | `user_id` | `INTEGER` | No | None | Discord User Snowflake. |
 
 *Primary Key*: `(group_id, user_id)`.
@@ -392,7 +382,7 @@ Personal and group task management records.
 ### 3.6 Durable Invitations & Security Audit
 
 #### `session_invitations`
-Durable recipient invitation registry with hard deadline enforcement.
+Durable recipient invitation registry. `warn_at` and `expires_at` are stored deadlines; SQLite does not enforce them automatically.
 | Column | Type | Nullable | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `invitation_id` | `TEXT` | No | None | UUID string identifier (Primary Key). |
@@ -413,7 +403,7 @@ Durable recipient invitation registry with hard deadline enforcement.
 *Indexes*: `idx_invitations_pending` ON `(status, expires_at)`.
 
 #### `command_audit_events`
-Guild-scoped immutable security audit ledger tracking all command invocations and authorization decisions.
+Guild-scoped audit-event table intended for command and authorization records. The schema does not enforce immutability or completeness.
 | Column | Type | Nullable | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `id` | `INTEGER` | No | Auto | Primary Key. |
@@ -473,19 +463,17 @@ Persistent FIFO queue tracking uncleaned Discord resources left behind due to pe
 stateDiagram-v2
     [*] --> Pending: service.send()
     
-    Pending --> Pending: 360s elapsed (Send Warning DM)
-    Pending --> Expired: 600s elapsed (Send Expiry Notice)
-    Pending --> Invalid: Group/Session ended or Owner changed
-    Pending --> Declined: Recipient clicks "Decline"
-    Pending --> Accepting: Recipient clicks "Join" (CAS lock)
-    
-    Accepting --> Accepted: Role granted & DB roster updated
-    Accepting --> Invalid: Capacity reached or Roster write fails (Rollback)
-    
-    Declined --> [*]: Audit logged
-    Expired --> [*]: Audit logged
-    Invalid --> [*]: Audit logged
-    Accepted --> [*]: Audit logged & Embed refreshed
+    Pending --> Pending: Application records warning at warn_at
+    Pending --> Expired: Application transitions status at/after expires_at
+    Pending --> Invalid: Application determines target is no longer valid
+    Pending --> Declined: Recipient action, conditional status transition
+    Pending --> Accepting: Join action, conditional status transition
+    Accepting --> Accepted: Application completes acceptance callback
+    Accepting --> Invalid: Application marks invitation invalid
+    Declined --> [*]
+    Expired --> [*]
+    Invalid --> [*]
+    Accepted --> [*]
 ```
 
 ### 4.2 Setup Recovery Journal State Machine
@@ -496,22 +484,20 @@ stateDiagram-v2
     note right of Prepared: Intents recorded before Discord mutations
     
     Prepared --> Committed: SQLite settings write succeeds
-    note right of Committed: Settings are immutable; cannot rollback
+    note right of Committed: This phase is stored; setup settings and phase commit together
     
-    Prepared --> RolledBack: Discord REST fails or Cancel clicked
-    note right of RolledBack: Original categories/permissions restored
-    
-    Committed --> SyncPending: Staff role sync fails or times out
-    Committed --> Complete: Staff roles & channel ACLs synchronized
-    
-    SyncPending --> Complete: Background retry loop reconciles staff roles
-    Complete --> [*]: Journal cleared
-    RolledBack --> [*]: Journal cleared
+    Prepared --> [*]: Rollback/cancel path restores resources then deletes journal
+    Committed --> SyncPending: Staff role sync fails; retry work remains durable
+    Committed --> [*]: Sync succeeds and journal is deleted
+    SyncPending --> [*]: Retry succeeds and journal is deleted
+    note right of SyncPending: Complete and rolled-back are not stored phase values
 ```
 
 ---
 
 ## 5. Security & Isolation Matrix
+
+The matrix below describes the intended authorization policy from repository rules. It is not evidence that every command currently enforces it; AUTH-01/AUTH-02 and other audit findings remain open.
 
 | Capability | Tier 0: User | Tier 1: Member | Tier 2: Owner | Tier 3: Manager | Tier 4: Bot Dev | Tier 5: Supreme Commander |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -522,3 +508,92 @@ stateDiagram-v2
 | Run /setup Wizard | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
 | Bypass Default Role | ❌ | ❌ | ❌ | ❌ (Strict Gate)| ❌ (Strict Gate) | ❌ (Strict Gate) |
 | Global Configuration| ❌ | ❌ | ❌ | ❌ | ❌ | ✅ (`BOT_DEVELOPER_ID`) |
+
+
+## 6. Audited DAL catalogue and runtime relationships
+
+### 6.1 `DBHandler` surface (current source)
+
+The following catalogue covers all 99 methods in `database.py` at the fingerprint below. The four synchronous helpers are worker-only primitives; `validate_checkin_settings` is a pure validator.
+
+| Area | Methods and observed responsibility |
+| :--- | :--- |
+| Connection and primitives | `__init__`, `_run_in_thread`, `_fetchone_sync`, `_fetchall_sync`, `_execute_commit_sync`, `_executemany_commit_sync`, `connect`, `close`, `create_tables` |
+| Guild configuration | `set_mod_log_channel`, `get_mod_log_channel`, `get_commands_channel`, `get_default_vc`, `update_vc_cleanup_time`, `get_vc_cleanup_time`, `update_vc_category`, `get_vc_category`, `update_group_category`, `get_group_category`, `update_default_max_members`, `get_default_max_members`, `get_default_group_duration`, `get_default_pomodoro_duration`, `save_setup`, `get_default_role` |
+| Check-in policy persistence | `validate_checkin_settings`, `save_checkin_guild_settings`, `get_checkin_guild_settings`, `get_checkin_settings_guild_ids` |
+| Study-group records/resources | `save_study_group`, `update_study_group_by_id`, `get_user_created_group_count`, `get_user_joined_group_count`, `get_user_group`, `get_study_group_by_channel`, `fetch_study_group_by_name`, `fetch_study_group_by_id`, `add_member_to_study_group_db`, `remove_member_from_study_group_db`, `transfer_ownership_study_group_db`, `fetch_members_of_group`, `fetch_owner_of_group`, `delete_study_group`, `get_study_groups_of_user`, `get_all_study_groups_of_guild`, `get_guild_group_names`, `get_all_study_groups`, `get_study_group`, `update_group_roles`, `get_group_roles`, `update_voice_channel`, `log_vc_creation`, `get_vc_logs` |
+| Check-in runtime records | `save_checkin_session`, `update_checkin_session`, `fetch_checkin_session`, `add_or_update_checkin_member`, `fetch_checkin_members`, `fetch_active_checkin_sessions`, `delete_checkin_session` |
+| Pomodoro and focus | `save_pomodoro_session`, `save_pomodoro_runtime`, `get_active_pomodoro_runtime`, `retire_pomodoro_runtime`, `retire_group_pomodoro_runtime`, `save_productivity_focus_time`, `get_session_productivity_focus_seconds`, `get_productivity_focus_seconds` |
+| Invitations and audit | `create_session_invitation`, `get_session_invitation`, `get_pending_session_invitations`, `bind_session_invitation_message`, `transition_session_invitation`, `mark_invitation_notification`, `record_command_audit`, `get_command_audit_events` |
+| Setup recovery and teardown retry | `create_setup_recovery_journal`, `get_setup_recovery_journal`, `update_setup_recovery_journal`, `delete_setup_recovery_journal`, `record_pending_cleanup`, `get_pending_cleanups`, `update_cleanup_retry`, `delete_pending_cleanup`, `get_pending_cleanup_count` |
+| Managers | `add_manager`, `sync_guild_manager_grants`, `remove_manager`, `get_manager`, `get_all_managers` |
+| Tasks | `add_task`, `complete_task`, `apply_task_action`, `get_user_tasks`, `delete_task`, `purge_group_tasks`, `purge_guild_tasks`, `purge_personal_tasks`, `purge_all_user_tasks` |
+
+### 6.2 Lock, transaction, and migration boundaries
+
+```mermaid
+flowchart TD
+    C[Cog or startup lifecycle] -->|await DBHandler method| L[async with self.lock]
+    L --> W[_run_in_thread]
+    W --> S[sqlite3 work in asyncio.to_thread]
+    S -->|CRUD helper| T[connection context commits one statement/batch]
+    S -->|custom _sync| X[explicit with conn transaction]
+    W -->|cancel caller| D[shield and drain worker]
+    D --> L
+```
+
+Ordinary writes route through `_execute_commit_sync` or `_executemany_commit_sync`, each using `with self.conn`; custom multi-statement transactions use a worker closure with `with self.conn` (notably setup save/journal phase commit, group save, group soft-delete/roster/runtime retirement, Pomodoro runtime save, focus-time monotonic upsert, manager sync, and cleanup enqueue). Read helpers execute without opening an explicit read transaction. `create_tables()` performs its schema work in one worker under the lock, but explicitly commits partway through and at completion. SQLite foreign-key declarations exist in the DDL, but `connect()` does not enable `PRAGMA foreign_keys=ON`; enforcement should not be assumed from the declarations alone.
+
+### 6.3 Runtime callers and persistence ownership
+
+```mermaid
+flowchart LR
+    SETUP[setup wizard / recovery] -->|save_setup + setup journal| GS[guild_settings + setup_recovery_journals]
+    GROUP[study_groups cog] -->|save/update/admit/remove/end| SG[study_groups + study_groups_members]
+    GROUP -->|record retry| PC[pending_resource_cleanups]
+    POMO[pomodoro cog] -->|snapshot / retire| PR[pomodoro_runtime]
+    POMO -->|monotonic MAX upsert| FT[productivity_focus_time]
+    CHECK[checkin cog] -->|session/member/reminder writes| CS[checkin_sessions + checkin_members]
+    INV[invitation service] -->|create/bind/CAS/notify| SI[session_invitations]
+    AUD[audit helper] -->|explicit audit_action call sites only| AE[command_audit_events]
+    MAN[manager cog + startup staff sync] -->|guild grants| MG[managers]
+    TASK[tasklist cog] -->|task CRUD/purge| TK[tasks]
+```
+
+Groups are the root durable Discord-resource registry and are marked inactive by `delete_study_group`; this operation also deletes their member rows and retires matching Pomodoro runtime snapshots. It does not delete the group row. Check-in sessions persist owner identity, schedule/reminder counters and message ID; members persist status/absence counters. The current check-in update method does not write `owner_id`, despite that column existing. Pomodoro session configuration is stored in `pomodoro_sessions`; restartable live state is a JSON snapshot in `pomodoro_runtime`; focus totals are separately persisted as per-user rows and use `MAX(existing, incoming)` to avoid decreasing an already stored value. Tasks are user-owned with optional guild and group columns; `NULL` guild/group denotes personal context in the matching query paths.
+
+### 6.4 Actual scoping constraints
+
+| Data/path | Scope enforced by these DAL queries | Caveat |
+| :--- | :--- | :--- |
+| `guild_settings`, `checkin_guild_settings` | `guild_id` key | Per-guild upsert/read. |
+| Study-group by channel/name and group lists | channel or supplied guild; lists include guild | `fetch_study_group_by_id`, membership changes, owner transfer, member reads, delete, and some counters take no guild. Callers must establish guild ownership. `get_user_group` may fall back to any active group for a user when channel-specific lookup misses. |
+| `managers` | explicit `(user_id, guild_id)` lookups; `sync_guild_manager_grants` replaces only `server_sync` grants for one guild | Legacy nullable guild rows may exist; `get_manager` itself does not return them for a concrete guild. |
+| `tasks` | depends on method/arguments | `get_user_tasks(user_id)` without `guild_id` is user-wide. Completion/deletion without `group_id` is user-only and may cross guild/group context. `purge_all_user_tasks` is intentionally global. |
+| Check-in sessions/settings and audit events | session ID or guild ID as appropriate | `fetch_checkin_session` and member CRUD use session ID without a second guild predicate; audit reads are guild-filtered. |
+| Invitations | guild and invitation ID on read/transitions; pending list is guild-filtered | Pending state is durable but startup restoration is absent in audited runtime. |
+| Pomodoro runtime/focus | save runtime verifies `(group_id, guild_id)` and active group; focus read/write carries guild and group | Runtime retire-by-session key is global; retire-by-group uses group ID only. Focus aggregate requires a concrete matching guild (`guild_id = ?`). |
+| Pending cleanup | optionally guild-filtered retrieval | Duplicate detection during enqueue checks `resource_id` and pending status without guild predicate. |
+| Setup journal | guild and operation ID | Guild primary key means at most one journal per guild. |
+
+### 6.5 Open persistence and consistency findings (audited source)
+
+These are unresolved findings from `.audit-function-review-20261005/AUDIT_REPORT.md`; this document describes the audited pre-fix runtime and does not treat proposed fixes or older tests as verification.
+
+- **INV-01/02/03 (P1):** invitation eligibility grants access when role-settings lookup errors; failed invitation CAS/create can still invoke acceptance behavior; startup does not restore pending invitation views/deadline tasks even though `get_pending_session_invitations` exists.
+- **AUD-01 (P1):** the persistent audit table and `record_command_audit` exist, but general commands and controls do not consistently reach the audit helper.
+- **CHECK-01 (P1):** check-in owner selection updates memory without a corresponding DAL owner write; selector authority is not revalidated.
+- **POMO-02 (P1):** a Pomodoro persistence helper swallows a save error, so callers can interpret a failed durable write as success.
+- **GROUP-01 (P1):** partial Discord group provisioning can leave role/text resources without a durable group row or full rollback. DAL group persistence cannot account for resources never recorded.
+- **ARC-12 (P2):** Pomodoro attendance, dashboard/retirement paths, and gateway lifecycle changes bypass the per-session lock in portions of the runtime. DAL serialization only protects individual SQLite operations, not the wider in-memory-to-database state transition.
+- **VOTE-02/04 and VOTE-05 (P1):** ownership-transfer/removal flows can leave memory/SQLite roster state inconsistent on failures, and a votekick fallback can resolve a group from another guild. These are caller-level multi-write consistency/scoping defects; the DAL's group-ID-only update signatures make caller validation material.
+- **SEC-10 (P1):** group named-join currently permits admission without a durable invitation; the membership insert itself enforces active group and capacity but not invitation ownership.
+
+The broader audit also found fail-open/missing-manager authorization branches (AUTH-01), manager tier overwrite/removal (AUTH-02), UI limits, and other non-DAL defects. These are documented here only where they affect persistence ownership or scoping.
+
+### 6.6 Evidence and status
+
+- Audited source baseline: branch `antigravity-fix`, HEAD `f9a39815354fe3f60208513f867b1502b42fb193`, with the dirty working tree described in the report.
+- `database.py` SHA-256 at mapping time: `7e28d54f71ef91a76d27adb1b21b477d8ebd0d38da4c576b9be045e2e432f439` (matches `.audit-function-review-20261005/snapshot.json`). Other source fingerprints are recorded in that snapshot; they must be refreshed after coding/debugger changes.
+- Audit reviewed 1008/1008 function bodies, 50/50 lambda expressions, and 83/83 executable module statements in 49 first-party executable files. This is static source review, not dynamic Discord validation.
+- The audit report records offline pytest, Mypy, Ruff, and whitespace checks for the reviewed snapshot. Package build and target Python 3.11.17 CI remain unverified; mapping work does not establish deployment readiness.

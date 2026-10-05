@@ -83,9 +83,12 @@ async def acknowledge_interaction(interaction: discord.Interaction) -> None:
     # An immediate private response allows later public success and private errors
     # without inheriting a deferred message's visibility on the first followup.
     if hasattr(interaction, "response"):
-        res = interaction.response.send_message("Processing your request…", ephemeral=True)
-        if inspect.isawaitable(res):
-            await res
+        try:
+            res = interaction.response.send_message("Processing your request…", ephemeral=True)
+            if inspect.isawaitable(res):
+                await res
+        except discord.InteractionResponded:
+            pass
     extras = getattr(interaction, "extras", None)
     if isinstance(extras, dict):
         extras["cpo_acknowledged"] = True

@@ -4,10 +4,56 @@ Updated 2026-10-05. Branch: antigravity-fix. Workspace: C:\Users\Vector\Download
 
 ## Resume in progress — 2026-10-05
 
+### Independent audit checkpoint — 2026-10-05
+
+P1 batch is now frozen: `.audit-function-review-20261005/P1_IMPLEMENTATION_HANDOFF.md`, `P1_SCOPE_MANIFEST.json`, and `p1_implemented_snapshot/` capture 17 files / 73 implemented functions with final hashes/source bytes. Pre-P1 dirty source bytes were not retained; original audit has hashes only, so HEAD diff is not the scoped delta. Full default-order pytest 506 passed, new adverse regressions 22 passed, Mypy zero issues across 45 files, Ruff lint/format/whitespace passed. Custom focused order had six manager mock failures after standalone release module unloading/reloading; isolated manager tests and normal full order pass. This test-isolation gap remains explicitly open.
+
+`/root/audit_implemented_p1` GPT-6.1 Sol low is active BEFORE debugger, strictly reviewing manifest-implemented functions/operations and relevant regressions, not unchanged code/unrelated issues. It owns only P1_SCOPED_AUDIT.md/P1_SCOPED_FINDINGS.json artifacts; parent owns governance. `/root/coding_p1` continues P2 UI-01 with exclusive cogs/tasklist.py + new tests/test_task_embed_limits.py ownership. All frozen P1 files stay untouched; overlapping P2 fixes await debugger ownership release. Debugger has not started.
+
+Latest user asks expedited handover and P2/P3 progress. Coder has been directed to finish necessary current repairs, publish exact implemented P1 scope/remaining-checks handoff promptly, then freeze P1 files for strictly scoped pre-debugger audit. Independent P2/P3 work can proceed only after root captures frozen batch and assigns disjoint files; overlapping Pomodoro/manager/study-group P2 items remain deferred until P1 ownership releases. Last reported P1 target checks: 95 passed; ten Mypy annotations were being repaired and are not yet declared cleared. No final readiness claim.
+
+Newest user overrides post-debugger audit order: **finish coder P1 batch → audit only implemented changes/relevant regressions → debugger**. No broad scan of unchanged code or unrelated findings. Capture coder's exact delta/fingerprints against audited pre-fix source, preserving existing dirty Antigravity work. User's strict scope applies to this audit stage; P2/P3 ownership for later parallel coding/debugger still requires coordination. Coder has been told to provide exact changeset handoff and wait for file split before P2 source edits.
+
+Latest user adds mandatory re-audit after debugger completes the P0/P1 batch. Reuse/recreate audit GPT-6.1 Sol low and replay original failures against the debugger-reviewed source, checking actual DAL failures/adverse interleavings and evidence-linked regressions. Full deployment readiness additionally awaits completed P2/P3, final checks and map refresh. Coder is still validating implemented P1 fixes; debugger and re-audit have not started.
+
+Mapping stage completed against the audited pre-fix snapshot: database_architecture.md catalogues 16 tables and all 99 DBHandler methods; ARCHITECTURE.md covers runtime/tool/test modules, state ownership, authority, call flows and open findings, with 33 local links checked and Mermaid fences balanced. Coder edits already drift database.py and cogs/study_groups.py from snapshot; both maps require final-source refresh. Mappers changed only their exclusive files and are now idle.
+
+P1 implementation is in progress with `/root/coding_p1`: electorate pruning, same-guild votekick, atomic owner/removal persistence with role compensation, invite-only named admission, missing-manager denial and partial provisioning rollback are being implemented; invitation CAS/restart, durable check-in owner and Pomodoro writes, target-tier protections and central audit coverage follow. No approval blockers reported; no new schema/dependency/signature expansion planned. These are unfinished edits, not verified fixes. Root owns governance; debugger has not started.
+
+Audit completed: 1008/1008 defs, 50/50 lambdas, 83/83 counted module statements inspected across 49 executable files, plus config/CI integration. Twenty unique open finding IDs, highest confirmed severity P1, no confirmed P0. Audited executable fingerprints unchanged at handoff. Reports/coverage/snapshot and severity-split worklist are in .audit-function-review-20261005. Governance status corrections made by audit are complete; root now owns governance synchronization.
+
+`/root/coding_p1` (GPT-6.1 Sol medium) is active on all confirmed P1 source/tests, with meaningful regressions and final batch checks required. Mappers remain active on their exclusive documentation files. Coding reports P1 batch readiness and a P2/P3 file plan before parent activates debugger on P1; parallel source ownership must be disjoint, overlapping files serialized. No debugger source work has started yet. Existing audit suite/static passes verify only the pre-fix snapshot and must not be reused for changed source.
+
+Latest user orders override earlier orders below: database mapper and code mapper launch **now in parallel**. `/root/database_mapping` and `/root/code_mapping_now` are active with GPT-6 Luna low and exclusive database_architecture.md / ARCHITECTURE.md ownership. Coding must fix all confirmed P0/P1 first, validate batch, then hand that batch to GPT-6.1 Sol high debugger while GPT-6.1 Sol medium coder continues P2/P3. Partition file ownership and serialize overlapping files; reconcile maps against final source. Audit final report/inventories are in .audit-function-review-20261005; defs 1008/1008, lambdas 50/50, counted module statements 83/83 source-inspected, dynamic/live/build limits explicitly retained. Runtime remains unchanged so far.
+
+Newest user order supersedes earlier order below: **audit → coding → debugger plus database mapper and code mapper in parallel → sequential QA/final verification/map refresh**. Mappers remain on hold until coding finishes. User explicitly authorizes the debugger/mapping parallel stage; avoid overlapping file ownership, preserve dirty changes, fingerprint mapping inputs, and reconcile maps after debugger edits. Audit still finishes first and delivers findings directly to coding.
+
+Latest user authorization: audit agent owns updates to TODO.md and KNOWN_ISSUES.md during review, plus required Unreleased CHANGELOG synchronization. Replace Antigravity pending statuses with verified offline statuses only where current evidence establishes the precise behavior; retain unreviewed/unsupported claims pending and reopen reproduced defects. Runtime/tests remain read-only until coding's later turn. Parent does not concurrently edit audit-owned governance files.
+
+Latest sequencing correction from user: **audit → database mapper → code mapper → coding (GPT-6.1 Sol medium) → debugger (GPT-6.1 Sol high) → sequential QA/final verification/map refresh**. Coding is inserted before debugger and owns first implementation of audited fixes. This supersedes the earlier direct mapper-to-debugger handoff below. Audit remains in progress; no coding/debugger work has started.
+
+Latest user continuation: exhaustive function-by-function review of every first-party code file, including Gemini/Antigravity edits and unchanged functions. `/root/todo_audit` is the sole active worker and inventories 49 executable files / 1,008 Python definitions (methods and nested functions included), with actual review statuses and evidence. User requests preserving these mapping artifacts and passing them sequentially to database mapper, code mapper, then debugger to fix findings. This overrides the prior maps-after-verification order for the initial audited-state maps; document open defects and refresh after fixes. Mapping and fixing remain pending while audit proceeds. Reuse available handles or recreate unavailable ones with the latest profiles; standby registration does not guarantee a live persistent session.
+
+Latest user profile overrides: debugger is GPT-6.1 Sol **high**, not xhigh; active standby handle is `/root/debugger_high`, superseding `/root/debugger`. User requested CI/CD GPT-5.6 Terra low, unavailable in this session's subagent tool, then explicitly selected GPT-5.6 Sol **low**; `/root/cicd_sol` supersedes inherited `/root/cicd`. Old handles remain inactive. Preserve these latest settings on recreation.
+
+Audit completed without runtime edits. Additional findings: failed role/member removal can still be announced as a successful votekick (VOTE-04); dropped ordinary Pomodoro participants receive an unusable `/resume_pomodoro` recovery instruction (POMO-01). Lock-coverage, set-precedence, and unchanged public-signature claims need correction. Packaging allowlists were inspected but a fresh build/package-validator run was not performed. Audit temporary directories were cleaned. All non-audit roles remain on standby.
+
+User requested an audit agent to check Antigravity fixes and deployment readiness, then requested all remaining roles on standby with sequential activation. `/root/todo_audit` performs read-only verification. Coding (GPT-6.1 Sol medium), debugger (GPT-6.1 Sol xhigh), setup QA, database/cleanup QA, Pomodoro QA, code mapping (GPT-6 Luna low), database mapping (GPT-6 Luna low), design, and CI/CD are registered on standby; inherited roles have no explicit override. Activate only one project worker at a time.
+
+Fresh dirty-tree checks: 484 full-suite tests, 134 focused tests, zero Mypy errors across 43 files, clean Ruff lint/format and whitespace. Initial Windows temporary-directory/cache errors were bypassed with unique temporary paths; these were environment failures, not passing runs.
+
+Deployment is blocked by reproduced VOTE-01/02/03 findings in KNOWN_ISSUES.md: departed end-vote initiator still counts; failed DB ownership transfer still changes memory and proceeds with owner removal; target promoted to administrator after vote initiation is still kicked. SEC-10 invite-only admission remains unresolved. Follow-up fixes and regression coverage are pending; no coding role has been activated and no runtime source was changed by this audit. No commit, push, release, or live Discord action was performed. Existing rc.5 tags/assets remain immutable.
+
 ### Verification & Completion Checkpoint — 2026-10-05
 
 - **Execution & Implementation**:
+  - Checkpoint lineage: Previous checkpoint was `8e9e298` (`codex checkpoint`), followed by intermediate checkpoint `f9a3981` (`antigravty checkpoint`). Current active uncommitted work contains Antigravity fixes — yet to be verified.
   - Replaced unavailable requested profiles with user-approved Gemini 3.8 Flash (High) across all sequential roles per standing repository rule.
+  - Implemented Democratic End Group voting via `EndGroupVoteView` and `StudyGroup.start_end_vote`: Level 3+ Staff/Managers bypass vote and end immediately; members and owners trigger democratic vote requiring majority consent `(len(members) // 2) + 1` to end the study group. Single-member groups end immediately.
+  - Implemented `/votekick` slash command and interactive dashboard button `votekick_callback` with `VotekickSelectView` and `VotekickView`. Server staff (Level 3+) are strictly immune. If a group owner is voted out, ownership automatically transfers to the next member in the roster. Self-kicking is rejected.
+  - Synchronized in-memory `owner_id` in `transfer_group`. Bounded `/create_group` `max_members` to 1–99 and made `mentions: Optional[str] = None`.
+  - Hardened Pomodoro concurrency: added `session.lock` and group `_start_locks` to serialize timer ticks, stage advances, pause/resume, and prevent duplicate session creation. Gated `/start_pomodoro`, `/pause_pomodoro`, and `/resume_pomodoro` to group creator/owner or Level 3+ managers. Fixed operator precedence bug in focus accounting (`cogs/pomodoro.py:1468`). Added rollback cleanup on voice channel creation failure.
+  - Hardened Check-in: guarded `start_checkin` and command permissions decorators with early interaction deferrals before DB queries to guarantee Discord 3s SLA. Fixed break callback to correctly increment absence counts instead of resetting to 1. Wrapped `mark_present_callback` and `start_break_callback` under `join_lock`.
   - Implemented durable recipient invitations across `cogs/study_groups.py`, `cogs/checkin.py`, `cogs/pomodoro.py`, and `cogs/_invitations.py`.
   - Added target member resolution in `eligible_recipient` and `InvitationService.send` ensuring mocked and real Discord member recipients reliably receive interactive invitation views.
   - Reconciled mock awaitability and coroutine inspection in `cogs/_audit.py` and `cogs/_invitations.py`.
@@ -15,15 +61,14 @@ Updated 2026-10-05. Branch: antigravity-fix. Workspace: C:\Users\Vector\Download
   - Preserved standard `utils.py:send_response` delegation through `interaction.followup.send` + original response deletion with `isawaitable` safety.
   - Built comprehensive `database_architecture.md` with complete Mermaid ER and state-machine diagrams, data dictionary for all 16 tables, concurrency invariants, and migration rules.
   - Synchronized `ARCHITECTURE.md`, `KNOWLEDGE_GRAPH.md`, `TODO.md`, and `CHANGELOG.md`.
-  - Completed comprehensive audit of 34 system issues (concurrency, Discord 3s SLA, authorization, session lifecycles, and error handling) and appended to `TODO.md`.
-  - Committed verified checkpoint with commit message `antigravty checkpoint` without modifying Python code per directive.
 
 - **Verification Evidence**:
-  - Full test suite: **479 passed** in 17.71s (100% offline, zero-token, zero failures).
+  - Full test suite: **484 passed**, 1 warning in 16.42s (100% offline, zero-token, zero failures).
   - Setup & Security QA: **165 passed**.
   - Database & Cleanup QA: **86 passed**.
   - Pomodoro & Lifecycle QA: **143 passed**.
-  - Remaining feature & command matrix: **85 passed**.
+  - Group Controls & Democratic Voting matrix (`tests/test_group_controls.py`): **34 passed**.
+  - Remaining feature & command matrix: **90 passed**.
   - Static type checking: Mypy reported **0 errors** across all 43 source files.
   - Linting & formatting: Ruff check and format passed across all 43 files.
   - Whitespace: `git diff --check` passed cleanly.

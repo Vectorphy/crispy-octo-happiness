@@ -1,0 +1,227 @@
+[
+  {
+    "id": "VOTE-01",
+    "priority": "P1",
+    "file": "cogs/study_groups.py",
+    "line": 120,
+    "end": 185,
+    "problem": "Departed votes remain counted against a reduced current roster",
+    "evidence": "Offline adverse-order reproduction"
+  },
+  {
+    "id": "VOTE-02",
+    "priority": "P1",
+    "file": "cogs/study_groups.py",
+    "line": 228,
+    "end": 266,
+    "problem": "Owner changes before failed DB transfer, followed by removal",
+    "evidence": "Offline injected transfer failure"
+  },
+  {
+    "id": "VOTE-02",
+    "priority": "P1",
+    "file": "cogs/study_groups.py",
+    "line": 1640,
+    "end": 1663,
+    "problem": "Immediate kick duplicates inconsistent owner transfer",
+    "evidence": "Source inspection"
+  },
+  {
+    "id": "VOTE-03",
+    "priority": "P1",
+    "file": "cogs/study_groups.py",
+    "line": 228,
+    "end": 266,
+    "problem": "Staff promotion after initiation is not rechecked",
+    "evidence": "Offline adverse-order reproduction"
+  },
+  {
+    "id": "VOTE-04",
+    "priority": "P1",
+    "file": "cogs/study_groups.py",
+    "line": 641,
+    "end": 701,
+    "problem": "Removal catches failure without outcome; callers announce success",
+    "evidence": "Offline DB removal failure and source inspection"
+  },
+  {
+    "id": "VOTE-05",
+    "priority": "P1",
+    "file": "cogs/study_groups.py",
+    "line": 3177,
+    "end": 3227,
+    "problem": "Foreign-guild fallback group is accepted for votekick",
+    "evidence": "Offline cross-guild reproduction"
+  },
+  {
+    "id": "SEC-10",
+    "priority": "P1",
+    "file": "cogs/study_groups.py",
+    "line": 2888,
+    "end": 2983,
+    "problem": "Named join bypasses invitation-only policy",
+    "evidence": "Source inspection and existing matrix intentionally joins uninvited user"
+  },
+  {
+    "id": "POMO-01",
+    "priority": "P2",
+    "file": "cogs/pomodoro.py",
+    "line": 284,
+    "end": 335,
+    "problem": "Dropped regular participants receive unusable resume guidance",
+    "evidence": "Source inspection and authorization paths"
+  },
+  {
+    "id": "POMO-01",
+    "priority": "P2",
+    "file": "cogs/pomodoro.py",
+    "line": 1378,
+    "end": 1446,
+    "problem": "Resume owner/staff gate excludes regular recovery",
+    "evidence": "Source inspection"
+  },
+  {
+    "id": "INV-01",
+    "priority": "P1",
+    "file": "cogs/_invitations.py",
+    "line": 30,
+    "end": 100,
+    "problem": "Role settings error permits invitation eligibility",
+    "evidence": "Offline sqlite error injection"
+  },
+  {
+    "id": "INV-02",
+    "priority": "P1",
+    "file": "cogs/_invitations.py",
+    "line": 490,
+    "end": 565,
+    "problem": "Failed CAS/create fallback still runs acceptance callback",
+    "evidence": "Offline false transition and failed create reproduction"
+  },
+  {
+    "id": "INV-03",
+    "priority": "P1",
+    "file": "cogs/_invitations.py",
+    "line": 1,
+    "end": 764,
+    "problem": "No startup restoration of pending views/timers",
+    "evidence": "Runtime call-site review; pending DAL getter has no runtime caller"
+  },
+  {
+    "id": "AUD-01",
+    "priority": "P1",
+    "file": "cogs/_audit.py",
+    "line": 1,
+    "end": 150,
+    "problem": "General commands and controls lack promised persistent audit coverage",
+    "evidence": "Runtime audit_action call-site review"
+  },
+  {
+    "id": "CHECK-01",
+    "priority": "P1",
+    "file": "cogs/checkin.py",
+    "line": 1160,
+    "end": 1260,
+    "problem": "Owner transfer memory-only and selector authority not revalidated",
+    "evidence": "Source inspection: owner_id write absent DAL updater"
+  },
+  {
+    "id": "POMO-02",
+    "priority": "P1",
+    "file": "cogs/pomodoro.py",
+    "line": 420,
+    "end": 600,
+    "problem": "Persistence helper swallows error defeating acceptance rollback",
+    "evidence": "Actual DAL saver OperationalError returns normally"
+  },
+  {
+    "id": "ARC-12",
+    "priority": "P2",
+    "file": "cogs/pomodoro.py",
+    "line": 284,
+    "end": 335,
+    "problem": "Attendance is outside session serialization",
+    "evidence": "Source inspection"
+  },
+  {
+    "id": "ARC-12",
+    "priority": "P2",
+    "file": "cogs/pomodoro.py",
+    "line": 813,
+    "end": 850,
+    "problem": "Retirement/dashboard pause omit session lock",
+    "evidence": "Source inspection"
+  },
+  {
+    "id": "ARC-12",
+    "priority": "P2",
+    "file": "cogs/pomodoro.py",
+    "line": 1449,
+    "end": 1475,
+    "problem": "Gateway lifecycle mutates sessions outside session lock",
+    "evidence": "Source inspection"
+  },
+  {
+    "id": "GROUP-01",
+    "priority": "P1",
+    "file": "cogs/study_groups.py",
+    "line": 416,
+    "end": 505,
+    "problem": "Partial provisioning failures orphan role/text resources",
+    "evidence": "Voice creation Forbidden: text_id=0; role/text created; text delete=0; registry empty"
+  },
+  {
+    "id": "UI-01",
+    "priority": "P2",
+    "file": "cogs/tasklist.py",
+    "line": 78,
+    "end": 123,
+    "problem": "Task descriptions exceed embed character limits",
+    "evidence": "15 x 450-char tasks -> description7234,total7267"
+  },
+  {
+    "id": "UI-02",
+    "priority": "P2",
+    "file": "cogs/study_groups.py",
+    "line": 2863,
+    "end": 2884,
+    "problem": "List groups adds unbounded fields",
+    "evidence": "Source: one field per active group; guild has no total group cap"
+  },
+  {
+    "id": "AUTH-01",
+    "priority": "P1",
+    "file": "cogs/study_groups.py",
+    "line": 2384,
+    "end": 2415,
+    "problem": "Missing Manager cog skips category-setting authorization",
+    "evidence": "Source branch only denies inside if manager_cog"
+  },
+  {
+    "id": "AUTH-01",
+    "priority": "P1",
+    "file": "cogs/study_groups.py",
+    "line": 2683,
+    "end": 2759,
+    "problem": "Missing Manager cog skips purge authorization",
+    "evidence": "Source branch only denies inside if manager_cog"
+  },
+  {
+    "id": "AUTH-02",
+    "priority": "P1",
+    "file": "cogs/manager.py",
+    "line": 821,
+    "end": 900,
+    "problem": "Level3 can overwrite/remove stored Level4 through manager commands",
+    "evidence": "Source: caller level3 gate then add_manager3/remove_manager without target-tier check"
+  },
+  {
+    "id": "NOTIFY-01",
+    "priority": "P2",
+    "file": "cogs/manager.py",
+    "line": 653,
+    "end": 688,
+    "problem": "Developer alert assumes dict but DAL returns sqlite.Row",
+    "evidence": "Source: mgr.get raises AttributeError and catches; tests use dict mocks"
+  }
+]

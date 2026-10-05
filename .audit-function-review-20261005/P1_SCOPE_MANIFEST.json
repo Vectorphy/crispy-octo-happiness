@@ -1,0 +1,621 @@
+{
+  "baseline_limitation": "No byte-complete pre-P1 dirty snapshot exists. snapshot.json has pre-P1 raw file hashes only. HEAD diff includes preserved Antigravity changes and is NOT the audit scope. Inspect only enumerated functions/operations and directly relevant tests. Frozen whole-file snapshots preserve batch bytes for subsequent exact deltas.",
+  "validation": {
+    "full_pytest": 506,
+    "new_adverse_regressions": 22,
+    "mypy": "0 issues,45 files; read-only escalation for installed aiosignal ACL",
+    "ruff": "lint and format45 files pass",
+    "whitespace": "git diff --check pass",
+    "focused": "362 passed,6 failed of368 when release matrix ran before manager tests; manager file alone7passed; full default order506passed. Order-dependent patch/module identity needs audit/debugger review."
+  },
+  "files": [
+    {
+      "path": "bot.py",
+      "sha256": "4388b93f8bcc6c71939fecb28f98c6b58574e8d747baad1e5956cb8cc8c2f9e2",
+      "frozen_snapshot": "p1_implemented_snapshot/bot.py.snapshot",
+      "functions": [
+        {
+          "name": "CPO.on_ready",
+          "line": 55,
+          "end_line": 81,
+          "sha256": "66d9638db4c18b7bfefe830a4328ebfca93e1be21b618edfd9adce3483333a0e"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "database.py",
+      "sha256": "0307dca3c92e842cb0edfb57d934c1afcf2ce16e59f410bf968d7845c881bca9",
+      "frozen_snapshot": "p1_implemented_snapshot/database.py.snapshot",
+      "functions": [
+        {
+          "name": "DBHandler._remove_group_member_sync",
+          "line": 1380,
+          "end_line": 1414,
+          "sha256": "b11c6a508b34855c531914d3977714a9ac88b95549aebdef8b2dcc0529ef05b1"
+        },
+        {
+          "name": "DBHandler.remove_member_from_study_group_db",
+          "line": 1416,
+          "end_line": 1420,
+          "sha256": "047edf089e243d311a8da6d4e0bb5807943a4ea60bf2bf954d81f6c6b1e1df95"
+        },
+        {
+          "name": "DBHandler.transfer_checkin_owner",
+          "line": 1532,
+          "end_line": 1539,
+          "sha256": "0a23de52f2531c7eadcaf8f6d5818de7092470115184b0fd60cb2781ebafbcc2"
+        },
+        {
+          "name": "DBHandler.update_checkin_session",
+          "line": 1541,
+          "end_line": 1580,
+          "sha256": "29908fb4e9ea7b1f6100482e8220f73ac1b13670575e79bf325ca73c4a583e8f"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "cogs/study_groups.py",
+      "sha256": "4c333b4ea1871753e08eaaaff0b74d4326b38c445185dcb606f066ab8eb89648",
+      "frozen_snapshot": "p1_implemented_snapshot/cogs__study_groups.py.snapshot",
+      "functions": [
+        {
+          "name": "EndGroupVoteView._get_required_votes",
+          "line": 135,
+          "end_line": 139,
+          "sha256": "53028087bb339cc1c5971d4585eb38bceae3d5199b2e831609f6d8d261e18b4a"
+        },
+        {
+          "name": "VotekickView._get_required_votes",
+          "line": 226,
+          "end_line": 230,
+          "sha256": "e00abefadc241a796c71a11ca1573d2f07f3187539fceea9b726e8d77556b085"
+        },
+        {
+          "name": "VotekickView.vote_kick_button",
+          "line": 232,
+          "end_line": 273,
+          "sha256": "84e55e5b66aa23740ffe409ad2887ca68ee103b3939f3562007c87551897b60e"
+        },
+        {
+          "name": "StudyGroup.__init__",
+          "line": 348,
+          "end_line": 405,
+          "sha256": "a8241f4b787bbfc42c45da7819c672e7aa6fab5d0bfdba263d23f33b936c6d83"
+        },
+        {
+          "name": "StudyGroup.setup_group_resources",
+          "line": 413,
+          "end_line": 550,
+          "sha256": "726fb5b68acd435c2c3ac574fc6ed18a48dbf73628be594a06f9aeed57932991"
+        },
+        {
+          "name": "StudyGroup.rollback_provisioning",
+          "line": 552,
+          "end_line": 579,
+          "sha256": "253c5853d9c56174b6c284087026e416d224d4e4383ca33dab618d37af783d33"
+        },
+        {
+          "name": "StudyGroup.remove_member",
+          "line": 676,
+          "end_line": 746,
+          "sha256": "838fd9ce8395b3a5a465d6ece1de15db556d51436e95c037c45686cc0e139500"
+        },
+        {
+          "name": "StudyGroup.start_votekick",
+          "line": 1652,
+          "end_line": 1725,
+          "sha256": "5a75933bc225d8710c8930d2240464bdb51188afe056bfe67f39a91b0487ccd1"
+        },
+        {
+          "name": "StudyGroupCog.set_group_category",
+          "line": 2424,
+          "end_line": 2459,
+          "sha256": "cf6aea8b8ea0d11004463e74cf8ab93961dc1419c427351e0ddd167ade74acab"
+        },
+        {
+          "name": "StudyGroupCog.purge_groups",
+          "line": 2732,
+          "end_line": 2795,
+          "sha256": "9c7527517be36ed8e8733ccad3cc2f2bfc941c9af8a51c18fc3fb456a87a4c19"
+        },
+        {
+          "name": "StudyGroupCog.join_group",
+          "line": 2924,
+          "end_line": 2947,
+          "sha256": "a27eb695f866e956eebb5e0c1a2e76dc07e866c1d5de324b72b57ad6259daf26"
+        },
+        {
+          "name": "StudyGroupCog.votekick",
+          "line": 3138,
+          "end_line": 3183,
+          "sha256": "6193e991e87ae60fa1d0420bad61f1223055d90e8511b9f73c78aa8f40acc83d"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "cogs/checkin.py",
+      "sha256": "17a0f57bb9d959886c16347f09b064ede8903e482b2a0a68facb44b419c970af",
+      "frozen_snapshot": "p1_implemented_snapshot/cogs__checkin.py.snapshot",
+      "functions": [
+        {
+          "name": "CheckinSession.change_owner_callback",
+          "line": 1160,
+          "end_line": 1298,
+          "sha256": "618ef1b75e7d2c4d649160d90d477526ceb4cbe4d0cc5759aa2718d903be0ad2"
+        },
+        {
+          "name": "CheckinSession.change_owner_callback.new_owner_callback",
+          "line": 1219,
+          "end_line": 1274,
+          "sha256": "401989112c53c7acf9bea8728d37086382b63e0ab805941ccd6c8c6478d91b3b"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "cogs/pomodoro.py",
+      "sha256": "5885932007363dc1ebafb1041455f4d5c7a1dd333a87a60152a43db99f7cd9f6",
+      "frozen_snapshot": "p1_implemented_snapshot/cogs__pomodoro.py.snapshot",
+      "functions": [
+        {
+          "name": "PomodoroInvitationView.join",
+          "line": 351,
+          "end_line": 466,
+          "sha256": "e1d64b8303b8500fccc7c90253d88ff9d070ec7b8ee2641a8023a73d9d7f5582"
+        },
+        {
+          "name": "Pomodoro.remove_group_participant",
+          "line": 547,
+          "end_line": 554,
+          "sha256": "3257fec5e595d40883982e1fe602fc398053993f06fc5f33273af2a0f50071c7"
+        },
+        {
+          "name": "Pomodoro._persist_session",
+          "line": 584,
+          "end_line": 606,
+          "sha256": "34c01a7a678faf3313f32f9a74c2735ab50c56d916ce422d3d4e52cfbefb4827"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "cogs/manager.py",
+      "sha256": "235ce391537bbf8a30894c2907f8269b395321a5b4b1a9c9cc1d80a0233e0c32",
+      "frozen_snapshot": "p1_implemented_snapshot/cogs__manager.py.snapshot",
+      "functions": [
+        {
+          "name": "Manager.add_guild_manager",
+          "line": 819,
+          "end_line": 866,
+          "sha256": "cbe478f8e50531d64a78c74985253d4d7f0694a13e4badff6d9ca86542b60309"
+        },
+        {
+          "name": "Manager.remove_guild_manager",
+          "line": 868,
+          "end_line": 920,
+          "sha256": "b8c02a856af7ffbc0a3475d9cf0e8ad3c31181412fb5a7faa1b20c36f0fe35c1"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "cogs/_invitations.py",
+      "sha256": "22e3cb5cdae6bfdc281fcba7f13d86b343d5c94d850e32235b7dd706b033a7bf",
+      "frozen_snapshot": "p1_implemented_snapshot/cogs___invitations.py.snapshot",
+      "functions": [
+        {
+          "name": "eligible_recipient",
+          "line": 34,
+          "end_line": 120,
+          "sha256": "4a24a2f5c9240ea4b02a51736f3f4e590110102f52f8504a0502a568822f6442"
+        },
+        {
+          "name": "InvitationService.restore",
+          "line": 164,
+          "end_line": 230,
+          "sha256": "e220ea182b327f07df439234c880d4788276008126ce6d836f02d2f1aa995c74"
+        },
+        {
+          "name": "InvitationService.send",
+          "line": 325,
+          "end_line": 426,
+          "sha256": "59c4d1135ef6e4a4dab11148f090c5b9c87b5280dcff94074995fd9bc91b3734"
+        },
+        {
+          "name": "InvitationService.act",
+          "line": 447,
+          "end_line": 626,
+          "sha256": "872926b1bfe7838916df9403091d18d9cd2840795d0fcf5824a83580fde50116"
+        },
+        {
+          "name": "InvitationService.tick",
+          "line": 686,
+          "end_line": 721,
+          "sha256": "0fdd33cf17f93f5ea57f71b1144d232d919eb2c531445d44dbbc3c29260ccf60"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "cogs/_access_policy.py",
+      "sha256": "8f46b9d286be2fbac0f9685c6425535316b53c97a18a773b6223f6f9da1dfc3b",
+      "frozen_snapshot": "p1_implemented_snapshot/cogs___access_policy.py.snapshot",
+      "functions": [
+        {
+          "name": "AccessCommandTree._call",
+          "line": 75,
+          "end_line": 96,
+          "sha256": "58a14419f39d2fe2bfd885d3171bcaa155b6944da67729d5361048e2593eac0e"
+        },
+        {
+          "name": "AccessCommandTree.interaction_check",
+          "line": 98,
+          "end_line": 108,
+          "sha256": "7b94999fb948e071a3f7c15364e9526fac02fbb16ceb50f42a86c3a1a67ce7c7"
+        },
+        {
+          "name": "audit_control",
+          "line": 127,
+          "end_line": 132,
+          "sha256": "0da760029b096a6c451db33d7850b7fa8bd4b247bf8e308c29c048a1dc45aca1"
+        },
+        {
+          "name": "AccessView._scheduled_task",
+          "line": 140,
+          "end_line": 147,
+          "sha256": "9752d592aaaf3a5e6b0d5650ede37066c8a87c0a66f694ba9cfe67fe6b0ef45a"
+        },
+        {
+          "name": "AccessView.on_error",
+          "line": 149,
+          "end_line": 151,
+          "sha256": "a66f0a5a9a6d3b7c91581ae59d0a0b774a7a3c72a18ee1db80aee95117e13a8f"
+        },
+        {
+          "name": "AccessModal._scheduled_task",
+          "line": 155,
+          "end_line": 163,
+          "sha256": "108dd193a13c37578dfd33b93e82b3197bfb39b60242a57c3a01bab1a47ee434"
+        },
+        {
+          "name": "AccessModal.on_error",
+          "line": 165,
+          "end_line": 167,
+          "sha256": "38dc0d08d30cae5090b83a866ba7fb794b969ef3f3638dbd5c41fcce0dcf9c55"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "cogs/_audit.py",
+      "sha256": "c8e6a525bcc121ceeb41bb49d7d85b2600637542877e7ec5aa0478af034dd2fe",
+      "frozen_snapshot": "p1_implemented_snapshot/cogs___audit.py.snapshot",
+      "functions": [
+        {
+          "name": "audit_dispatch",
+          "line": 13,
+          "end_line": 18,
+          "sha256": "f7873498b9e565364c1c93f5e9cccf777bdd04da32d513343f89030a55d45eca"
+        },
+        {
+          "name": "AuditedView._scheduled_task",
+          "line": 22,
+          "end_line": 25,
+          "sha256": "e9ee99a818c49838b46e3a100de104b591366915f5936845e5698678604c47cd"
+        },
+        {
+          "name": "AuditedModal._scheduled_task",
+          "line": 29,
+          "end_line": 33,
+          "sha256": "26872043e870633cc61bbb753361c38d9971be8f281cbbf3159304fd5afe0d42"
+        },
+        {
+          "name": "AuditedModal.on_error",
+          "line": 35,
+          "end_line": 37,
+          "sha256": "95784e05dc76245cfd5991487e93e8e3906f866638475dbbe1484d81e34df499"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "cogs/_setup_view.py",
+      "sha256": "11855872c793dc8e14c2da403989576e96a64b74e0a03b8aed27c8445ca23912",
+      "frozen_snapshot": "p1_implemented_snapshot/cogs___setup_view.py.snapshot",
+      "functions": [
+        {
+          "name": "SetupView.on_error",
+          "line": 1282,
+          "end_line": 1299,
+          "sha256": "d5b761eccdb14f22e9075029680a5f5d2b547b97b64d6cf15d0c8c2ba9c7c99a"
+        }
+      ],
+      "other_operations": [
+        "NewCategoryModal/NewDefaultRoleModal/DurationModal inherit AuditedModal; SetupView inherits AuditedView; audit import"
+      ]
+    },
+    {
+      "path": "tests/test_group_controls.py",
+      "sha256": "5b5573f325b2334fc23c473e2f4767a09d55fdf34a4d5ae29475237f19958994",
+      "frozen_snapshot": "p1_implemented_snapshot/tests__test_group_controls.py.snapshot",
+      "functions": [
+        {
+          "name": "environment",
+          "line": 66,
+          "end_line": 109,
+          "sha256": "398c2ba343e09c842a6c98bff196e25d20c4f5de9088ca4f05f5120c888f4049"
+        },
+        {
+          "name": "test_votekick_owner_succeeds_and_transfers_ownership",
+          "line": 438,
+          "end_line": 465,
+          "sha256": "cba87c5c6cb1c5a324de43808ebf7041923c74601cf8f66777152483bd446131"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "tests/test_session_controls.py",
+      "sha256": "0cf3fdee78e4db78110e1a680c294e0168a00e093e9d93dc3f6f0ebfdad44836",
+      "frozen_snapshot": "p1_implemented_snapshot/tests__test_session_controls.py.snapshot",
+      "functions": [
+        {
+          "name": "test_checkin_duration_bounds",
+          "line": 25,
+          "end_line": 47,
+          "sha256": "a92ea2e396b633b673f30726ae94b6b9a5e752ad56c99cbe51da3061219049e8"
+        },
+        {
+          "name": "test_checkin_mentions_invite_without_admitting_recipients",
+          "line": 74,
+          "end_line": 125,
+          "sha256": "f675c3526f8ddd4eb65ac4fd990e301536b580dec980fc2fe3ed5b87fbec0799"
+        },
+        {
+          "name": "test_pomodoro_invites_group_members_without_auto_join",
+          "line": 128,
+          "end_line": 188,
+          "sha256": "159d9a385c48c08bc993a9df5df99660fcba6635ed2f4cf81897a2f777afb1a6"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "tests/test_release_fixes.py",
+      "sha256": "ed2e55c85d8895b7d13f757f7050e66eb24faf9aebdb8240cd3435c1af4e1f9d",
+      "frozen_snapshot": "p1_implemented_snapshot/tests__test_release_fixes.py.snapshot",
+      "functions": [
+        {
+          "name": "group_fixture",
+          "line": 30,
+          "end_line": 50,
+          "sha256": "8dd9f84be0364f5328ecf6c22b780a788edb8c8bb954f47bc1b27abcf1933eb9"
+        },
+        {
+          "name": "test_failed_invitation_admission_leaves_roster_unchanged",
+          "line": 494,
+          "end_line": 516,
+          "sha256": "52bd5bc7d99fb7ad4b85394aebb0eec1611f76ab0687efdb3111a246ffee22f1"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "tests/test_setup_recovery_journal.py",
+      "sha256": "09ee4cff423f3838b8e2b4b51b9d8a2ffc03e506ba268eecf8fa5c66becdceaf",
+      "frozen_snapshot": "p1_implemented_snapshot/tests__test_setup_recovery_journal.py.snapshot",
+      "functions": [
+        {
+          "name": "test_new_group_uses_saved_guild_default_after_restart_and_explicit_override",
+          "line": 233,
+          "end_line": 274,
+          "sha256": "9ebf810bde52779db4ab6f3c127f549a2d4bf2e6ad8f6db9464624a7f9f2e9c3"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "test_file.py",
+      "sha256": "8f7239188d20a563b31772fa081e6b43e7e348ef16fcac68f20f997929413f84",
+      "frozen_snapshot": "p1_implemented_snapshot/test_file.py.snapshot",
+      "functions": [
+        {
+          "name": "_run_command_matrix.test_sg_join_group_new_member",
+          "line": 789,
+          "end_line": 799,
+          "sha256": "069c260f7bbf1d2463de25c3cb199718cc6e7476be104f80b5101d42b1cf123a"
+        },
+        {
+          "name": "_run_command_matrix.test_sg_join_group_non_existent",
+          "line": 806,
+          "end_line": 810,
+          "sha256": "a02bc05741a91f21cbbed57d6e8247e039a7371a74ea8789a1006ab4922ef731"
+        },
+        {
+          "name": "_run_command_matrix.test_sg_dashboard_callbacks",
+          "line": 904,
+          "end_line": 936,
+          "sha256": "9c077f39ff5ae928ed286cdecd5f22f30caef5b110de0e2dac5c96ddc3be78ed"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "tests/invitation_store.py",
+      "sha256": "431185af4c9dc8b7ab6836f94e7dfe484a2d7498efaf512d5f85eb93c066507e",
+      "frozen_snapshot": "p1_implemented_snapshot/tests__invitation_store.py.snapshot",
+      "functions": [
+        {
+          "name": "configure_invitations",
+          "line": 6,
+          "end_line": 45,
+          "sha256": "c3bf2b41baa6dcc4fdca205a88c87e67c089ee81b54e8399ffdd2d32e88afcc5"
+        },
+        {
+          "name": "configure_invitations.create",
+          "line": 9,
+          "end_line": 26,
+          "sha256": "3de71119c21059a65823edda8e249d6d6e1b07b0052f7421f1f713b75a00bbe5"
+        },
+        {
+          "name": "configure_invitations.get",
+          "line": 28,
+          "end_line": 30,
+          "sha256": "4a9b46b6c77576a9db2f33c871a1da77b378679d46b6a6751b19b9159ffe2bde"
+        },
+        {
+          "name": "configure_invitations.transition",
+          "line": 32,
+          "end_line": 39,
+          "sha256": "65030eaab18d44fc3464758e3450ce2c70a1d31a96aba56157a458c4d7db0d97"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    },
+    {
+      "path": "tests/test_p1_audit_regressions.py",
+      "sha256": "1f7588e23a1b7daeecc167a6859c263970ca7b7c901cd8d30ceaf8e8e8ed5172",
+      "frozen_snapshot": "p1_implemented_snapshot/tests__test_p1_audit_regressions.py.snapshot",
+      "functions": [
+        {
+          "name": "persisted_group",
+          "line": 19,
+          "end_line": 55,
+          "sha256": "969bac7f14d11ce58aa76bfe8b5473113a85ceba1083ad2b11cb89b297b1612b"
+        },
+        {
+          "name": "test_departed_votes_never_count_against_current_roster",
+          "line": 58,
+          "end_line": 72,
+          "sha256": "7318b1a87402e224839f6a5195e09d068cff15df20f0528de6a9fa7b58f16901"
+        },
+        {
+          "name": "test_staff_promotion_after_vote_start_prevents_removal",
+          "line": 75,
+          "end_line": 83,
+          "sha256": "35b2006493f84e101a847390e5d745dbf574e56c4529d27078ca01f8591d36ca"
+        },
+        {
+          "name": "test_sqlite_removal_failure_preserves_owner_roster_and_role",
+          "line": 86,
+          "end_line": 104,
+          "sha256": "a1850135b58a67f9553dfeefac090accb41b2a5ffdcacdabcc07d8306b5eefbb"
+        },
+        {
+          "name": "test_owner_removal_commits_runtime_and_roster_together",
+          "line": 107,
+          "end_line": 118,
+          "sha256": "d0be8de826da4f48bb389e58fa49b7e97e42944b7382d9ef98b133480530e8f4"
+        },
+        {
+          "name": "test_foreign_guild_fallback_and_uninvited_named_join_are_denied",
+          "line": 121,
+          "end_line": 136,
+          "sha256": "1e01b192b647fff1ef715fac5305307cc96ea14429b293efd0ba630e80cb637b"
+        },
+        {
+          "name": "test_role_settings_failure_denies_invitation_recipient",
+          "line": 139,
+          "end_line": 143,
+          "sha256": "7cba0a37b5e76d5e074cb9d5921e42eae80d84c06aa35d1d21de20a3685c82d5"
+        },
+        {
+          "name": "test_two_services_cannot_reclaim_an_inflight_invitation",
+          "line": 146,
+          "end_line": 167,
+          "sha256": "ba0387900491ed2f65b7649c7cf140657d8d2dd91f229dc4da75994892e86280"
+        },
+        {
+          "name": "test_two_services_cannot_reclaim_an_inflight_invitation.join",
+          "line": 154,
+          "end_line": 156,
+          "sha256": "d3b4e54e30902f8af11ccba0c3d910e9b9b88a4d017080464828b815ef1d80ff"
+        },
+        {
+          "name": "test_false_cas_and_missing_row_never_invoke_admission",
+          "line": 170,
+          "end_line": 182,
+          "sha256": "1fe8dc366cfdd3e61657a1d32a6d77f39f83ac067e72a3b3879524f2bb8d4147"
+        },
+        {
+          "name": "test_restart_restores_custom_ids_and_original_deadlines",
+          "line": 185,
+          "end_line": 203,
+          "sha256": "28691286c81efcdad5c5adf89271c2a15a73124730e5474b69f095572a1fd27d"
+        },
+        {
+          "name": "test_partial_provisioning_failure_deletes_uncached_resources",
+          "line": 206,
+          "end_line": 216,
+          "sha256": "eae704fac6d4cc8a81a753da03affd4869c4b8b3b424bd6dda2c558919d03e33"
+        },
+        {
+          "name": "test_missing_manager_fails_closed",
+          "line": 219,
+          "end_line": 232,
+          "sha256": "44da7d030e3728d55856c8c442448bcf7d30a5b168eefcd87056258e127d1e8f"
+        },
+        {
+          "name": "test_level_three_cannot_demote_level_four",
+          "line": 235,
+          "end_line": 242,
+          "sha256": "b2c1a5c72453794529c85be48355aef877226694ad9dab919a88d4103a3c726e"
+        },
+        {
+          "name": "test_general_command_and_control_dispatch_record_identity_only",
+          "line": 245,
+          "end_line": 270,
+          "sha256": "5ec6137bcd3190937acb313f56f6997022c5915e2b4fbe4928dd0c9f715c1f1a"
+        },
+        {
+          "name": "test_actual_runtime_storage_failure_rolls_back_invited_participant",
+          "line": 273,
+          "end_line": 291,
+          "sha256": "81d67d6426fc7b094886b50f9c98766e7dd2c63b261a412a7c37a0e688e9b3df"
+        },
+        {
+          "name": "test_checkin_owner_selection_revalidates_and_commits_before_memory",
+          "line": 294,
+          "end_line": 333,
+          "sha256": "a2feb8033406cfc7b4ac51495d1834cffaee92f0cfffb1b137c7170bb854325c"
+        }
+      ],
+      "other_operations": [
+        "Imports/formatter only outside listed functions"
+      ]
+    }
+  ]
+}

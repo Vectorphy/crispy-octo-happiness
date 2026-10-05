@@ -62,9 +62,9 @@ The additive `checkin_guild_settings` table (`guild_id INTEGER PRIMARY KEY`, `st
 
 ### Durable invitations and command audit
 
-The additive `session_invitations` and `command_audit_events` tables provide durable invitation tracking and immutable audit trails. Invitations store a stable invitation ID, guild and target session identity/type, recipient and owner IDs, DM channel/message IDs, creation/warning/expiry timestamps, lifecycle status, and notification flags. Invitations warn at 360 seconds and expire at 600 seconds; late interactions recheck the absolute expiry and current target authority. Startup restores pending invitations and their notification deadlines. Acceptance, decline, expiry, and cancellation stop further invitation notifications.
+The additive `session_invitations` and `command_audit_events` tables provide durable invitation tracking and immutable audit trails. Invitations store a stable invitation ID, guild and target session identity/type, recipient and owner IDs, DM channel/message IDs, creation/warning/expiry timestamps, lifecycle status, and notification flags. Invitations are stored with 360-second warning and 600-second expiry deadlines; interactions attempt to recheck expiry and target state. The DAL can read pending rows, but startup restoration is not wired (`INV-03`). Acceptance/decline use lifecycle transitions, with failed-transition fallback correctness still open (`INV-02`).
 
-Audit records store guild identity, actor ID, current permission tier, target identity, action, outcome, and timestamp. They record invitations, joins, rejected authorization, and command actions without storing credentials or message contents. IDs establish identity; usernames only label displays. Guild/resource provenance, current permission tier, ownership, membership, and active lifecycle state are checked before mutations. Audit retrieval remains guild-scoped, including for the configured Supreme Commander.
+Audit rows store guild identity, actor ID, permission tier, target identity, action, outcome, and timestamp. The audited runtime records invitation actions through `audit_action`, but general command/control call-site coverage is incomplete (`AUD-01`). IDs establish identity; usernames only label displays. Guild/resource provenance, current permission tier, ownership, membership, and active lifecycle checks are handler-specific and have open exceptions recorded in the audit report.
 
 ### Optional default role
 
@@ -99,11 +99,11 @@ C4Context
 
     System_Boundary(cpo_boundary, "Chief Productivity Officer (CPO) System") {
         Container(gateway_router, "Bot Runtime & Router", "Python / discord.py", "Maintains gateway connection, handles event loops, dynamically loads cogs, routes interactions.")
-        
+
         Container(cog_layer, "Cogs / Extensions Layer", "discord.ext.commands.Cog", "Checkin, Study Groups, Pomodoro, TaskList, ProductivityTracker, Manager, VoiceChannels.")
-        
+
         Container(domain_services, "Utils & Domain Logic", "Python", "Parameter validation, regex duration parsers, mention resolution, efficiency calculation.")
-        
+
         ContainerDb(sqlite_db, "Persistence Engine", "SQLite 3 / asyncio.to_thread / asyncio.Lock()", "Stores study groups, members, standups, managers, guild settings, and user tasks off the main event loop.")
     }
 
@@ -268,7 +268,7 @@ stateDiagram-v2
     state ActiveMonitoring {
         [*] --> IntervalCountdown
         IntervalCountdown --> BroadcastPrompt: Interval elapsed
-        
+
         state BroadcastPrompt {
             [*] --> AwaitingResponse: Send Embed with Action Buttons
             AwaitingResponse --> PresentAction: User clicks [Present]
@@ -281,7 +281,7 @@ stateDiagram-v2
         BreakAction --> IntervalCountdown: Set status to Break
         ExitAction --> RemovedFromSession: Clean up user from session
         TimeoutAction --> IncrementStrike: Absences += 1
-        
+
         state IncrementStrike {
             [*] --> StrikeEvaluation
             StrikeEvaluation --> IntervalCountdown: Absences < max_absences
@@ -300,25 +300,20 @@ stateDiagram-v2
 
 ## 5. Security & Authorization Architecture
 
-The authorization model implements a 5-tier Role-Based Access Control (RBAC) hierarchy defined in `cogs/manager.py`:
+`Manager.get_permission_level(guild_id, user_id, member)` in [`cogs/manager.py`](cogs/manager.py) computes the highest applicable tier in the requested guild. Tier 5 comes only from the configured `BOT_DEVELOPER_ID`; persisted command grants are limited to Tier 4 and scoped to a matching guild. Guild owners and native administrators/manage-guild members are Tier 3; contextual group/session ownership and membership are Tier 2 and Tier 1. Regular users are Tier 0. A Supreme Commander’s non-task operations still use the current guild context.
 
 ```mermaid
 graph TD
-    subgraph Hierarchy ["🔐 Authorization Hierarchy (PermissionLevel)"]
-        DEV["Level 4: BOT_DEVELOPER<br/>• Configured in .env BOT_DEVELOPER_ID or DB<br/>• Global superuser: manage bot devs, guild managers, system-wide overrides"]
-        GM["Level 3: GUILD_MANAGER<br/>• Server administrators & designated moderators<br/>• Server scope: configure guild settings, manage all study groups"]
-        GO["Level 2: GROUP_OWNER<br/>• Current owner of the contextual study group or check-in<br/>• Session scope: end group, invite members, toggle VC settings"]
-        GMEM["Level 1: GROUP_MEMBER<br/>• Verified participant in an active study group or checkin<br/>• Participant scope: join group VC, access group text channel, interact with buttons"]
-        REG["Level 0: SERVER_MEMBER<br/>• Standard server member<br/>• Baseline scope: manage personal tasks, create new groups (subject to caps)"]
-    end
-
-    DEV -->|Has all permissions of| GM
-    GM -->|Has all permissions of| GO
-    GO -->|Has all permissions of| GMEM
-    GMEM -->|Requires baseline| REG
+  L5["5 · Supreme Commander<br/>BOT_DEVELOPER_ID only"] --> L4["4 · Bot Developer<br/>explicit guild grant"]
+  L4 --> L3["3 · Guild Manager<br/>native authority / synced grant"]
+  L3 --> L2["2 · Group or session owner"]
+  L2 --> L1["1 · Current group or session member"]
+  L1 --> L0["0 · Regular server member"]
+  Tree["AccessCommandTree + AccessView/AccessModal"] --> Role["Current guild membership + optional default-role check"]
+  Role --> Tier["Manager.get_permission_level for command-specific authority"]
 ```
 
----
+Guild interactions first pass the command-tree or contextual UI access gate in [`cogs/_access_policy.py`](cogs/_access_policy.py). The optional default role is checked for guild commands and UI controls, including staff; Setup has a narrow current-staff exemption. Command handlers then apply their domain-specific permission, ownership, membership, and lifecycle checks. Personal task use in DMs has no guild context.
 
 ## 6. Concurrency & Persistence Isolation Model
 
@@ -390,43 +385,96 @@ graph TD
     Levels -->|DEBUG / INFO / WARNING / ERROR / CRITICAL| Console
     Levels -->|Unhandled AppCommand Errors| AppTreeError
     Levels -->|Voice Channel Creation Events| AuditTrail
----
-
-## 8. Authorization Tiers & Slash Command Visibility Architecture
-
-The bot evaluates five levels at runtime. Level 3 includes native administrators/moderators and explicit Managers. Group ownership (2) and membership (1) are contextual; Level 4 overrides every lower level. Registered staff commands omit Discord's default permission restriction so an explicit Manager without native administrator permissions can reach the handler. Unauthorized invocations receive private denials.
-
-```mermaid
-graph TD
-    Picker["Registered slash commands"] --> Handler["Runtime authorization guard"]
-    Handler -->|Authorized| Execute["Scoped command operation"]
-    Handler -->|Unauthorized| Deny["Private denial"]
-    Hidden["Standalone resource maintenance callbacks"] --> Lifecycle["Internal group lifecycle only"]
 ```
 
 ---
 
-## 9. Directory & Module Reference
+## 8. Authorization Tiers & Slash Command Visibility Architecture
 
-| Component | Path | Responsibility |
+All registered guild slash commands pass through `AccessCommandTree.interaction_check`; the handler then applies feature-specific limits and authority. The shared `AccessView` and `AccessModal` dispatch wrappers apply the same current-guild access check to component and modal callbacks. Context is derived from the view, its group, study_group, or session object. Denials are private. Slash registration is global in `setup_hook`; `on_ready` clears guild-specific command registrations.
+
+Standalone maintenance callbacks defined in `cogs/voice_channels.py` are loaded as cog methods but are excluded from public command-tree exposure; their residual lifecycle reach is lower than the registered commands.
+
+```mermaid
+flowchart LR
+  D[Discord interaction] --> T[Global app-command tree]
+  T --> A{current guild + configured role?}
+  A -->|no| X[private denial]
+  A -->|yes| H[feature handler]
+  H --> P{feature authority, owner/member and active state}
+  P -->|no| X
+  P -->|yes| R[scoped operation]
+  V[Component or modal] --> A
+```
+
+## 9. As-Built Runtime, Function & State Map
+
+**Evidence label:** this map describes the inspected source at `antigravity-fix`, Git HEAD `f9a39815354fe3f60208513f867b1502b42fb193`. Function-level review covered 1,008/1,008 function bodies, 50/50 lambdas, and 83/83 executable module statements across 49 first-party executable files. SHA-256 fingerprints for the reviewed files are recorded in [the audit snapshot](.audit-function-review-20261005/snapshot.json); audit findings are in [findings.json](.audit-function-review-20261005/findings.json). The source files matched those fingerprints when mapping began. During mapping, active coder edits caused current-source drift in `cogs/study_groups.py` and `database.py`; this text intentionally maps the audited pre-fix snapshot and must be reconciled after coding/debugger completion. Open-finding references below describe that audited snapshot, not an assertion that intermediate dirty code still has the same behavior. The audit is source review, not dynamic coverage or live Discord validation.
+
+### 9.1 Runtime flow and verified call edges
+
+```mermaid
+flowchart TD
+  U[Discord command, button, modal or gateway event] --> B[bot.py · CPO]
+  B -->|setup_hook: connect DB, discover non-underscore cog files, load, sync| C[Cogs / extension setup]
+  B -->|on_ready| REC[Pomodoro restore + pending cleanup sweep + guild-command cleanup]
+  B -->|close → super.close| UNLOAD[Cog unload hooks drain owned tasks] --> DB[DBHandler.close]
+  C --> ACCESS[_access_policy: guild and default-role guard]
+  ACCESS --> DOMAIN[Handler, view callback or listener]
+  DOMAIN --> SERVICE[Shared access, invite, setup, staff, controls, voice services]
+  DOMAIN --> DAL[database.py async DAL]
+  SERVICE --> DAL
+  DAL -->|asyncio.Lock + cancellation-drained asyncio.to_thread| SQL[(SQLite)]
+  DOMAIN --> REST[Discord REST / gateway state]
+  REC --> DOMAIN
+```
+
+Verified lifecycle edges: `CPO.setup_hook` opens the DAL, loads each non-underscore `cogs/*.py` extension, and globally syncs the command tree. `CPO.on_ready` restores Pomodoro runtime, retries pending Discord resource cleanup, and clears guild-specific command registrations. Cog listeners independently restore Check-in sessions and reconcile Manager grants, log privacy, setup journals, and staff-role access. `CPO.close` shields `super().close()` and closes the DAL in `finally`; cog unload hooks cancel and drain owned loops/tasks. `main.py` is a compatibility launcher importing the `bot.py` singleton.
+
+The persistent-invitation runtime edge is send → current recipient/session checks → row create → DM → message binding → `register` → per-invitation monitor → warning/expiry/action transition → feature callback. The DAL exposes pending-invitation reads, but the audited runtime has no startup restoration caller (`INV-03`). Failed transition/create fallback can still run the acceptance callback (`INV-02`); therefore this diagram records only the intended/observed path, not a guarantee of durable lifecycle correctness. `audit_action` exists and is used by invitation paths; general command/control coverage is incomplete (`AUD-01`).
+
+### 9.2 Module and function responsibility map
+
+| Module | Main function/class roles and important edges | Runtime state owner / boundary |
 |---|---|---|
-| **Core Entry Point** | [`bot.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/bot.py) | Bot lifecycle, cog discovery, tree synchronization, error listeners. |
-| **Data Access Layer** | [`database.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/database.py) | SQLite schema creation, CRUD methods, `asyncio.to_thread` worker thread execution, and `asyncio.Lock` serialization. |
-| **Domain Utilities** | [`utils.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/utils.py) | Parsing, input validation, permission predicates, `ProductivityService`. |
-| **Check-in Standups** | [`cogs/checkin.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/checkin.py) | Time-boxed standup loops, status tracking buttons, strike counters. |
-| **Study Groups** | [`cogs/study_groups.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/study_groups.py) | Channel and role provisioning, group dashboards, member limits. |
-| **Pomodoro Timers** | [`cogs/pomodoro.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/pomodoro.py) | Focus/Break timer state machine and automatic VC movement. |
-| **Role & Permission Manager** | [`cogs/manager.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/manager.py) | 5-tier authorization levels and session cap enforcement decorators. |
-| **Personal Task List** | [`cogs/tasklist.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/tasklist.py) | Personal to-do list persistence and display. |
-| **Productivity Tracker** | [`cogs/productivity_tracker.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/productivity_tracker.py) | Metric aggregation and embed presentation with measured focus time. |
-| **Voice Channels** | [`cogs/voice_channels.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/voice_channels.py) | Dedicated VC provisioning and cleanup. |
-| **Voice Relocation** | [`cogs/_voice_relocation.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/_voice_relocation.py) | Non-compliant video relocation to default VC with permission and capacity guards. |
-| **Setup Wizard** | [`cogs/_setup_view.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/_setup_view.py) | Interactive `/setup` UI staging category, channels, default VC, and resource recovery. |
-| **Staff Roles** | [`cogs/_staff_roles.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/_staff_roles.py) | Staff role provisioning, hierarchy validation, and channel permission merging. |
-| **Session Controls** | [`cogs/_session_controls.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/_session_controls.py) | Shared UI controls for join/decline invitations and owner ending approvals. |
-| **Help System** | [`cogs/help.py`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/cogs/help.py) | Dynamic level-aware `/help` filtering elevated staff docs from member view. |
-| **Knowledge Graph** | [`KNOWLEDGE_GRAPH.md`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/KNOWLEDGE_GRAPH.md) | Architectural and semantic entity relationship graph. |
-| **Machine Graph** | [`knowledge_graph.json`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/knowledge_graph.json) | Machine-readable ontology for LLM indexing. |
-| **Agent Playbook** | [`AGENTS.md`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/AGENTS.md) | Developer and autonomous agent operating manual. |
-| **Changelog** | [`CHANGELOG.md`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/CHANGELOG.md) | Semantic versioning change ledger. |
-| **Logging Standards** | [`docs/LOGGING_STANDARDS.md`](file:///c:/Users/Vector/OneDrive/Desktop/CR/CPO/docs/LOGGING_STANDARDS.md) | Structured logging and observability specification. |
+| [`bot.py`](bot.py), [`main.py`](main.py) | `CPO.setup_hook` loads extensions; `on_ready` recovery/sync; `close` / `_close_resources` shutdown; global command error handlers; `main.py` reuses `cpo`. | Bot owns DB client and command tree; no feature-session authority. |
+| [`cogs/_access_policy.py`](cogs/_access_policy.py) | `require_guild_access` → `_require_guild_access`; `AccessCommandTree.interaction_check`; `AccessView` / `AccessModal` scheduled dispatch; `deny_access`. | Rechecks current guild membership and optional selected role; Setup exemption still requires Level 3. |
+| [`cogs/manager.py`](cogs/manager.py) | `get_permission_level` resolves tiers; decorators gate participation/session limits; `setup` opens/resumes wizard; `on_ready` and authority listeners sync grants/privacy/access; manager commands mutate guild grants. | `guild_operation_locks(bot)` and `_setup_views`; grants are read using `(user_id, guild_id, grant_source)`. |
+| [`cogs/_setup_view.py`](cogs/_setup_view.py) | Selects/modals stage settings; `prepare_journal` / intent/result writes; `_save_locked` provisions resources and commits settings; `from_journal` / recovery restore. Called from Manager Setup/resume. | One wizard and journal per guild; uses shared guild lock; journal tracks setup ownership, mutations and rollback data. |
+| [`cogs/_staff_roles.py`](cogs/_staff_roles.py) | `Manager.sync_guild_managers` persists native grants through the DAL; `sync_staff_roles`, `sync_log_privacy`, and overwrite helpers provision/reconcile roles and channel ACLs. | Staff lock per guild; native staff grants and role/channel visibility remain guild-scoped. |
+| [`cogs/study_groups.py`](cogs/study_groups.py) | `StudyGroup.setup_group_resources`, `add_member`, `remove_member`, `transfer_ownership`, dashboard callbacks, vote views, voice/video listeners, `end_group` → `_end_group`; `StudyGroupCog.create_group` → `_create_group_locked`, hydrate/resolution, cleanup retry. | `active_study_groups` owns live `StudyGroup`s; each group owns roster, resource IDs, end/membership locks and video tasks. Creation/config/setup use per-guild locks. |
+| [`cogs/checkin.py`](cogs/checkin.py) | `CheckinCog.start_checkin` → `_start_checkin_locked`; `CheckinSession` resource/embed/reminder cycle; status/join/leave/owner/end callbacks; settings validate, persist then commit memory. | `active_sessions`, per-guild `guild_settings`, reminder-task registry; session rows own saved owner/times and member rows own status/absence. `join_lock` serializes roster/status paths. |
+| [`cogs/pomodoro.py`](cogs/pomodoro.py) | `calculate_pomodoro_ratio`; start/edit/pause/resume/end handlers; `run_timer`; attendance and invitation views; `_persist_session`, recovery/restore and productivity accounting. | `Pomodoro.sessions` owns live sessions; `session.lock`, `_start_locks`, `_runtime_lock`, `_recovery_lock` cover selected paths only. Attendance, dashboard pause, gateway and retire paths remain gaps (`ARC-12`). |
+| [`cogs/_invitations.py`](cogs/_invitations.py) | `eligible_recipient`; `InvitationService.send/register/act`; `monitor` → `tick` → `reconcile` / `notification` / `finish`; feature-specific callbacks perform admission. | Service holds view/task/action registries and per-invitation locks; DB holds invitation lifecycle/deadlines/message IDs. Startup restore is not wired; CAS/fallback gaps remain (`INV-01..03`). |
+| [`cogs/_session_controls.py`](cogs/_session_controls.py) | `request_session_end` sends owner a DM; `EndRequestView.approve/decline` serializes decision and calls feature-provided end callback after activity/owner checks. | View owns one pending approval and decision lock; feature session remains authoritative. |
+| [`cogs/_audit.py`](cogs/_audit.py) | `audit_action` records guild/actor/action/outcome/target via DAL and optionally logs to the group cog’s configured Discord channel. | Audit rows are guild-scoped. Call-site coverage remains incomplete (`AUD-01`). |
+| [`cogs/_voice_relocation.py`](cogs/_voice_relocation.py) | `relocate_to_default_vc` checks configured destination/capacity and attempts member move; called from group video enforcement. | Destination ID is per guild; source/session identity is passed explicitly. |
+| [`cogs/tasklist.py`](cogs/tasklist.py) | `add_task`, completion/action menus, `list_tasks`, `delete_task`, `purge_tasks`; channel context resolves group via DAL; menus pass task row IDs and owner to `apply_task_action`. | Task ownership is user ID; optional guild/group provenance separates personal, server and group tasks. UI size limits remain open (`UI-01`). |
+| [`cogs/productivity_tracker.py`](cogs/productivity_tracker.py) | `/productivity` asks `ProductivityService` for aggregates and renders the result. | Reads user focus-time provenance, optionally filtered to current guild. |
+| [`cogs/voice_channels.py`](cogs/voice_channels.py) | Legacy standalone VC/role/text creation and deletion handlers. | Discord resources plus `voice_channel_logs`; methods are not exposed as public slash commands in current tree. |
+| [`cogs/help.py`](cogs/help.py) | `/help` renders command guidance based on current permission level. | No persistent state. |
+| [`utils.py`](utils.py) | Shared `guild_operation_locks`, cancellation-safe `complete_operation`, response/ack helpers, visibility policy, parsing/validation, permission predicates/context group lookup, `ProductivityService`, developer-ID validation. | Lock registry is bot-scoped/per guild; helpers use caller-supplied interaction and guild provenance. |
+| [`database.py`](database.py) | `DBHandler.connect/create_tables/close`, `_run_in_thread` and synchronous SQLite workers; DAL methods for setup/settings, groups/rosters, check-ins, Pomodoro runtime/focus, invitations/audit, cleanup, manager grants, tasks, and voice logs. | One DAL asyncio lock serializes SQLite access; worker completion is drained before cancellation can release the lock. See [`database_architecture.md`](database_architecture.md) for schema/transaction detail. |
+
+### 9.3 Feature call paths and state ownership
+
+| Flow | Call path (source symbols) | Authority and scope | Durable / transient owner |
+|---|---|---|---|
+| Group provision/admission | `StudyGroupCog.create_group` → `_create_group_locked` → `StudyGroup.setup_group_resources`; invite `send_invite` → `InvitationService.send` → `StudyGroup.add_member` → group DAL. | Current guild and group identity; invitee current membership/default-role checked; ownership/manager or invitation controls entry. `join_group` currently has open invite-only bypass `SEC-10`. | DAL `study_groups`/members plus Discord resource IDs; `active_study_groups` runtime copy. Partial create rollback gap `GROUP-01`; vote transfer/removal gaps `VOTE-01..05`. |
+| Check-in | `/checkin` → `_start_checkin_locked` → persist/register → reminder task → callbacks → member/session DAL; startup hydrates rows in `cog_load`/`on_ready`. | Guild policy, selected role, current member; owner/manager and roster context checked per action. Owner change lacks durable write/revalidation (`CHECK-01`). | `checkin_sessions` owns session/owner/timing; member table owns status/absence; settings table plus `guild_settings` memory cache. |
+| Pomodoro | `/start_pomodoro` → `_resolve_group` → session create/invite → `run_timer`; lock-selected pause/edit/resume/end; timer snapshots and focus upserts; `on_ready` hydrates runtime. | Group/channel guild provenance and owner/manager gate; participant consent + Present + (voice mode) session-VC presence for focus credit. Recovery and API paths listed above. | `pomodoro_runtime` serialized session state; `productivity_focus_time` cumulative attended-focus seconds; session object and timer task in memory. Persistence swallowing and resume guidance are open (`POMO-01/02`). |
+| Setup/configuration | `/setup` → `SetupView.prepare_journal` → resource intent/create/result → `_save_locked` → settings+committed journal transaction → staff reconciliation; recovery reconstructs view from journal. | Current guild Level 3+ for Setup/recovery; guild lock and current ownership/ACL checks. | `setup_recovery_journals` durable operation record; `guild_settings` committed values; ephemeral draft view while process lives. |
+| Task actions | command resolves current group by channel and requests scoped DAL query/action; menus carry exact task row IDs. | Actor ID plus personal/guild/group scope; personal DM scope remains available. | `tasks` rows; no task-session runtime cache. |
+| Shutdown/recovery | Cog load/ready restores Check-in and Pomodoro state; `bot.on_ready` retries cleanup; unload stops loops/services and flushes Pomodoro; `CPO.close` closes DB last. | Each persisted resource is revalidated against guild and current runtime context. | SQLite is durable authority for active session rows; Discord owns provisioned IDs; in-memory cogs are hydrated projections. |
+
+### 9.4 Tests, tooling and source boundaries
+
+The reviewed audit inventory includes these executable/support areas: `tests/conftest.py` supplies fixtures; focused suites cover async lifecycle, developer ID, cleanup retries, DAL, default role/default VC, group controls, guild persistence, Manager roles, command features/response policy, Pomodoro recovery/productivity, release command matrix, session/setup recovery/setup wizard, shared controls, staff roles, tasks and utilities. [`test_file.py`](test_file.py) is a legacy standalone runner; its direct callback invocation bypasses command-tree/decorator dispatch and its “100%” banner is not runtime coverage evidence.
+
+[`scripts/start-agents.ps1`](scripts/start-agents.ps1) is an orchestration script whose saved profile/order is stale relative to the latest user workflow; do not infer current execution order from it. [`update_changelog.py`](update_changelog.py), [`.github/scripts/extract_release_notes.py`](.github/scripts/extract_release_notes.py), and [`.github/scripts/package_runtime.py`](.github/scripts/package_runtime.py) are release/documentation utilities, not bot runtime. CI/release files, manifests and project configuration are integration boundaries rather than Discord handlers.
+
+Source inventory evidence and per-function rows remain in `.audit-function-review-20261005/coverage.csv` and `coverage.json`; those files are the exhaustive function index. Their AST call/table/state metadata are candidates only, not a proven dynamic call graph.
+
+### 9.5 Open findings that constrain this map
+
+The audit reports deployment blocked. Open high-priority findings include vote/electorate/owner-transfer/removal and guild-resolution defects (`VOTE-01..05`), public named join (`SEC-10`), invitation role/CAS/startup restoration (`INV-01..03`), incomplete command audit (`AUD-01`), check-in owner durability (`CHECK-01`), Pomodoro failed-save/dropout recovery (`POMO-01/02`), partial resource provisioning (`GROUP-01`), and fail-open/manager demotion authority defects (`AUTH-01/02`). Open P2s include incomplete Pomodoro serialization (`ARC-12`), task and group list embed limits (`UI-01/02`), and sqlite.Row developer-alert handling (`NOTIFY-01`). Details and reproduction evidence are in [the audit report](.audit-function-review-20261005/AUDIT_REPORT.md). Nothing in this map establishes deployment readiness or closes these findings.

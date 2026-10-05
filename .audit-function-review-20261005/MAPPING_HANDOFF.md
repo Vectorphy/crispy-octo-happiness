@@ -1,0 +1,11 @@
+# Mapping evidence handoff
+
+This is audited pre-fix source, not final deployment map. Retain fingerprints and refresh after coding/debugger writes. coverage.json calls/tables/state writes are AST candidates; context_manager_candidates includes file opens and is never equivalent to locks. concurrency_lock_candidates is a syntactic shortlist. Domain-purpose summaries describe source operations, not complete call graph inference.
+
+Verified lifecycle edges: bot setup_hook→cog setup/load; on_ready→active group/checkin/Pomodoro recovery and cleanup; bot.close→cog unload/drain→database close. Invitation send→recipient eligibility→persistent create→DM delivery→warning/expiration task; action→live/recipient checks→transition→callback→group/checkin/Pomodoro roster update. Failed transition fallback and missing startup restoration are open INV-02/03. General commands do not currently reach audit_action (AUD-01).
+
+Database: one asyncio DB lock surrounds worker-dispatched SQLite. _run_in_thread drains worker on cancellation before lock release. create_tables additive16tables. Study groups own guild/channel/role IDs and roster; checkin_sessions owns owner/time/state with checkin_members roster; PomodoroRuntime owns serialized consent/stage/deadline state while focus table monotonic MAX accumulator uses tracking/guild/group provenance. Invitations own recipient/status/absolutedeadline; setup_recovery_journals owns mutation intent/result/recovery phase. Pending cleanup rows own resource retry status. Manager grants scoped by guild+grant_source.
+
+Runtime lock relationships: shared guild_operation_locks serialize setup recovery/config/group creation; StudyGroup membership_lock serializes admission/voice updates, end_lock termination; invitation service locks individual decisions; Pomodoro _start_locks creation, _runtime_lock persist/retire, _recovery_lock restore, session.lock timer and select slash paths only. Attendance/dashboard/gateway/retire omissions ARC-12 must be mapped as gaps, not full serialization. Checkin join_lock coordinates roster/status/reminder paths.
+
+Prioritize actual tables/transactions/rollback and authorizing identities over name-derived diagrams. Exact findings and coding recipes in companion files; user currently holds mapper activation until coding complete.

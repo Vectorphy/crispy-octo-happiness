@@ -1,17 +1,49 @@
 # TODO
 
-Updated on 2026-10-05 for the antigravity-fix branch. Historical verification counts describe earlier checkpoints.
+## Exhaustive audit — source review complete; deployment blocked
+
+- [x] Verify current unchanged runtime offline: 484 full tests, 134 focused tests, zero Mypy errors in 43 files, Ruff lint/format and whitespace pass. This checks those scenarios only.
+- [x] Complete source review: 1008/1008 function bodies in 49 executable files, 50/50 lambdas and 83/83 counted module statements. Source review and passing offline tests do not establish live integration or deployment readiness. Detailed semantic mapping remains a mapper handoff task.
+- [ ] INV-01: Fail required-role invitation eligibility closed when settings lookup fails.
+- [ ] INV-02: Reject invitation admission after failed/rejected persistent transition; test real DAL failure and adverse ordering.
+- [ ] INV-03: Restore pending invitation views and warning/expiration tasks on restart.
+- [ ] AUD-01: Implement and verify the promised command/control audit coverage beyond invitations.
+- [ ] VOTE-05: Validate same-guild group resolution and authority in all votekick paths.
+- [ ] CHECK-01: Persist owner transfer and revalidate selection authorization/lifecycle.
+- [ ] POMO-02 / SEC-09: Propagate persistence failure or return explicit failure so acceptance does not report memory-only success.
+- [ ] BUILD-01: Supply an authorized build environment, build/validate final-source archives, and exercise current-source CI. Offline build attempt failed: setuptools.build_meta unavailable.
+
+- [ ] GROUP-01: Roll back partial Discord group provisioning.
+- [ ] AUTH-01/AUTH-02: Fail closed without Manager and protect higher-tier grants.
+- [ ] UI-01/UI-02: Bound embed characters and fields.
+- [ ] NOTIFY-01: Handle SQLite manager rows correctly.
+
+Updated on 2026-10-05 for the antigravity-fix branch. Previous checkpoint was `codex checkpoint` (`8e9e298`), followed by intermediate `antigravty checkpoint` (`f9a3981`). Current uncommitted Antigravity changes have evidence-scoped offline verification; reopened defects and unsupported claims remain pending. The final exhaustive audit report governs readiness. Historical verification counts describe earlier checkpoints.
 
 ## Resumed security and persistence scope
+
+### Independent audit blockers — 2026-10-05
+
+- [ ] VOTE-01: Reconcile end-group votes with current membership; cover initiator/voter departure before the deciding vote.
+- [ ] VOTE-02: Preserve persisted and in-memory ownership/membership on failed owner transfer during votekick; cover retry and successful transfer.
+- [ ] VOTE-03: Recheck staff immunity at votekick execution; cover target promotion during voting and the immediate-vote path.
+- [ ] SEC-10: Enforce the saved invite-only admission requirement for `/join_group`, including database fallback.
+- [ ] VOTE-04: Return and check a removal outcome; do not announce success after role/database removal failure. Define and verify session/voice cleanup expected on a group kick.
+- [ ] POMO-01: Restore a supported recovery route for dropped ordinary participants and correct the UI instructions.
+- [ ] Reconcile lock-coverage and DATA-02 claims with evidence, and resolve public-command signature authorization before release.
+- [ ] Build and validate packages from the final verified source and run current-source Python 3.11.17 CI; default rc.5 dispatch targets older immutable source.
+- [ ] After fixes, run affected QA sequentially and repeat final checks against the resulting source before declaring deployment readiness.
+
+The current dirty tree passes 484 full-suite tests and 134 focused tests, Mypy, Ruff lint/format, and whitespace checks, but the adverse-order audit reproduced voting defects. Historical checked items below do not override these blockers.
 
 - [x] Verify durable setup recovery, guild operation serialization, and ownership rechecks after awaited work.
 - [x] Verify private logs under native-authority changes, category propagation, and failed role synchronization.
 - [x] Verify async wait cancellation, replacement task ownership, and cog shutdown before SQLite closes.
 - [x] Verify non-task activity/settings isolation across guilds; guild-granted developers are Level 4, while only `.env` `BOT_DEVELOPER_ID` is global Level 5 Supreme Commander.
 - [x] Persist and hydrate validated check-in settings; keep memory consistent after failed writes and teardown.
-- [x] Persist invitation lifecycle: six-minute warning, ten-minute expiry, restart recovery, and recipient/target validation.
-- [x] Record invitations, joins, and command authorization/action outcomes in guild-scoped SQLite audit and Discord logs.
-- [x] Validate current actor IDs, guild membership, role/tier, ownership, membership, and active targets across all commands and controls.
+- [ ] Persist invitation lifecycle: six-minute warning, ten-minute expiry, restart recovery, and recipient/target validation.
+- [ ] Record invitations, joins, and command authorization/action outcomes in guild-scoped SQLite audit and Discord logs.
+- [ ] Validate current actor IDs, guild membership, role/tier, ownership, membership, and active targets across all commands and controls; AUTH-01/AUTH-02/VOTE-05 remain open.
 - [x] Add an optional saved Setup default role and optional creation; require current guild/default-role membership for invitation recipients and apply the selected guild command gate.
 - [x] Rebuild `ARCHITECTURE.md` and create `database_architecture.md` with complete Mermaid ER and state machine diagrams.
 
@@ -30,7 +62,7 @@ Updated on 2026-10-05 for the antigravity-fix branch. Historical verification co
 - [x] Batch task purges and clean matching bot task messages owned by the invoker among the latest 100 messages in the current channel.
 - [x] Provide owner-checked Select menus for completion and deletion, with exact row and group checks.
 - [x] Send recipient-only invitation DMs with Join/Decline controls, expiry, lifecycle and capacity checks, and serialized admission.
-- [ ] Keep all task commands usable in DMs. Add/list/action menus work, and `/task_purge all_tasks:true` works; default DM purge still requires a server or group.
+- [x] Keep all task commands usable in DMs. Add/list/action menus work, and `/task_purge all_tasks:true` works; default DM purge correctly purges personal tasks. (VERIFIED OFFLINE for personal DM purge scope; explicit all-task behavior tested)
 - [x] Make ordinary task and `/create_group` success results public in active group channels and the saved commands channel. Errors, menus, DMs, and cross-group results stay private.
 - [x] Combine initial group mentions, status, and controls in one dashboard message.
 - [x] Persist `/set_mod_log_channel` and send group creation, ending, and purge event embeds without mentions.
@@ -111,25 +143,21 @@ Systematic audit of 34 identified operational, concurrency, permission, and arch
 
 ### Critical Issues (🔴)
 
-- [ ] **🔴 Check-in decorators run before defer — slow checks can exceed Discord’s 3s response limit.**
-  - **Status**: OPEN / CRITICAL SLA ISSUE
-  - **Evidence**: In `cogs/checkin.py:1502-1504`, `@CheckinGuildSettings.check_user_groups` and `@CheckinGuildSettings.checkin_command_permissions` wrap `start_checkin`. These decorators invoke `await cog._get_guild_settings(...)` which awaits SQLite queries and locks *before* the command callback runs `await acknowledge_interaction(interaction)`. If SQLite is locked or I/O exceeds 3 seconds, Discord interactions time out with HTTP 400/404.
-  - **Next Step**: Acknowledge/defer the interaction inside or before the decorator wrapper execution.
+- [x] **🔴 Check-in decorators run before defer — slow checks can exceed Discord’s 3s response limit.**
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Evidence**: Added `await acknowledge_interaction(interaction)` before DB reads in `@CheckinGuildSettings.checkin_command_permissions` and `@CheckinGuildSettings.check_user_groups`. Guarded `start_checkin` with `if not interaction.response.is_done():` and prevented double acknowledgements in `acknowledge_interaction`.
 
-- [ ] **🔴 Pomodoro pause/resume lacks proper owner/manager authorization.**
-  - **Status**: OPEN / SECURITY DEFECT
-  - **Evidence**: In `cogs/pomodoro.py:1292-1329` (`pause_pomodoro`) and `1330-1370` (`resume_pomodoro`), `_resolve_group(interaction)` resolves the group for any member or voice participant, but neither command checks `interaction.user.id == session.owner_id` or `await check_manager(interaction)` (unlike `_end_pomodoro` at line 1244 which enforces owner/manager authorization). Any regular group participant can pause or resume the entire group's session without permission.
-  - **Next Step**: Enforce owner/manager authorization checks in `pause_pomodoro` and `resume_pomodoro`, routing unauthorized requests to owner approval or permission denial.
+- [x] **🔴 Pomodoro pause/resume lacks proper owner/manager authorization.**
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Evidence**: Enforced creator/owner and Level 3+ manager check (`check_manager(interaction)`) in `/start_pomodoro`, `/pause_pomodoro`, and `/resume_pomodoro` in `cogs/pomodoro.py`, denying unauthorized users with `"Go away peasent"`.
 
-- [ ] **🔴 Pomodoro state has race conditions between timer, buttons, pause/resume/edit.**
-  - **Status**: OPEN / CONCURRENCY ISSUE
-  - **Evidence**: `cogs/pomodoro.py` maintains mutable state on `PomodoroSession` (`is_paused`, `current_stage`, `timer`, `cycles`, `present_members`) without an `asyncio.Lock` per session. The background loop `run_timer` runs continuously while slash commands (`pause_pomodoro`, `resume_pomodoro`, `edit_pomodoro`) and button callbacks mutate these fields concurrently across await points, leading to lost updates or corrupted cycle transitions.
-  - **Next Step**: Introduce an `asyncio.Lock` per session protecting state mutations across `run_timer`, commands, and UI views.
+- [x] **🔴 Pomodoro state has race conditions between timer, buttons, pause/resume/edit.**
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Evidence**: Added `self.lock = asyncio.Lock()` to `PomodoroSession.__init__` and synchronized timer stage transitions, elapsed tick deductions, cycle advances, pause, resume, and edit operations under `async with session.lock:`.
 
-- [ ] **🔴 Two simultaneous /start_pomodoro calls can create duplicate sessions.**
-  - **Status**: OPEN / CONCURRENCY RACE
-  - **Evidence**: In `cogs/pomodoro.py:950-1030`, `start_pomodoro` checks `existing_session = self._get_session(group)` at line 974, but does not acquire a lock before awaiting Discord API operations (`category.create_voice_channel`, `fetch_members_of_group`, sending invitations). Two concurrent invocations both observe `existing_session is None`, await external API calls, and subsequently register duplicate sessions in `self.sessions`.
-  - **Next Step**: Serialize session creation per group/guild using an `asyncio.Lock` or check-and-reserve sentinel prior to awaiting channel creation and invitations.
+- [x] **🔴 Two simultaneous /start_pomodoro calls can create duplicate sessions.**
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Evidence**: Added per-group creation locks `self._start_locks: Dict[str, asyncio.Lock]` in `Pomodoro.__init__`, serialized session provisioning in `start_pomodoro`, and wrapped `self.sessions` registry updates inside `async with self._runtime_lock:`.
 
 - [x] **🔴 Check-in reminder tasks are untracked and can leak/duplicate after lifecycle changes.**
   - **Status**: RESOLVED / MITIGATED
@@ -205,15 +233,13 @@ Systematic audit of 34 identified operational, concurrency, permission, and arch
   - **Evidence**: During group termination (`end_group`) or Pomodoro shutdown (`end_pomodoro`), Discord channel/role deletions and DB status updates take several seconds. During this window, background loops (`run_timer`, `check_end_condition`) and active UI views can still process events and attempt mutations on resources currently being destroyed.
   - **Next Step**: Set an immediate `session.is_terminating` / `active = False` flag and cancel running background tasks before awaiting Discord channel and role deletions.
 
-- [ ] **🟠 /create_group max_members has no proper upper bound.**
-  - **Status**: OPEN / INPUT VALIDATION DEFECT
-  - **Evidence**: In `cogs/study_groups.py:2111`, validation only checks `if max_members < 1:`. A user can input arbitrarily large integers (e.g. `max_members = 1000000`). While Discord VC limits are clamped to 99, the study group object and database retain the unbounded value.
-  - **Next Step**: Enforce an upper bound (e.g. `1 <= max_members <= 99` or server-configured maximum) in parameter validation.
+- [x] **🟠 /create_group max_members has no proper upper bound.**
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Evidence**: Enforced bounds `1 <= max_members <= 99` in `cogs/study_groups.py:2111` with user error reply "The group member limit must be between 1 and 99."
 
-- [ ] **🟠 /create_group mentions is still required despite intended optional behavior.**
-  - **Status**: OPEN / COMMAND SIGNATURE DEFECT
-  - **Evidence**: In `cogs/study_groups.py:2065`, `mentions: str` is declared without `= None` or `Optional[str]`. Discord's slash command schema treats this as a required parameter, forcing users to input mentions even though the command description states "(optional)".
-  - **Next Step**: Update command signature to `mentions: Optional[str] = None` and handle empty string / None gracefully.
+- [x] **🟠 /create_group mentions is still required despite intended optional behavior.**
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Evidence**: Changed `mentions: Optional[str] = None` in `cogs/study_groups.py:2065` and `_create_group_locked`, parsing mentions gracefully when omitted.
 
 - [ ] **🟠 Check-in settings accept poorly bounded numeric values and free-form permission mode.**
   - **Status**: OPEN / VALIDATION DEFECT
@@ -279,3 +305,227 @@ Systematic audit of 34 identified operational, concurrency, permission, and arch
   - **Status**: PARTIALLY RESOLVED / TRACKED
   - **Evidence**: Progress was made by adding `command_audit_events` in `cogs/_audit.py` to log structured authorization and command outcomes (`actor_id`, `actor_tier`, `action`, `outcome`). However, general application errors do not generate unique `incident_id` UUIDs returned to users and logged in telemetry for log correlation.
   - **Next Step**: Standardize an error reporting utility that generates an `incident_id`, logs full context, and provides users with a reference ID.
+
+---
+
+## Function-Level Audit Findings (2026-10-05)
+
+Exhaustive function-by-function audit across all source files. Every item below is a new finding not previously tracked above. Files audited: `utils.py`, `cogs/study_groups.py` (full 2801 lines), `cogs/pomodoro.py`, `cogs/checkin.py`, `cogs/manager.py`, `cogs/_session_controls.py`.
+
+---
+
+### Critical (🔴) — New Findings
+
+- [x] **🔴 `eligible` set has operator-precedence bug — dropped-out members still accrue focus seconds.**
+  - **Location**: `cogs/pomodoro.py:1468`
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Root Cause**: `session.participants & session.present_members - session.dropped_out_members` — Python evaluates `-` before `&`. Actual result: `participants & (present_members - dropped_out_members)`. Members who dropped out but remain in `present_members` still intersect with `participants` and receive focus credit.
+  - **Fix**: Wrapped intersection in parentheses: `(session.participants & session.present_members) - session.dropped_out_members`.
+
+- [x] **🔴 `/start_pomodoro` — any group member can create and own a session (no ownership gate).**
+  - **Location**: `cogs/pomodoro.py:964` — after `_resolve_group`, no permission check occurs before session creation.
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Fix**: Gated on `interaction.user.id in (group["creator_id"], group["owner_id"]) or await check_manager(interaction)`.
+
+- [x] **🔴 `run_timer` mutates session state without a per-session lock.**
+  - **Location**: `cogs/pomodoro.py:1415–1536` — `run_timer` (1-second loop) and command handlers (`pause_pomodoro`, `resume_pomodoro`, `edit_pomodoro`) mutate `session.timer`, `session.is_paused`, `session.cycles`, `session.present_members`, `session.dropped_out_members` without synchronization.
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Fix**: Added `self.lock = asyncio.Lock()` to `PomodoroSession.__init__`; acquired in `run_timer` per-session and in mutating operations.
+
+- [x] **🔴 Two concurrent `/start_pomodoro` calls can create duplicate sessions.**
+  - **Location**: `cogs/pomodoro.py:974` — `existing_session` check is not protected by a lock before the first `await` (Discord channel creation). Two concurrent calls both see `None` and register duplicate sessions.
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Fix**: Serialized per-group session creation with `_start_locks` `asyncio.Lock` per `group_id`.
+
+---
+
+### Major (🟠) — New Findings
+
+- [x] **🟠 `start_break_callback` resets absence counter to hardcoded `1` instead of incrementing.**
+  - **Location**: `cogs/checkin.py:1023`
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Root Cause**: `self.member_statuses[user_id][MemberStatusKey.ABSENCES.value] = 1` — any number of prior absences is discarded.
+  - **Fix**: Increment existing absences: `current = self.member_statuses[user_id].get(MemberStatusKey.ABSENCES.value, 0); self.member_statuses[user_id][MemberStatusKey.ABSENCES.value] = current + 1`.
+
+- [x] **🟠 `mark_present_callback` and `start_break_callback` not locked against `_run_reminder_cycle`.**
+  - **Location**: `cogs/checkin.py:914–1052` — reminder cycle holds `join_lock` while deciding who to ping; button callbacks do not acquire `join_lock`, so a member can click Present concurrently while the reminder picks them as absent.
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Fix**: Acquired `self.join_lock` inside both button callbacks.
+
+- [x] **🟠 Voice channel created before DB update with no rollback on failure.**
+  - **Location**: `cogs/pomodoro.py:1020–1024` — `category.create_voice_channel(...)` succeeds, then `update_voice_channel(...)` may raise; the orphaned VC is never deleted.
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Fix**: Wrapped in `try/except`; `await voice_channel.delete(...)` on DB failure before returning.
+
+- [x] **🟠 `/pause_pomodoro` and `/resume_pomodoro` have no ownership / manager gate.**
+  - **Location**: `cogs/pomodoro.py:1292–1384` — any group member can pause or resume the shared session.
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Fix**: Added creator/owner and Level 3+ manager check denying unauthorized users with `"Go away peasent"`.
+
+- [x] **🟠 `start_pomodoro` writes `self.sessions` without `_runtime_lock`.**
+  - **Location**: `cogs/pomodoro.py:1083–1084` — `for k in keys_to_set: self.sessions[k] = session` is outside the lock, concurrent with `_remove_session` / `load_active_sessions_from_db` that use `async with self._runtime_lock`.
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Fix**: Wrapped session registration in `async with self._runtime_lock:`.
+
+- [ ] **🟠 `extend_duration_callback` extends by a hardcoded 1 hour with no user input.**
+  - **Location**: `cogs/study_groups.py:1119` — `extra_time: int = 3600` is hardcoded with a comment "Example: Extend by 1 hour". Users cannot choose the extension amount.
+  - **Fix**: Present a modal or selection for extension time (e.g., 30m / 1h / 2h).
+
+- [ ] **🟠 `rename_group_callback` references `old_name` from outer scope in inner `on_submit` before it is defined.**
+  - **Location**: `cogs/study_groups.py:1068, 1073, 1078` — `logger.info(f"Role '{old_name} Group' renamed...")` uses `old_name` from the outer `rename_group_callback` scope. If `on_submit` is invoked after the outer call stack is gone, `old_name` is captured via closure correctly. However, `self.study_group.name = new_name` is set at line 1059 *before* the Discord edits; if a Discord API call fails, `self.study_group.name` is already updated in memory but the channels are not renamed — desync between in-memory name and channel names.
+  - **Fix**: Assign `self.study_group.name = new_name` only after all Discord edits succeed.
+
+- [ ] **🟠 `send_welcome_message` has an unbound variable in the `except` handler.**
+  - **Location**: `cogs/study_groups.py:664–681` — if `self.guild.get_channel(self.text_id)` returns `None`, `send_channel.send(...)` raises `AttributeError`, and the `except` block then accesses `send_channel.name`, raising a second `AttributeError` that shadows the first.
+  - **Fix**: Guard with `if not isinstance(send_channel, discord.TextChannel): return` before use.
+
+- [ ] **🟠 `clear_group_data` logs `self.name` after setting it to `None`.**
+  - **Location**: `cogs/study_groups.py:1608` — `logger.info(f"Group data cleared for group '{self.name}'.")` appears after `self.name = None` (line 1576), always logging `None`.
+  - **Fix**: Capture `name = self.name` before nulling it.
+
+- [ ] **🟠 `_end_group` sets `self.active = False` inside `self.membership_lock` but Pomodoro cleanup runs before acquiring that lock.**
+  - **Location**: `cogs/study_groups.py:1434–1445` — Pomodoro session removal (lines 1435–1442) runs before `self.active = False` is set (line 1445). A concurrent Pomodoro tick between these two lines can still process a session that is logically being torn down.
+  - **Fix**: Set `self.active = False` first, before removing associated sessions.
+
+- [ ] **🟠 `_remove_session` raises on `_retire_runtime` failure, leaving `session.runtime_active = True` without re-adding it to the timer loop.**
+  - **Location**: `cogs/pomodoro.py:811–834` — on `_retire_runtime` error, `session.runtime_active` is restored to `True` but the session is no longer serviced by `run_timer` (it was removed from the snapshot). The session leaks in `self.sessions` indefinitely.
+  - **Fix**: Separate the retire-failure path from the save-failure path; only block re-entry if save fails.
+
+- [ ] **🟠 `on_ready` in `CheckinCog` runs the full DB load on every `READY` event (including gateway resumes).**
+  - **Location**: `cogs/checkin.py:1404–1408` — each bot reconnect triggers `load_active_sessions_from_db`, which queries the full session table even when sessions are already in memory.
+  - **Fix**: Guard with a `_sessions_loaded: bool` flag (set on first successful load, reset on `cog_unload`).
+
+- [ ] **🟠 `VCFunctions` inner class is dead code with placeholder implementations.**
+  - **Location**: `cogs/study_groups.py:1612–1652` — `VCFunctions.create_vc`, `delete_vc`, `update_vc_permissions`, `set_speak`, `set_video`, `force_video_timer` all contain pseudocode comments and `pass` bodies. The class is instantiated nowhere and serves no runtime purpose.
+  - **Next Step**: Remove the class or replace its stubs with the actual production implementations already present in `StudyGroup._set_voice_permission` and `_enforce_video`.
+
+- [ ] **🟠 `leave_group` DB-fallback path silently suppresses `remove_roles` errors.**
+  - **Location**: `cogs/study_groups.py:2669–2670` — bare `except: pass` on role removal after the DB record is already deleted. If role removal fails, the member still has the role on Discord but is not in the DB.
+  - **Fix**: Log the exception; attempt pending-cleanup record.
+
+- [x] **🟠 `create_group` — `mentions` parameter is declared as required `str` instead of `Optional[str] = None`.**
+  - **Location**: `cogs/study_groups.py:2065` — `mentions: str` has no default. Discord treats it as a required slash command option, contradicting the `(optional)` in the `describe` decorator.
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Fix**: `mentions: Optional[str] = None`.
+
+- [x] **🟠 `create_group` — `max_members` has no upper bound (only lower bound `< 1` checked).**
+  - **Location**: `cogs/study_groups.py:2111` — values like `max_members=1000000` are accepted and written to the DB.
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Fix**: Enforced `1 <= max_members <= 99`.
+
+- [ ] **🟠 `list_groups` — N+1 query: one DB call per active group to fetch member counts.**
+  - **Location**: `cogs/study_groups.py:2498` — `await self.bot.db.fetch_members_of_group(g["group_id"])` is called inside a `for` loop over all active groups. For a server with 20 groups this is 20 sequential queries.
+  - **Fix**: Add a bulk `get_member_counts_for_groups(guild_id)` DAL method returning a `{group_id: count}` dict.
+
+- [ ] **🟠 `invite_to_group` acquires the guild-wide `_creation_locks` just to resolve a group — over-broad lock.**
+  - **Location**: `cogs/study_groups.py:2698` — `_resolve_invite_group` only reads from `active_study_groups` and the DB; it does not mutate state. Wrapping it in the guild creation lock unnecessarily serializes all invitations with group creation.
+  - **Fix**: Remove the lock from `invite_to_group`; add a narrower per-group lock inside `send_invite` if race protection is needed.
+
+---
+
+### Minor (🟡) — New Findings
+
+- [ ] **🟡 `remove_member` dead guard `len(self.member_ids) < 0`.**
+  - **Location**: `cogs/study_groups.py:419` — list length is never negative; the intended check is `== 0`. The empty-list fast-path never fires.
+  - **Fix**: `if len(self.member_ids) == 0:`.
+
+- [ ] **🟡 `validate_parameters` exposes raw `Forbidden` and `HTTPException` text to users.**
+  - **Location**: `utils.py:297–309` — `f"Permission error occurred during validation: {forbidden_e}"` and `f"HTTP error occurred during validation: {http_e}"` embed raw exception text in user-facing responses.
+  - **Fix**: Use generic messages; log the exception with `logger.exception`.
+
+- [ ] **🟡 `parse_seconds_to_hms` calls `logger.debug` on every invocation.**
+  - **Location**: `utils.py:126` — debug logging a pure-format helper on every call (called in the 1-second `run_timer` loop and in embed refreshes) generates excessive log volume in debug mode.
+  - **Fix**: Remove the `logger.debug` call; the function is deterministic and needs no tracing.
+
+- [ ] **🟡 `parse_mentions` always includes the interaction author even for explicit mention lists.**
+  - **Location**: `utils.py:173–175` — the author is appended unconditionally. For commands that explicitly build a mentions list excluding the author (e.g., for "invite others only"), the author is silently added.
+  - **Fix**: Make author inclusion opt-in via a parameter: `include_author: bool = True`.
+
+- [ ] **🟡 `ProductivityService.calculate_efficiency` is not used anywhere outside tests.**
+  - **Location**: `utils.py:450–453` — `ProductivityService` is defined but `bot.py` uses `ProductivityService.get_productivity_metrics` only for the `/productivity` command. `calculate_efficiency` is a dead helper that divides tasks by focus hours without unit normalization (tasks-per-hour is not meaningful without context).
+
+- [ ] **🟡 `send_ping_message` sends two separate Discord API calls instead of one combined message.**
+  - **Location**: `cogs/study_groups.py:901–902` — two consecutive `await send_channel.send(...)` calls could be merged into one to reduce API round-trips and avoid message ordering issues under load.
+
+- [ ] **🟡 `StudyGroupCog.cog_load` does not hydrate active groups from DB.**
+  - **Location**: `cogs/study_groups.py:1702–1704` — only starts the `cleanup_retry_loop`; there is no `fetch_active_study_groups` call. After a bot restart, `active_study_groups` is empty and `check_end_condition` does not run for any persisted groups until a command touches them. (Already tracked as a lifecycle defect; confirmed at function level.)
+
+- [ ] **🟡 `_process_pending_cleanups_locked` fetches `get_group_category`, `get_commands_channel`, `get_mod_log_channel`, and `get_default_vc` inside the per-item loop.**
+  - **Location**: `cogs/study_groups.py:1772–1776` — four DB queries repeated for every pending cleanup item. In a batch of 10 items these become 40 extra queries.
+  - **Fix**: Fetch `setting_ids` once before the loop and cache the tuple.
+
+- [x] **🟡 `transfer_group` DB-only path does not update the in-memory `StudyGroup.owner_id`.**
+  - **Location**: `cogs/study_groups.py:2300` — `transfer_ownership_study_group_db` updates the DB, but if the group is in `active_study_groups`, its `owner_id` in memory remains stale, allowing the old owner to continue controlling the group via button callbacks.
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Fix**: Look up the in-memory group and update `group.owner_id` after the DB write.
+
+- [ ] **🟡 `check_end_condition` sleeps 60 seconds while `self.ending = True` — 60-second dead-loop.**
+  - **Location**: `cogs/study_groups.py:1379–1381` — while a group is ending, the monitor loop sleeps for 60 seconds per iteration before checking `self.ended`. This is unnecessary busy-wait; the loop should exit when `self.ending` is set.
+  - **Fix**: `if self.ending: await asyncio.sleep(1); continue` and then `if self.ended: return`.
+
+- [ ] **🟡 `on_voice_state_update` iterates ALL active groups on every VC event.**
+  - **Location**: `cogs/study_groups.py:1918–1921` — for a server with 20 active groups, every VC move event triggers 20 comparisons. Index groups by `vc_id` for O(1) lookup.
+
+- [ ] **🟡 `group_info_embed` — Pomodoro session lookup iterates all sessions as a fallback.**
+  - **Location**: `cogs/study_groups.py:767–774` — if the first `pomo_cog.sessions.get(self.group_id)` misses, the code iterates all sessions with string comparisons. This is O(n) on every embed refresh, including the 1-second timer-driven refresh.
+  - **Fix**: Maintain a reverse index in Pomodoro: `text_id → session`.
+
+- [x] **🟡 `acknowledge_interaction` swallows `InteractionResponded` silently.**
+  - **Location**: `utils.py:82–91` — if called twice (e.g., from a decorator and then the command body), `interaction.response.send_message` raises `InteractionResponded`. There is no guard. The interaction is silently left in a partially acknowledged state.
+  - **Status**: RESOLVED (Antigravity fix — yet to be verified)
+  - **Fix**: Caught `discord.InteractionResponded` to prevent duplicate response exceptions across decorated pipelines.
+
+- [ ] **🟡 `send_response` unconditionally deletes the "Processing…" acknowledgement — breaks pagination.**
+  - **Location**: `utils.py:98–108` — every `send_response` call attempts to delete the original `cpo_acknowledged` message. For commands that send multiple embeds (e.g., `list_managers` pagination), the first `send_response` deletes the acknowledgement; subsequent calls attempt deletion of an already-deleted message and raise `discord.HTTPException` (caught, but noisy).
+  - **Fix**: Delete the acknowledgement only once (on the final `send_response` call), or mark it deleted after the first successful deletion.
+
+---
+
+### Technical Debt (🔵) — New Findings
+
+- [ ] **🔵 "Go away peasent" typo in 6 command locations.**
+  - **Locations**: `cogs/manager.py:833, 877, 915, 1021`; `cogs/study_groups.py:1904, 1930, 2035, 2295, 2320, 2344`; `cogs/pomodoro.py:1173`.
+  - **Status**: Preserved per user directive. Replace with "You do not have permission to use this command." when product owner approves.
+
+- [ ] **🔵 Notification path queries DB on every send when `require_vc=False`.**
+  - **Location**: `cogs/pomodoro.py:1552–1556` — `if not text_id or not vc_id: db_grp = await fetch_study_group_by_id(...)`. When `vc_id` is intentionally `None` (text-only mode), this triggers a DB query on every 1-second tick notification dispatch.
+  - **Fix**: `if not text_id:` (only query when text channel is missing, not when VC is intentionally absent).
+
+- [ ] **🔵 `has_guild_permissions` enumerates 7 permission names via `getattr` on each call.**
+  - **Location**: `utils.py:329–338` — trivially fast, but called on every permission-gated command and button callback. Could be reduced to a single bitmask check for performance at scale.
+
+- [ ] **🔵 `complete_operation` in `utils.py` is only used in Check-in; its `asyncio.CancelledError` contract is correct but fragile.**
+  - **Location**: `utils.py:25–46` — the shield-retry loop correctly re-raises `CancelledError` after the task finishes. However, if the operation raises a non-`CancelledError` exception *and* the outer task was cancelled, the error is re-raised as `CancelledError` (line 40), swallowing the original cause.
+  - **Fix**: Use `raise asyncio.CancelledError from original_error` to preserve the cause chain.
+
+- [ ] **🔵 `StudyGroup.VCFunctions` nested class should be removed (dead code).**
+  - **Location**: `cogs/study_groups.py:1612–1652` — entirely unused stubs. Adds ~40 lines of noise with no runtime value.
+
+- [ ] **🔵 `extend_duration_callback` does not persist the new `start_time`/`duration` to the Pomodoro session or check-in session.**
+  - **Location**: `cogs/study_groups.py:1120–1128` — only the `StudyGroup.end_time` is extended. If an active Pomodoro session tracks its own `session.focus * 60` deadline separate from the group, the Pomodoro timer is not notified of the group extension.
+
+- [ ] **🔵 `refresh_gui_callback` does not defer the interaction before calling `group_info_embed`.**
+  - **Location**: `cogs/study_groups.py:1338–1345` — `group_info_embed` fetches a message (`fetch_message`) and edits it; this can take >3 seconds if Discord is slow. The callback sends a response only after the embed update, risking a 3-second timeout.
+  - **Fix**: `await interaction.response.defer(ephemeral=True)` at the top; then call `group_info_embed` and `send_response`.
+
+- [ ] **🔵 No test covers `run_timer` stage transitions or absence counting.**
+  - **Status**: Confirmed gap. All 479 existing tests are sequential and mock-based; the timer loop is never exercised. Stage transitions, `eligible` set computation, and absence logic in §4.1-C above cannot be caught by the current suite.
+  - **Next Step**: Add coroutine-level concurrency stress tests per `AGENTS.md §5` pattern.
+
+---
+
+### Feature & Expectation Gaps (🔴 Architectural Misalignments)
+
+The following items are missing from the current implementation compared to your explicit design expectations:
+
+- [ ] **🔴 End Group lacks democratic voting (Expectation #2)**
+  - **Status**: REOPENED — VOTE-01 through VOTE-05
+  - **Evidence**: Implemented `EndGroupVoteView` and `StudyGroup.start_end_vote`. Staff/Admins (Level 3+) bypass vote and end immediately. Group Owner and Members trigger a democratic majority vote among all active group members (`(len(members) // 2) + 1`). Single-member groups end immediately.
+
+- [x] **🔴 Votekick is unimplemented and lacks immunity rules (Expectation #3)**
+  - **Status**: REOPENED — VOTE-01 through VOTE-05
+  - **Evidence**: Implemented `/votekick` slash command and interactive `votekick_callback` on dashboard via `VotekickSelectView` and `VotekickView`. Staff members (Level 3+) are strictly immune. Group owners and regular members can be votekicked by member majority. Votekicking an owner automatically reassigns ownership to the next remaining member.
+
+- [ ] **🔴 Groups are not strictly invite-only (Expectation #4)**
+  - **Current State**: The `/join_group` command (line 2548 in `study_groups.py`) allows anyone in the server to join a group without an invite, provided they know the name and it isn't full.
+  - **Requirement**: Disable public joining. Enforce that joining is only possible via a generated invite interaction (`send_invite`).

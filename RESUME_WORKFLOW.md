@@ -11,7 +11,7 @@ If the user limits "continue" to another activity, follow that narrower scope. R
 ## Agent profiles
 
 - `/root/coding`: `gpt-6.1-sol`, effort `medium`. Implement fixes and meaningful regression tests. Own the current unfinished source/test changes. Never push or publish independently.
-- `/root/debugger`: `gpt-6.1-sol`, effort `xhigh`. Receive QA findings, diagnose and fix remaining defects; avoid unrelated rewrites.
+- `/root/debugger`: `gpt-6.1-sol`, effort `high` (latest user override, 2026-10-05). Receive QA findings, diagnose and fix remaining defects; avoid unrelated rewrites.
 - `/root/todo_audit`: `gpt-6.1-sol`, effort `low`. Read-only evidence audit of checked TODOs; report unsupported claims and exact scope limits.
 - `/root/code_mapping`: `gpt-6-luna`, effort `low` (latest user override during resumed work). After implementation and QA, retrace the codebase and rebuild `ARCHITECTURE.md` with diagrams; documentation only.
 - `/root/database_mapping`: `gpt-6-luna`, effort `low` (latest user override during resumed work). After implementation and QA, retrace persistence and create `database_architecture.md` with diagrams; documentation only.
@@ -19,11 +19,21 @@ If the user limits "continue" to another activity, follow that narrower scope. R
 - `/root/cleanup_db_qa`: inherited parent model/effort, with no explicit override recorded. Read-only database, teardown, retry and migration QA.
 - `/root/pomodoro_qa`: inherited parent model/effort, with no explicit override recorded. Read-only timer, recovery and focus-accounting QA.
 - `/root/design`: inherited parent model/effort, with no explicit override recorded. System and architecture designs only; no implementation edits.
-- `/root/cicd`: inherited parent model/effort, with no explicit override recorded. CI, clean deployment artifacts, remote branch pushes and authorized release operations.
+- `/root/cicd`: `gpt-5.6-sol`, effort `low` (latest user-approved replacement for unavailable GPT-5.6 Terra, 2026-10-05). CI, clean deployment artifacts, remote branch pushes and authorized release operations.
 
 Explicit overrides above are user-selected. Inherited profiles retain the parent's configured settings when recreated; their former exact values were not exposed and must not be invented. If a requested model is unavailable, report it and ask for a replacement rather than silently substituting. Terra was unavailable earlier; Luna 5.6 low was the earlier mapping selection, superseded by the user's GPT-6 Luna low request during resumed work.
 
 ## Sequential execution
+
+Newest audit-order/scope correction (2026-10-05): **coder completes validated P1 batch → audit implemented changes only → debugger**. Audit is strictly limited to the newly implemented delta and directly relevant tests/failure probes, not unchanged code or unrelated issues; capture the coder's exact baseline-to-batch diff and fingerprints separately from preserved Antigravity changes. This supersedes the earlier audit-after-debugger order for this handoff. Coding/debugger parallel P2/P3 ownership remains coordinated after scoped audit and P1 handoff.
+
+Latest added requirement (2026-10-05): after debugger completes review/fixes of the P0/P1 batch, rerun the GPT-6.1 Sol low audit agent on that batch with original failure probes and new regressions. Final readiness also requires completed P2/P3 verification, final-source map refresh and required full/static/package checks. Do not use the original audit snapshot as verification of new edits.
+
+Latest user overrides (2026-10-05): start database and code mappers **now in parallel**, rather than alongside debugger. Coding fixes **all confirmed P0/P1 first**, validates that batch, and hands it to debugger; debugger reviews/fixes P0/P1 while coding continues P2/P3. This explicitly authorizes parallel mapper work and later coding/debugger work, superseding the earlier strict sequential and mapper timing rules for those stages. Split file ownership before parallel source edits; serialize any fixes sharing files. Source-drift fingerprints and final map refresh remain required. Mapping agents exclusively own their architecture documents; root coordinates governance. Tool capacity limits may queue requested roles without model substitution.
+
+Newest user correction (2026-10-05): **finish exhaustive audit → coding (GPT-6.1 Sol medium) → debugger (GPT-6.1 Sol high) in parallel with both mapping agents (GPT-6 Luna low) → affected sequential QA/final verification and map refresh**. Keep mapping agents on hold during audit and coding. This explicitly authorizes parallel mapping alongside debugger and supersedes both the mapping-first order and the one-worker rule for that stage only. Mapping owns ARCHITECTURE.md and database_architecture.md; debugger owns runtime/tests and coordinates governance. Mappers record source fingerprints and reconcile their documents against final debugger output before delivery. Other stages remain sequential.
+
+Latest user order (2026-10-05, exhaustive audit request and subsequent coding-before-debugger correction): complete the read-only function-by-function audit of all first-party code and preserve reusable function/database maps; hand findings and inventories to the database mapper, then code mapper, then coding agent (GPT-6.1 Sol medium), then debugger (GPT-6.1 Sol high). Coding implements fixes first; debugger handles remaining diagnosed defects. Run each worker sequentially. For this stage the mappers document the current audited snapshot and explicitly retain open defects; this user order supersedes the earlier requirement to map only after final verification. After fixes, rerun affected QA and final checks, then refresh maps whose source changed. Audit scope includes Gemini/Antigravity changes and unchanged first-party source, tests, scripts and integration configuration, excluding third-party/generated material and secrets. Recreate unavailable standby sessions with the latest saved profiles rather than silently substituting models.
 
 1. Resume coding's unfinished implementation from the working tree. Use design only for an unresolved architectural decision.
 2. Run setup QA, database/cleanup QA and Pomodoro QA one at a time. QA reports findings and never edits code.

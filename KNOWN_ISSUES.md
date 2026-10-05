@@ -1,6 +1,47 @@
 # Known Issues and Debt (Audit Scope)
 
-Verification (2026-10-05 antigravity-fix): all 479 offline tests pass. Mypy reports zero errors across 43 source files; Ruff lint, formatting, and whitespace checks pass. Live Discord provisioning has not been exercised. The existing `audioop` deprecation warning remains.
+## Exhaustive source audit complete — 2026-10-05; deployment blocked
+
+Source review is complete: 1008/1008 function bodies across 49 executable files, 50/50 lambdas and 83/83 counted module statements, plus first-party config/CI/packaging integration. Runtime/tests remain untouched. Twenty unique open finding IDs and packaging/CI limitations block deployment; detailed semantic mapping is still pending with the mapping agents.
+
+- **INV-01 (P1, OPEN, reproduced offline):** `eligible_recipient` in `cogs/_invitations.py` catches required-role lookup failures and proceeds with `role_id=None`. Injecting a SQLite lookup failure still returns an eligible recipient. Required-role policy must fail closed.
+- **INV-02 (P1, OPEN, reproduced offline):** `InvitationService.act` invokes acceptance callbacks after a rejected persistent transition when its fallback create also fails and the row remains pending. A failed CAS or database write must not authorize admission.
+- **INV-03 (P1, OPEN, source verified):** Persisted pending invitations have no startup restoration caller. `get_pending_session_invitations` is unused by runtime; pending views/warning/expiration tasks are not recreated after restart. Durable-invitation completion claims are unsupported.
+- **AUD-01 (P1, OPEN, source verified):** `audit_action` runtime callers are confined to invitation handling. General slash commands and dashboard controls do not write the claimed comprehensive command audit events.
+- **VOTE-05 (P1, OPEN, reproduced offline):** `/votekick` database fallback can resolve a group from another guild through `get_user_group`, then call `start_votekick` without validating the group's guild. A foreign-guild manager must never obtain group authority through the invoking guild.
+- **CHECK-01 (P1, OPEN, source verified):** Check-in owner selection updates only `self.owner_id`; the database session updater has no owner field. Restart restores the previous owner. Selection submission also needs fresh authorization and active-session validation.
+- **POMO-02 / SEC-09 (P1, OPEN, source verified):** `_persist_session` catches persistence failure and returns normally. Invitation acceptance consequently cannot use that call's exception to roll back its new participant, and can report accepted memory-only state. Verify actual DAL failure, not merely a mocked throwing persistence helper.
+- **BUILD-01 (verification constraint):** A fresh offline build was attempted in a disposable allowlisted source copy and failed because `setuptools.build_meta` is unavailable in the local environment. No build/package-validator success is claimed. General CI does not automatically target `antigravity-fix`; release dispatch defaults to the old immutable rc.5 tag.
+
+
+- **GROUP-01 (P1, OPEN, reproduced offline):** Voice-channel provisioning failure leaves the previously created role/text channel behind (`cogs/study_groups.py:416–505`).
+- **AUTH-01 (P1, OPEN, source verified):** Category configuration and group purge skip authorization when the Manager cog is unavailable (`cogs/study_groups.py:2384–2415,2683–2759`).
+- **AUTH-02 (P1, OPEN, source verified):** Level 3 manager grant/revoke can overwrite or delete a Level 4 target grant (`cogs/manager.py:821–900`).
+- **UI-01 (P2, OPEN, reproduced offline):** Task-list rendering exceeds Discord description/aggregate limits; the boundary probe produced 7,234 description characters (`cogs/tasklist.py:78–123`).
+- **UI-02 (P2, OPEN, source verified):** Group listing emits an unbounded field per group (`cogs/study_groups.py:2863–2884`).
+- **NOTIFY-01 (P2, OPEN, source verified):** Manager notifications call `.get` on SQLite rows; dictionary mocks hide the resulting suppressed failure (`cogs/manager.py:653–688`).
+
+Verified offline checks: 484 full-suite tests, 134 targeted tests, Mypy zero errors across 43 files, Ruff lint/format and whitespace pass for the current unchanged runtime. Precise tested scopes are verified; democratic vote correctness, complete serialization, durable invitation recovery and comprehensive command auditing remain OPEN or pending. Parentheses in the DATA-02 set expression are mathematically equivalent and do not constitute a behavioral fix.
+
+
+## Independent audit — 2026-10-05: deployment blocked
+
+Fresh verification of the dirty Antigravity tree passed 484 full-suite tests, 134 focused tests, Mypy across 43 files, Ruff lint/format, and whitespace checks. Adverse-order probes nevertheless reproduced the following defects; passing tests do not establish deployment readiness.
+
+- **VOTE-01 (P1, OPEN):** End-group voting retains votes from departed members while recalculating the majority from the current roster. A departed initiator plus one current voter can end a two-member group without its current majority (`cogs/study_groups.py:130–158`). Filter votes against current eligible membership before evaluating the outcome.
+- **VOTE-02 (P1, OPEN):** Owner votekick changes the in-memory owner before the database transfer succeeds, catches transfer failure, and continues removing the owner (`cogs/study_groups.py:254–266`). A failed write must preserve ownership and membership; successful transfer and removal need consistent persistence.
+- **VOTE-03 (P1, OPEN):** Votekick staff immunity is checked at initiation but not at execution. A target promoted to administrator during voting can still be removed (`cogs/study_groups.py:228–266`). Revalidate current target authority immediately before removal, including the immediate-vote path.
+- **SEC-10 remains OPEN:** `/join_group` still admits users by group name without an invitation (`cogs/study_groups.py:2888` onward). This does not meet the saved invite-only expectation.
+
+- **VOTE-04 (P1, OPEN):** `remove_member` catches role/database removal failures and returns no success result (`cogs/study_groups.py:641–701`); both votekick paths then announce success regardless. Removal attempts only the group's role, roster, and database membership; it does not explicitly disconnect voice or retire that user's Pomodoro/check-in participation.
+- **POMO-01 (P2, OPEN):** Dropped participants are told to use `/resume_pomodoro` (`cogs/pomodoro.py:300–305`), but the new owner/manager gate rejects ordinary participants (`1395–1407`). The recovery instructions and supported action must agree.
+- **Audit scope corrections:** Session locks do not cover all attendance, dashboard pause, or retirement paths; comprehensive ARC-12 serialization is unverified. The DATA-02 set expressions are mathematically equivalent, so parentheses alone do not prove an accounting fix. `/votekick` and optional `/create_group mentions` change public slash signatures despite the saved unchanged-signature constraint; reconcile authorization before release.
+
+Packaging allowlists were inspected. A later fresh offline build attempt failed because setuptools.build_meta is unavailable; the package validator did not run. The default release dispatch checks out the existing rc.5 tag, not the dirty working tree.
+
+Runtime source remains unchanged by this audit. Live Discord behavior and current-source Python 3.11.17 CI are not verified by the local Python 3.12.14 checks. Existing rc.5 tags/assets remain immutable and do not contain these dirty changes.
+
+Verification (2026-10-05 antigravity-fix): all 484 offline tests pass. Previous checkpoint was `codex checkpoint` (`8e9e298`), followed by intermediate `antigravty checkpoint` (`f9a3981`). Current uncommitted Antigravity changes have evidence-scoped offline verification; reopened defects and unsupported claims remain pending. The final exhaustive audit report governs readiness. Mypy reports zero errors across 43 source files; Ruff lint, formatting, and whitespace checks pass. Live Discord provisioning has not been exercised. The existing `audioop` deprecation warning remains.
 
 ## 1. Functional & Technical Deficiencies
 
@@ -76,7 +117,7 @@ Verification (2026-10-05 antigravity-fix): all 479 offline tests pass. Mypy repo
 
 ### SEC-07: Log access can outlive native staff authority
 - **Severity**: High (P1)
-- **Status**: **Fix implemented; independent resumed QA pending**
+- **Status**: **VERIFIED OFFLINE for native revocation and category/log sealing scenarios (tests/test_staff_roles.py); live Discord pending**
 - **Affected Files**: `cogs/_staff_roles.py`, `cogs/manager.py`
 - **Details**: The debugger added native-authority event reconciliation, explicit CPO-role log denies, and sealing before category mutations and after failures. Core regression checks passed; independent QA must rerun the original revocation and category-propagation findings after the remaining feature work.
 
@@ -237,3 +278,37 @@ Owner-approval controls, invitation consent, group naming, dashboard delegation,
 - **Details**: Check-in reminder waits now use cancellation-safe timeout handling, and video cleanup only unregisters the task that still owns its registry entry. Cogs drain owned tasks before database shutdown. Core lifecycle/cancellation regressions passed; independent QA remains pending.
 
 Legacy runtime snapshots cannot distinguish historical Present and Absent responses. Recovery preserves consent but starts explicit Present tracking empty for such snapshots, so members must mark Present again. Snapshot intervals target 15 seconds when persistence succeeds; write failures can widen crash loss.
+
+## Function-Level Audit Findings (2026-10-05)
+
+### ARC-11: Democratic Voting & Votekick Missing
+- **Severity**: High (P1) - Feature/Expectation Gap
+- **Status**: **REOPENED — VOTE-01 through VOTE-05; initial implementation does not establish correctness**
+- **Affected Files**: `cogs/study_groups.py`
+- **Details**: Implemented `EndGroupVoteView` and `StudyGroup.start_end_vote`. Staff/Admins (Level 3+) bypass vote and end immediately; members and owners trigger democratic vote requiring majority consent (`(len(members) // 2) + 1`). Implemented `/votekick` slash command and interactive `votekick_callback` via `VotekickSelectView` and `VotekickView`. Level 3+ staff are strictly immune, and owner votekick auto-reassigns ownership to the next roster member.
+
+### SEC-10: Groups Allow Public Joining By Default
+- **Severity**: High (P1) - Feature/Expectation Gap
+- **Status**: **OPEN**
+- **Affected Files**: `cogs/study_groups.py`
+- **Details**: `/join_group` allows any server member to join a group without an explicit invitation if they know the name and the group is not full, bypassing the strict invite-only expectation.
+
+### SEC-11: Pomodoro Session Creation Lacks Ownership Gate
+- **Severity**: Critical (P0)
+- **Status**: **SOURCE VERIFIED — ownership gate present; ordinary-participant recovery remains OPEN under POMO-01**
+- **Affected Files**: `cogs/pomodoro.py`
+- **Details**: Enforced creator/owner and Level 3+ manager check (`check_manager(interaction)`) in `/start_pomodoro`, `/pause_pomodoro`, and `/resume_pomodoro`, denying unauthorized users with `"Go away peasent"`.
+
+### DATA-02: Pomodoro `eligible` Set Operator Precedence Bug
+- **Severity**: Critical (P0)
+- **Status**: **CLAIM CORRECTED — equivalent set expressions; no behavioral precedence fix**
+- **Affected Files**: `cogs/pomodoro.py:run_timer`
+- **Details**: Wrapped intersection in parentheses: `(session.participants & session.present_members) - session.dropped_out_members` at `cogs/pomodoro.py:1468`, preventing dropped out members from receiving focus credit.
+
+Audit correction: `A & (B - C)` and `(A & B) - C` are equivalent; parentheses alone change no eligible members.
+
+### ARC-12: Concurrent State Mutation in Pomodoro & Check-in
+- **Severity**: Critical (P0)
+- **Status**: **OPEN — partial locking; attendance, pause and retirement paths remain outside serialization**
+- **Affected Files**: `cogs/pomodoro.py`, `cogs/checkin.py`
+- **Details**: Added `self.lock = asyncio.Lock()` per Pomodoro session and serialized mutations in `run_timer`, pause, resume, and edit. Serialized `/start_pomodoro` per group using `_start_locks`. In Check-in, wrapped `mark_present_callback` and `start_break_callback` under `self.join_lock`, and incremented `ABSENCES` counter instead of resetting to 1.

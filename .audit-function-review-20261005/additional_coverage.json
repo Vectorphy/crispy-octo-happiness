@@ -1,0 +1,1199 @@
+[
+  {
+    "file": ".github/scripts/extract_release_notes.py",
+    "kind": "module_statement",
+    "line": 48,
+    "end": 49,
+    "expression": "if __name__ == '__main__':\n    main()",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": ".github/scripts/package_runtime.py",
+    "kind": "module_statement",
+    "line": 11,
+    "end": 11,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": ".github/scripts/package_runtime.py",
+    "kind": "module_statement",
+    "line": 12,
+    "end": 12,
+    "expression": "ROOT = Path(__file__).resolve().parents[2]",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": ".github/scripts/package_runtime.py",
+    "kind": "module_statement",
+    "line": 84,
+    "end": 88,
+    "expression": "if __name__ == '__main__':\n    logging.basicConfig(level=logging.INFO, format='%(message)s')\n    parser = argparse.ArgumentParser(description=__doc__)\n    parser.add_argument('--dist', type=Path, default=ROOT / 'dist')\n    package_runtime(parser.parse_args().dist)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "bot.py",
+    "kind": "module_statement",
+    "line": 15,
+    "end": 15,
+    "expression": "logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "bot.py",
+    "kind": "module_statement",
+    "line": 16,
+    "end": 16,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "bot.py",
+    "kind": "module_statement",
+    "line": 19,
+    "end": 19,
+    "expression": "load_dotenv()",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "bot.py",
+    "kind": "module_statement",
+    "line": 20,
+    "end": 20,
+    "expression": "TOKEN = os.getenv('DISCORD_BOT_TOKEN')",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "bot.py",
+    "kind": "module_statement",
+    "line": 21,
+    "end": 21,
+    "expression": "RAW_BOT_DEVELOPER_ID = os.getenv('BOT_DEVELOPER_ID')",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "bot.py",
+    "kind": "module_statement",
+    "line": 22,
+    "end": 22,
+    "expression": "BOT_DEVELOPER_ID = validate_bot_developer_id(RAW_BOT_DEVELOPER_ID)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "bot.py",
+    "kind": "module_statement",
+    "line": 25,
+    "end": 25,
+    "expression": "intents = discord.Intents.default()",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "bot.py",
+    "kind": "module_statement",
+    "line": 26,
+    "end": 26,
+    "expression": "intents.message_content = True",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "bot.py",
+    "kind": "module_statement",
+    "line": 27,
+    "end": 27,
+    "expression": "intents.members = True",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "bot.py",
+    "kind": "module_statement",
+    "line": 28,
+    "end": 28,
+    "expression": "intents.guilds = True",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "bot.py",
+    "kind": "module_statement",
+    "line": 29,
+    "end": 29,
+    "expression": "intents.voice_states = True",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "bot.py",
+    "kind": "module_statement",
+    "line": 90,
+    "end": 90,
+    "expression": "cpo = CPO()",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "bot.py",
+    "kind": "module_statement",
+    "line": 131,
+    "end": 139,
+    "expression": "if __name__ == '__main__':\n    if not TOKEN:\n        logger.error('DISCORD_BOT_TOKEN not found in .env file')\n    elif not BOT_DEVELOPER_ID:\n        logger.warning('BOT_DEVELOPER_ID not found or invalid in .env file. Some features may be limited.')\n        cpo.run(TOKEN)\n    else:\n        logger.info('Starting the bot...')\n        cpo.run(TOKEN)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_access_policy.py",
+    "kind": "module_statement",
+    "line": 11,
+    "end": 11,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_audit.py",
+    "kind": "module_statement",
+    "line": 8,
+    "end": 8,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_invitations.py",
+    "kind": "module_statement",
+    "line": 18,
+    "end": 18,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_invitations.py",
+    "kind": "module_statement",
+    "line": 19,
+    "end": 19,
+    "expression": "EXPIRY_NOTICE = 'This invitation expired. Ask the session owner to send you a new invitation.'",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_session_controls.py",
+    "kind": "module_statement",
+    "line": 10,
+    "end": 10,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_setup_view.py",
+    "kind": "lambda",
+    "line": 298,
+    "end": 298,
+    "expression": "lambda value: (value['target_type'], value['target_id'])",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "cogs/_setup_view.py",
+    "kind": "module_statement",
+    "line": 13,
+    "end": 14,
+    "expression": "if TYPE_CHECKING:\n    from cogs.manager import Manager",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_setup_view.py",
+    "kind": "module_statement",
+    "line": 16,
+    "end": 16,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_staff_roles.py",
+    "kind": "module_statement",
+    "line": 11,
+    "end": 11,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_staff_roles.py",
+    "kind": "module_statement",
+    "line": 13,
+    "end": 13,
+    "expression": "MANAGER_ROLE_NAME = 'CPO Manager'",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_staff_roles.py",
+    "kind": "module_statement",
+    "line": 14,
+    "end": 14,
+    "expression": "DEVELOPER_ROLE_NAME = 'CPO Bot Developer'",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_staff_roles.py",
+    "kind": "module_statement",
+    "line": 15,
+    "end": 15,
+    "expression": "SUPREME_ROLE_NAME = 'CPO Supreme Commander'",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_staff_roles.py",
+    "kind": "module_statement",
+    "line": 17,
+    "end": 26,
+    "expression": "_COMMON_ACCESS = ('view_channel', 'send_messages', 'read_message_history', 'embed_links', 'attach_files', 'connect', 'speak', 'stream')",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_staff_roles.py",
+    "kind": "module_statement",
+    "line": 27,
+    "end": 33,
+    "expression": "_MANAGER_ACCESS = ('manage_channels', 'manage_messages', 'move_members', 'mute_members', 'deafen_members')",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_staff_roles.py",
+    "kind": "module_statement",
+    "line": 34,
+    "end": 34,
+    "expression": "_DEVELOPER_ACCESS = ('manage_roles', 'manage_webhooks')",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/_voice_relocation.py",
+    "kind": "module_statement",
+    "line": 8,
+    "end": 8,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/checkin.py",
+    "kind": "lambda",
+    "line": 1299,
+    "end": 1303,
+    "expression": "lambda: self.cog.active_sessions.get(self.session_id) is self and (not self.end_session_event.is_set()) and (self.owner_id == owner_id)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "cogs/checkin.py",
+    "kind": "module_statement",
+    "line": 37,
+    "end": 37,
+    "expression": "logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/checkin.py",
+    "kind": "module_statement",
+    "line": 38,
+    "end": 38,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/checkin.py",
+    "kind": "module_statement",
+    "line": 39,
+    "end": 39,
+    "expression": "current_namespace = sys.modules[__name__].__name__.split('.')[-1]",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/manager.py",
+    "kind": "lambda",
+    "line": 943,
+    "end": 943,
+    "expression": "lambda item: (-item[1], item[0])",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "cogs/manager.py",
+    "kind": "module_statement",
+    "line": 17,
+    "end": 17,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/pomodoro.py",
+    "kind": "lambda",
+    "line": 1304,
+    "end": 1306,
+    "expression": "lambda: any((existing is session for existing in self.sessions.values())) and session.owner_id == owner_id",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "cogs/pomodoro.py",
+    "kind": "lambda",
+    "line": 1307,
+    "end": 1307,
+    "expression": "lambda owner_interaction: self._finish_pomodoro(owner_interaction, group, session)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "cogs/pomodoro.py",
+    "kind": "module_statement",
+    "line": 27,
+    "end": 27,
+    "expression": "MIN_STAGE_MINUTES = 2",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/pomodoro.py",
+    "kind": "module_statement",
+    "line": 28,
+    "end": 28,
+    "expression": "MAX_STAGE_MINUTES = 240",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/pomodoro.py",
+    "kind": "module_statement",
+    "line": 29,
+    "end": 29,
+    "expression": "DEFAULT_SESSION_DURATION = 86400",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/pomodoro.py",
+    "kind": "module_statement",
+    "line": 30,
+    "end": 30,
+    "expression": "RENEWAL_NOTICE_SECONDS = 3600",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/pomodoro.py",
+    "kind": "module_statement",
+    "line": 33,
+    "end": 33,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/pomodoro.py",
+    "kind": "module_statement",
+    "line": 35,
+    "end": 51,
+    "expression": "FOCUS_END_SHORT_BREAK_MESSAGES = ['\ud83c\udf89 Focus block conquered! Step away, stretch your limbs, and take a well-deserved {m}-minute breather.', '\ud83d\udd14 Ding ding ding! Focus sprint complete. Give your brain a break for {m} minutes!', '\ud83e\udde0 Brain recharge initiated! Step away from the screen, grab some water, and relax for {m} minutes.', '\u26a1 Incredible momentum! Hit pause, uncurl your spine, and enjoy a {m}-minute rest.', '\ud83d\ude80 Sprint done! Shake out the fidgets, look at something far away, and chill for {m} minutes.', '\ud83c\udf1f Dopamine checkpoint reached! Time to pause and bask in your accomplishment for {m} minutes.', '\u2615 Kettle time! Step away from your workspace and enjoy a nice {m}-minute pause.', \"\ud83e\uddd8 Deep breath in... and out. You're doing amazing! Enjoy your {m}-minute breather.\", \"\ud83c\udfaf Focus time checked off! No work allowed for the next {m} minutes. You've earned this!\", '\u2728 Sprint complete! Stand up, stretch those shoulders, and enjoy {m} minutes of freedom.', '\ud83c\udf08 Pause button pressed! Give those eyes a rest and vibe for {m} minutes.', '\ud83d\udecb\ufe0f Step back and unwind! Your brain just worked hard, let it coast for {m} minutes.', '\ud83d\udca7 Hydration alert & break time! Drink some water, stroll around, and relax for {m} minutes.', '\ud83c\udf31 Unplug for {m} minutes! Reset your mental tabs before the next round.', '\ud83c\udfae Quick intermission! Step away, stretch, and let your mind wander for {m} minutes.']",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/pomodoro.py",
+    "kind": "module_statement",
+    "line": 53,
+    "end": 62,
+    "expression": "FOCUS_END_LONG_BREAK_MESSAGES = ['\ud83c\udfc6 4 full focus cycles completed! That is legendary stamina. Enjoy a glorious {m}-minute long break!', '\ud83c\udf89 Major milestone unlocked: 4 rounds done! Time to disconnect completely and recharge for {m} minutes.', '\ud83e\udd73 Huge win! You powered through 4 cycles! Go grab a snack, take a walk, or vibe for {m} minutes.', \"\ud83c\udf1f You're unstoppable today! 4 Pomodoro cycles in the bag. Enjoy your well-earned {m}-minute retreat.\", '\ud83c\udf55 Legendary focus unlocked! Four sprints conquered. Step completely away from your desk for {m} minutes.', '\ud83d\udc51 Peak productivity achieved! Treat yourself to a proper {m}-minute break. Hydrate, snack, relax!', '\ud83d\ude80 Incredible endurance! You just finished a full 4-cycle loop. Rest and rejuvenate for {m} minutes.', \"\ud83c\udf88 4 cycles down! That's a massive achievement. Relax your mind and recharge for {m} minutes.\"]",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/pomodoro.py",
+    "kind": "module_statement",
+    "line": 64,
+    "end": 165,
+    "expression": "RESUME_GROUP_MESSAGES = [\"Let's go team, pomodoro is back on! Jump in!\", 'The focus train is moving again! Hop on!', 'Time to lock in! Pomodoro resumed.', \"Let's get back to work! Pomodoro is active.\", 'Pomodoro resumed! Come join the productivity!', \"We are back in action! Let's focus!\", 'Focus time has returned! Jump into the VC!', \"Pomodoro is running again! Let's get those tasks done!\", 'Back to the grind! Pomodoro resumed!', 'The break is officially over! Pomodoro is active.', \"Let's go team, pomodoro is back on! Jump in!\", 'The focus train is moving again! Hop on!', 'Time to lock in! Pomodoro resumed.', \"Let's get back to work! Pomodoro is active.\", 'Pomodoro resumed! Come join the productivity!', \"We are back in action! Let's focus!\", 'Focus time has returned! Jump into the VC!', \"Pomodoro is running again! Let's get those tasks done!\", 'Back to the grind! Pomodoro resumed!', 'The break is officially over! Pomodoro is active.', \"Let's go team, pomodoro is back on! Jump in!\", 'The focus train is moving again! Hop on!', 'Time to lock in! Pomodoro resumed.', \"Let's get back to work! Pomodoro is active.\", 'Pomodoro resumed! Come join the productivity!', \"We are back in action! Let's focus!\", 'Focus time has returned! Jump into the VC!', \"Pomodoro is running again! Let's get those tasks done!\", 'Back to the grind! Pomodoro resumed!', 'The break is officially over! Pomodoro is active.', \"Let's go team, pomodoro is back on! Jump in!\", 'The focus train is moving again! Hop on!', 'Time to lock in! Pomodoro resumed.', \"Let's get back to work! Pomodoro is active.\", 'Pomodoro resumed! Come join the productivity!', \"We are back in action! Let's focus!\", 'Focus time has returned! Jump into the VC!', \"Pomodoro is running again! Let's get those tasks done!\", 'Back to the grind! Pomodoro resumed!', 'The break is officially over! Pomodoro is active.', \"Let's go team, pomodoro is back on! Jump in!\", 'The focus train is moving again! Hop on!', 'Time to lock in! Pomodoro resumed.', \"Let's get back to work! Pomodoro is active.\", 'Pomodoro resumed! Come join the productivity!', \"We are back in action! Let's focus!\", 'Focus time has returned! Jump into the VC!', \"Pomodoro is running again! Let's get those tasks done!\", 'Back to the grind! Pomodoro resumed!', 'The break is officially over! Pomodoro is active.', \"Let's go team, pomodoro is back on! Jump in!\", 'The focus train is moving again! Hop on!', 'Time to lock in! Pomodoro resumed.', \"Let's get back to work! Pomodoro is active.\", 'Pomodoro resumed! Come join the productivity!', \"We are back in action! Let's focus!\", 'Focus time has returned! Jump into the VC!', \"Pomodoro is running again! Let's get those tasks done!\", 'Back to the grind! Pomodoro resumed!', 'The break is officially over! Pomodoro is active.', \"Let's go team, pomodoro is back on! Jump in!\", 'The focus train is moving again! Hop on!', 'Time to lock in! Pomodoro resumed.', \"Let's get back to work! Pomodoro is active.\", 'Pomodoro resumed! Come join the productivity!', \"We are back in action! Let's focus!\", 'Focus time has returned! Jump into the VC!', \"Pomodoro is running again! Let's get those tasks done!\", 'Back to the grind! Pomodoro resumed!', 'The break is officially over! Pomodoro is active.', \"Let's go team, pomodoro is back on! Jump in!\", 'The focus train is moving again! Hop on!', 'Time to lock in! Pomodoro resumed.', \"Let's get back to work! Pomodoro is active.\", 'Pomodoro resumed! Come join the productivity!', \"We are back in action! Let's focus!\", 'Focus time has returned! Jump into the VC!', \"Pomodoro is running again! Let's get those tasks done!\", 'Back to the grind! Pomodoro resumed!', 'The break is officially over! Pomodoro is active.', \"Let's go team, pomodoro is back on! Jump in!\", 'The focus train is moving again! Hop on!', 'Time to lock in! Pomodoro resumed.', \"Let's get back to work! Pomodoro is active.\", 'Pomodoro resumed! Come join the productivity!', \"We are back in action! Let's focus!\", 'Focus time has returned! Jump into the VC!', \"Pomodoro is running again! Let's get those tasks done!\", 'Back to the grind! Pomodoro resumed!', 'The break is officially over! Pomodoro is active.', \"Let's go team, pomodoro is back on! Jump in!\", 'The focus train is moving again! Hop on!', 'Time to lock in! Pomodoro resumed.', \"Let's get back to work! Pomodoro is active.\", 'Pomodoro resumed! Come join the productivity!', \"We are back in action! Let's focus!\", 'Focus time has returned! Jump into the VC!', \"Pomodoro is running again! Let's get those tasks done!\", 'Back to the grind! Pomodoro resumed!', 'The break is officially over! Pomodoro is active.']",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/pomodoro.py",
+    "kind": "module_statement",
+    "line": 167,
+    "end": 178,
+    "expression": "BREAK_END_FOCUS_MESSAGES = [\"\ud83c\udfaf Break's over! Let's lock in and tackle the next {m} minutes of focus together.\", \"\u26a1 Back in the zone! Clear those open tabs, take a deep breath, and let's conquer the next {m} minutes.\", \"\ud83d\ude80 Time to build momentum! Pick your next micro-task and let's dive into {m} minutes of focus.\", \"\ud83d\udd25 Ready to roll? Reset your focus, hydrate, and let's crush the next {m} minutes!\", \"\ud83e\udde0 Dopamine aligned! Pick one small step to start with and let's knock out this {m}-minute sprint.\", \"\ud83c\udf1f Fresh sprint starting! Jump back in and let's make progress for the next {m} minutes.\", \"\ud83d\udee0\ufe0f Back to the craft! Settle into your workspace and let's focus for {m} minutes.\", \"\ud83d\udcda Time to lock in! Set your goal for this block and let's crush {m} minutes.\", \"\u2728 Ready, set, focus! Put on your favorite focus tracks and let's work for {m} minutes.\", \"\ud83e\uddbe Powering up the focus engine! Take a deep breath and let's do this for {m} minutes.\"]",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/productivity_tracker.py",
+    "kind": "module_statement",
+    "line": 9,
+    "end": 9,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/study_groups.py",
+    "kind": "lambda",
+    "line": 1248,
+    "end": 1248,
+    "expression": "lambda: self.active and self.owner_id == owner_id",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "cogs/study_groups.py",
+    "kind": "lambda",
+    "line": 2604,
+    "end": 2604,
+    "expression": "lambda: bool(record.get('active'))",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "cogs/study_groups.py",
+    "kind": "module_statement",
+    "line": 35,
+    "end": 35,
+    "expression": "logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/study_groups.py",
+    "kind": "module_statement",
+    "line": 36,
+    "end": 36,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/study_groups.py",
+    "kind": "module_statement",
+    "line": 37,
+    "end": 37,
+    "expression": "current_namespace = sys.modules[__name__].__name__.split('.')[-1]",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/tasklist.py",
+    "kind": "module_statement",
+    "line": 11,
+    "end": 11,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "cogs/voice_channels.py",
+    "kind": "module_statement",
+    "line": 11,
+    "end": 11,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "database.py",
+    "kind": "module_statement",
+    "line": 9,
+    "end": 9,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "database.py",
+    "kind": "module_statement",
+    "line": 11,
+    "end": 11,
+    "expression": "T = TypeVar('T')",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "main.py",
+    "kind": "module_statement",
+    "line": 6,
+    "end": 14,
+    "expression": "if __name__ == '__main__':\n    if not TOKEN:\n        logger.error('DISCORD_BOT_TOKEN not found in .env file')\n    elif not BOT_DEVELOPER_ID:\n        logger.warning('BOT_DEVELOPER_ID not found or invalid in .env file. Some features may be limited.')\n        cpo.run(TOKEN)\n    else:\n        logger.info('Starting the bot...')\n        cpo.run(TOKEN)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "test_file.py",
+    "kind": "lambda",
+    "line": 152,
+    "end": 154,
+    "expression": "lambda cid: channel if cid == channel_id else category if cid == category.id else vc",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "test_file.py",
+    "kind": "lambda",
+    "line": 155,
+    "end": 155,
+    "expression": "lambda rid: role if rid == role.id else None",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "test_file.py",
+    "kind": "lambda",
+    "line": 556,
+    "end": 556,
+    "expression": "lambda uid: mod_member if uid == 666111222333 else None",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "test_file.py",
+    "kind": "module_statement",
+    "line": 31,
+    "end": 31,
+    "expression": "logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "test_file.py",
+    "kind": "module_statement",
+    "line": 32,
+    "end": 32,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "test_file.py",
+    "kind": "module_statement",
+    "line": 34,
+    "end": 34,
+    "expression": "GUILD_ID = 885134444992806962",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "test_file.py",
+    "kind": "module_statement",
+    "line": 35,
+    "end": 35,
+    "expression": "USER_ID = 534168986149978112",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "test_file.py",
+    "kind": "module_statement",
+    "line": 36,
+    "end": 36,
+    "expression": "SECOND_USER_ID = 999111222333",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "test_file.py",
+    "kind": "module_statement",
+    "line": 37,
+    "end": 37,
+    "expression": "REGULAR_USER_ID = 888777666555",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "test_file.py",
+    "kind": "module_statement",
+    "line": 1206,
+    "end": 1207,
+    "expression": "if __name__ == '__main__':\n    asyncio.run(run_all_feature_tests())",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "tests/test_async_lifecycle.py",
+    "kind": "lambda",
+    "line": 38,
+    "end": 38,
+    "expression": "lambda: session.end_session_event.set()",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_database.py",
+    "kind": "module_statement",
+    "line": 12,
+    "end": 12,
+    "expression": "sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "tests/test_database.py",
+    "kind": "module_statement",
+    "line": 539,
+    "end": 540,
+    "expression": "if __name__ == '__main__':\n    unittest.main()",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "tests/test_default_role.py",
+    "kind": "lambda",
+    "line": 37,
+    "end": 39,
+    "expression": "lambda identifier: role if identifier == role.id else guild.default_role if identifier == guild.default_role.id else None",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_new_features.py",
+    "kind": "module_statement",
+    "line": 9,
+    "end": 9,
+    "expression": "sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "tests/test_new_features.py",
+    "kind": "module_statement",
+    "line": 457,
+    "end": 458,
+    "expression": "if __name__ == '__main__':\n    unittest.main()",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 68,
+    "end": 68,
+    "expression": "lambda guild_id: guild if guild_id == 42 else None",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 474,
+    "end": 474,
+    "expression": "lambda name: pomo if name == 'Pomodoro' else None",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 196,
+    "end": 196,
+    "expression": "lambda guild_id: foreign if guild_id == 99 else None",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 278,
+    "end": 278,
+    "expression": "lambda: 100.0",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 297,
+    "end": 297,
+    "expression": "lambda: 100.0",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 318,
+    "end": 318,
+    "expression": "lambda: 100.0",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 332,
+    "end": 332,
+    "expression": "lambda: 100.0",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 341,
+    "end": 341,
+    "expression": "lambda: 100.0",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 343,
+    "end": 343,
+    "expression": "lambda: 200.0",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 358,
+    "end": 358,
+    "expression": "lambda: clock[0]",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 384,
+    "end": 384,
+    "expression": "lambda: 252.5",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 403,
+    "end": 403,
+    "expression": "lambda: clock[0]",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 424,
+    "end": 424,
+    "expression": "lambda: 100.0",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "lambda",
+    "line": 26,
+    "end": 26,
+    "expression": "lambda: running",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_pomodoro_recovery.py",
+    "kind": "module_statement",
+    "line": 12,
+    "end": 12,
+    "expression": "GROUP_ID = '307fefda-7815-4f9b-9842-66c988fc5995'",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "tests/test_productivity_tracker.py",
+    "kind": "module_statement",
+    "line": 8,
+    "end": 8,
+    "expression": "sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "tests/test_productivity_tracker.py",
+    "kind": "module_statement",
+    "line": 100,
+    "end": 101,
+    "expression": "if __name__ == '__main__':\n    unittest.main()",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "tests/test_release_fixes.py",
+    "kind": "lambda",
+    "line": 545,
+    "end": 545,
+    "expression": "lambda name: pomo if name == 'Pomodoro' else None",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_release_fixes.py",
+    "kind": "lambda",
+    "line": 663,
+    "end": 663,
+    "expression": "lambda channel_id: text_channel if channel_id == 30 else voice_channel",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_response_policy.py",
+    "kind": "lambda",
+    "line": 40,
+    "end": 40,
+    "expression": "lambda: self.responded",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_setup.py",
+    "kind": "lambda",
+    "line": 74,
+    "end": 76,
+    "expression": "lambda identifier: {10: category, 20: channel, 30: log_channel, 50: voice}.get(identifier)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_setup.py",
+    "kind": "lambda",
+    "line": 497,
+    "end": 497,
+    "expression": "lambda identifier: channels.get(identifier)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_setup.py",
+    "kind": "lambda",
+    "line": 641,
+    "end": 641,
+    "expression": "lambda identifier: {88: other_voice}.get(identifier)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_setup.py",
+    "kind": "lambda",
+    "line": 701,
+    "end": 701,
+    "expression": "lambda cid: channels_map.get(cid)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_setup.py",
+    "kind": "lambda",
+    "line": 754,
+    "end": 754,
+    "expression": "lambda cid: {100: cat, 101: cmd}.get(cid)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_setup.py",
+    "kind": "lambda",
+    "line": 779,
+    "end": 779,
+    "expression": "lambda cid: {100: cat}.get(cid)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_setup.py",
+    "kind": "lambda",
+    "line": 798,
+    "end": 798,
+    "expression": "lambda cid: {101: cmd}.get(cid)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_setup.py",
+    "kind": "lambda",
+    "line": 816,
+    "end": 816,
+    "expression": "lambda cid: {101: cmd}.get(cid)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_setup.py",
+    "kind": "lambda",
+    "line": 836,
+    "end": 836,
+    "expression": "lambda cid: {101: cmd, 10: MagicMock(spec=discord.CategoryChannel, id=10)}.get(cid)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_setup.py",
+    "kind": "lambda",
+    "line": 901,
+    "end": 901,
+    "expression": "lambda identifier: {10: category, 20: channel, 101: retained}.get(identifier)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_setup.py",
+    "kind": "lambda",
+    "line": 87,
+    "end": 87,
+    "expression": "lambda identifier: guild.get_channel(identifier)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_setup.py",
+    "kind": "lambda",
+    "line": 500,
+    "end": 500,
+    "expression": "lambda name, **kwargs: channels[21 if name == 'cpo-commands' else 31]",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_setup_recovery_journal.py",
+    "kind": "lambda",
+    "line": 88,
+    "end": 88,
+    "expression": "lambda identifier: guild.default_role if identifier == guild.default_role.id else None",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_shared_controls.py",
+    "kind": "lambda",
+    "line": 248,
+    "end": 248,
+    "expression": "lambda identifier: {20: source, 10: category}.get(identifier)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_shared_controls.py",
+    "kind": "lambda",
+    "line": 78,
+    "end": 78,
+    "expression": "lambda: active",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_shared_controls.py",
+    "kind": "lambda",
+    "line": 91,
+    "end": 91,
+    "expression": "lambda: True",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_shared_controls.py",
+    "kind": "lambda",
+    "line": 104,
+    "end": 104,
+    "expression": "lambda: True",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_shared_controls.py",
+    "kind": "lambda",
+    "line": 121,
+    "end": 121,
+    "expression": "lambda: True",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_staff_roles.py",
+    "kind": "lambda",
+    "line": 66,
+    "end": 66,
+    "expression": "lambda role: discord.PermissionOverwrite(use_external_emojis=False)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_staff_roles.py",
+    "kind": "lambda",
+    "line": 69,
+    "end": 69,
+    "expression": "lambda role: discord.PermissionOverwrite(priority_speaker=False)",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_staff_roles.py",
+    "kind": "lambda",
+    "line": 295,
+    "end": 295,
+    "expression": "lambda identifier: members.get(identifier) if identifier != 5 else None",
+    "outcome": "source-reviewed",
+    "evidence": "Expression inspected in enclosing body and separate lambda accounting pass"
+  },
+  {
+    "file": "tests/test_tasklist.py",
+    "kind": "module_statement",
+    "line": 10,
+    "end": 10,
+    "expression": "sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "tests/test_tasklist.py",
+    "kind": "module_statement",
+    "line": 170,
+    "end": 175,
+    "expression": "TASK_CONTEXTS = [(99, 600, 'Server personal', False), (99, 610, 'Group A', False), (101, 700, 'Foreign personal', False), (None, None, 'DM personal', True)]",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "tests/test_tasklist.py",
+    "kind": "module_statement",
+    "line": 234,
+    "end": 235,
+    "expression": "if __name__ == '__main__':\n    unittest.main()",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "tests/test_utils.py",
+    "kind": "module_statement",
+    "line": 7,
+    "end": 7,
+    "expression": "sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "tests/test_utils.py",
+    "kind": "module_statement",
+    "line": 70,
+    "end": 71,
+    "expression": "if __name__ == '__main__':\n    unittest.main()",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "update_changelog.py",
+    "kind": "module_statement",
+    "line": 32,
+    "end": 32,
+    "expression": "patch()",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "utils.py",
+    "kind": "module_statement",
+    "line": 12,
+    "end": 12,
+    "expression": "logger = logging.getLogger(__name__)",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "utils.py",
+    "kind": "module_statement",
+    "line": 14,
+    "end": 14,
+    "expression": "MIN_STAGE_MINUTES = 2",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "utils.py",
+    "kind": "module_statement",
+    "line": 15,
+    "end": 15,
+    "expression": "MAX_STAGE_MINUTES = 240",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "utils.py",
+    "kind": "module_statement",
+    "line": 16,
+    "end": 16,
+    "expression": "DEFAULT_SESSION_DURATION = 24 * 60 * 60",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "utils.py",
+    "kind": "module_statement",
+    "line": 17,
+    "end": 17,
+    "expression": "T = TypeVar('T')",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "utils.py",
+    "kind": "module_statement",
+    "line": 459,
+    "end": 474,
+    "expression": "KNOWN_BOT_DEV_PLACEHOLDERS: Set[str] = {'your_discord_user_id_here', 'your_user_id_here', 'your_id_here', 'discord_user_id_here', 'bot_developer_id_here', 'your_bot_developer_id', '123456789012345678', '1234567890123456789', 'placeholder', 'changeme', 'none', 'null', 'undefined', 'todo'}",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "utils.py",
+    "kind": "module_statement",
+    "line": 476,
+    "end": 476,
+    "expression": "DISCORD_SNOWFLAKE_MIN_DIGITS = 17",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "utils.py",
+    "kind": "module_statement",
+    "line": 477,
+    "end": 477,
+    "expression": "DISCORD_SNOWFLAKE_MAX_DIGITS = 20",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  },
+  {
+    "file": "utils.py",
+    "kind": "module_statement",
+    "line": 478,
+    "end": 478,
+    "expression": "DISCORD_SNOWFLAKE_MAX = (1 << 64) - 1",
+    "outcome": "source-reviewed",
+    "evidence": "Module source/guards/configuration inspected; production entrypoints not executed"
+  }
+]

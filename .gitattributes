@@ -12,6 +12,7 @@
 /AGENTS.md export-ignore
 /ARCHITECTURE.md export-ignore
 /database_architecture.md export-ignore
+/scripts/start-agents.ps1 export-ignore
 /CHANGELOG.md export-ignore
 /GEMINI.md export-ignore
 /HANDOFF.md export-ignore
