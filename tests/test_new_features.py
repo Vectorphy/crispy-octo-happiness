@@ -64,6 +64,7 @@ class TestPomodoroRatioAndFeatures(unittest.TestCase):
             mock_group = {
                 "id": 1,
                 "group_id": "grp-uuid-1",
+                "guild_id": 999,
                 "name": "Test Group",
                 "vc_id": 888,
                 "text_id": 555,
@@ -112,6 +113,7 @@ class TestPomodoroRatioAndFeatures(unittest.TestCase):
             bot.db.get_user_group.return_value = {
                 "id": 1,
                 "group_id": "grp-uuid-1",
+                "guild_id": 999,
                 "name": "Test Group",
                 "vc_id": 888,
                 "text_id": 555,
@@ -144,6 +146,7 @@ class TestPomodoroRatioAndFeatures(unittest.TestCase):
             mock_group = {
                 "id": 1,
                 "group_id": "grp-uuid-1",
+                "guild_id": 999,
                 "name": "Test Group",
                 "vc_id": 888,
                 "text_id": 555,

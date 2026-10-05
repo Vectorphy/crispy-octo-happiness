@@ -12,13 +12,18 @@ from typing import Any, Callable, Dict, List, Optional
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import Button, Select, View
+from discord.ui import Button, Select
 
+from cogs._access_policy import AccessView
+from cogs._access_policy import AccessView as View
+from cogs._invitations import initialize_invitation, service_for
 from cogs._session_controls import request_session_end
 from database import DBHandler
 from utils import (
     acknowledge_interaction,
     check_manager,
+    complete_operation,
+    guild_operation_locks,
     is_guild_manager,
     parse_duration,
     parse_mentions,
@@ -54,6 +59,7 @@ class CheckinInvitationView(View):
         super().__init__(timeout=3600)
         self.session = session
         self.invitee_id = invitee_id
+        initialize_invitation(self, session.cog.bot, "checkin", session, invitee_id)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.invitee_id:
@@ -105,6 +111,36 @@ class CheckinGuildSettings:
         self.whitelist_roles: List[int] = []
         self.blacklist_channels: List[int] = []
         self.blacklist_roles: List[int] = []
+
+    def state(self) -> dict[str, Any]:
+        return {
+            "version": 1,
+            **{
+                key: getattr(self, key)
+                for key in (
+                    "max_members",
+                    "min_duration",
+                    "max_duration",
+                    "max_absences",
+                    "max_breaks",
+                    "max_user_sessions",
+                    "permission_mode",
+                    "whitelist_channels",
+                    "whitelist_roles",
+                    "blacklist_channels",
+                    "blacklist_roles",
+                )
+            },
+        }
+
+    @classmethod
+    def from_state(cls, guild_id: int, state: dict[str, Any]) -> "CheckinGuildSettings":
+        settings = cls()
+        for key, value in DBHandler.validate_checkin_settings(state).items():
+            if key != "version":
+                setattr(settings, key, value)
+        settings.guild_id = guild_id
+        return settings
 
     def has_permission(self, user_id: int, channel_id: int, role_ids: List[int]) -> bool:
         """Checks if a user has permission based on the guild's settings."""
@@ -235,9 +271,14 @@ class CheckinGuildSettings:
                 return
             if cog.guild_settings is None:
                 cog.guild_settings = {}
-            if interaction.guild.id not in cog.guild_settings:
-                cog.guild_settings[interaction.guild.id] = CheckinGuildSettings(interaction)
-            guild_settings: CheckinGuildSettings = cog.guild_settings[interaction.guild.id]
+            try:
+                guild_settings = await cog._get_guild_settings(interaction.guild.id)
+            except (sqlite3.Error, OSError, RuntimeError, ValueError):
+                logger.exception("Check-in settings unavailable guild_id=%s", interaction.guild.id)
+                await interaction.response.send_message(
+                    "Check-in settings are unavailable; ask server staff to retry.", ephemeral=True
+                )
+                return
 
             # Bypass check for bot developer or server administrator
             is_dev = getattr(interaction.client, "bot_developer_id", None) == interaction.user.id
@@ -273,12 +314,19 @@ class CheckinGuildSettings:
                 await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
                 return
 
-            guild_settings: Optional[CheckinGuildSettings] = (
-                cog.guild_settings.get(interaction.guild.id) if cog.guild_settings else None
-            )
+            try:
+                guild_settings = await cog._get_guild_settings(interaction.guild.id)
+            except (sqlite3.Error, OSError, RuntimeError, ValueError):
+                logger.exception("Check-in settings unavailable guild_id=%s", interaction.guild.id)
+                await interaction.response.send_message(
+                    "Check-in settings are unavailable; ask server staff to retry.", ephemeral=True
+                )
+                return
             if guild_settings:
                 user_sessions_count = sum(
-                    interaction.user.id in session.member_ids for session in cog.active_sessions.values()
+                    interaction.user.id in session.member_ids
+                    for session in cog.active_sessions.values()
+                    if session.guild_id == interaction.guild.id
                 )
                 if user_sessions_count >= guild_settings.max_user_sessions:
                     await interaction.response.send_message(
@@ -489,16 +537,6 @@ class CheckinSession:
     ## Attendance Function - Increment Reminder Count
     def increment_reminder(self) -> None:
         self.reminder_count += 1
-        asyncio.create_task(
-            self.db.update_checkin_session(
-                {
-                    "session_id": self.session_id,
-                    "reminder_count": self.reminder_count,
-                    "last_reminder_message_id": self.last_reminder_message_id,
-                    "active": 1,
-                }
-            )
-        )
         logger.debug(f"Incremented reminder count to: {self.reminder_count}")
 
     ## Attendance Function - Move People to Absent
@@ -769,75 +807,72 @@ class CheckinSession:
     ## Message Function - Send Reminder Message
     async def run_checkin_reminders(self):
         try:
-            while self.session_id in self.cog.active_sessions:
+            while self.cog.active_sessions.get(self.session_id) is self:
                 # Calculate how much time to sleep until the next reminder
                 now = datetime.now().timestamp()
                 time_until_next_reminder = self.next_reminder_time - now
 
-                sleep_task = asyncio.create_task(asyncio.sleep(time_until_next_reminder))
-                end_event_task = asyncio.create_task(self.end_session_event.wait())
-
                 if time_until_next_reminder > 0:
-                    done, pending = await asyncio.wait(
-                        [sleep_task, end_event_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
+                    try:
+                        await asyncio.wait_for(self.end_session_event.wait(), timeout=time_until_next_reminder)
+                    except asyncio.TimeoutError:
+                        pass
 
                 # If the session has ended, break out of the loop
-                if self.end_session_event.is_set():
+                if self.end_session_event.is_set() or self.cog.active_sessions.get(self.session_id) is not self:
                     logger.info(f"Session {self.name} has been ended. Stopping reminders.")
                     return
 
-                # 1. Disable buttons of previous message
-                if self.last_reminder_message_id:
-                    await self.disable_previous_buttons()
-
-                # 2. Update Member statuses
-                await self.update_member_statuses()
-
-                # 3. If no members are left, the session is over
-                if not self.member_ids:
-                    embed = discord.Embed(
-                        title=f"Check-in Session: {self.name} ended",
-                        description="No more members are left in the session.",
-                        color=discord.Color.red(),
-                    )
-                    if self.guild:
-                        channel = self.guild.get_channel(self.text_id)
-                        if isinstance(channel, discord.TextChannel):
-                            await channel.send(embed=embed)
-                    logger.info(f"Session {self.name} and {self.session_id} ended due to no remaining members.")
-                    await self.clear_session_data()
-                    return  # Exit the loop
-
-                # 4. Send next reminder message
-                await self.send_reminder_message()
-
-                # 5. Update the reminder time
-                self.last_reminder_time = datetime.now().timestamp()
-                self.next_reminder_time = self.last_reminder_time + self.duration
-
-                # 6. Increment reminder count
-                self.increment_reminder()
-
-                # Update session in the db
-                await self.db.update_checkin_session(
-                    {
-                        "session_id": self.session_id,
-                        "last_reminder_time": self.last_reminder_time,
-                        "next_reminder_time": self.next_reminder_time,
-                        "reminder_count": self.reminder_count,
-                    }
-                )
-
-                logger.info(f"Reminder {self.reminder_count} sent with updated members.")
+                async with self.join_lock:
+                    if self.end_session_event.is_set() or self.cog.active_sessions.get(self.session_id) is not self:
+                        return
+                    if not await self._run_reminder_cycle():
+                        return
         except Exception as e:
             logger.error(f"Failed to send reminder message for session {self.session_id}: {str(e)}")
+
+    async def _run_reminder_cycle(self) -> bool:
+        if self.last_reminder_message_id:
+            await self.disable_previous_buttons()
+        await self.update_member_statuses()
+        if not self.member_ids:
+            embed = discord.Embed(
+                title=f"Check-in Session: {self.name} ended",
+                description="No more members are left in the session.",
+                color=discord.Color.red(),
+            )
+            if self.guild:
+                channel = self.guild.get_channel(self.text_id)
+                if isinstance(channel, discord.TextChannel):
+                    await channel.send(embed=embed)
+            logger.info("Check-in ended with no remaining members session_id=%s", self.session_id)
+            try:
+                await self.clear_session_data()
+            except (sqlite3.Error, RuntimeError, OSError):
+                logger.exception("Check-in cleanup pending session_id=%s guild_id=%s", self.session_id, self.guild_id)
+                self.next_reminder_time = datetime.now().timestamp() + self.duration
+                return True
+            return False
+        await self.send_reminder_message()
+        self.last_reminder_time = datetime.now().timestamp()
+        self.next_reminder_time = self.last_reminder_time + self.duration
+        self.increment_reminder()
+        await self.db.update_checkin_session(
+            {
+                "session_id": self.session_id,
+                "last_reminder_time": self.last_reminder_time,
+                "next_reminder_time": self.next_reminder_time,
+                "reminder_count": self.reminder_count,
+                "last_reminder_message_id": self.last_reminder_message_id,
+            }
+        )
+        logger.info("Check-in reminder saved session_id=%s reminder_count=%s", self.session_id, self.reminder_count)
+        return True
 
     """Button & Callback Functions"""
 
     ## Button Function - Create Buttons
-    def create_buttons(self, initial=False) -> discord.ui.View:
+    def create_buttons(self, initial=False) -> AccessView:
         try:
             # Create the buttons, Row 1
             present_button: Button[Any] = Button(label="Present", style=discord.ButtonStyle.green, row=1)
@@ -858,7 +893,8 @@ class CheckinSession:
             change_owner_button.callback = self.change_owner_callback  # type: ignore[method-assign]
 
             # Create View
-            view = discord.ui.View()
+            view = AccessView()
+            view.session = self
             # Row 1
             if not initial:
                 view.add_item(present_button)
@@ -872,7 +908,7 @@ class CheckinSession:
             return view
         except Exception as e:
             logger.error(f"Failed to create buttons: {str(e)}")
-            return discord.ui.View()
+            return AccessView()
 
     ## Button Function - Mark Present
     @CheckinGuildSettings.is_member
@@ -1196,6 +1232,7 @@ class CheckinSession:
             new_owner_select.callback = new_owner_callback  # type: ignore[method-assign,assignment]
 
             new_owner_view = View()
+            new_owner_view.session = self
             new_owner_view.add_item(new_owner_select)
 
             menu_msg = await send_response(
@@ -1249,6 +1286,10 @@ class CheckinSession:
             await send_response(interaction, "Failed to end this check-in.", ephemeral=True)
 
     async def _finish_end_session(self, interaction: discord.Interaction) -> None:
+        async with self.join_lock:
+            await self._finish_end_session_locked(interaction)
+
+    async def _finish_end_session_locked(self, interaction: discord.Interaction) -> None:
         if self.end_session_event.is_set() or self.cog.active_sessions.get(self.session_id) is not self:
             await send_response(interaction, "This check-in has already ended.", ephemeral=True)
             return
@@ -1257,8 +1298,6 @@ class CheckinSession:
             owner_member = self.guild.get_member(self.owner_id) if self.guild else None
             owner_str = owner_member.display_name if owner_member else f"User {self.owner_id}"
 
-            await self.disable_previous_buttons()
-
             embed = discord.Embed(
                 title=f"Check-in Session: {self.name} Ended",
                 description=f"The session has been manually ended by {interaction.user.display_name}.",
@@ -1266,18 +1305,6 @@ class CheckinSession:
             )
             embed.set_footer(text=f"Session owner: {owner_str}")
 
-            # Mark the session as inactive in the DB
-            await self.db.update_checkin_session(
-                {
-                    "session_id": self.session_id,
-                    "reminder_count": self.reminder_count,
-                    "last_reminder_message_id": self.last_reminder_message_id,
-                    "active": 0,
-                }
-            )
-
-            # Trigger the end of event to stop reminders
-            self.end_session_event.set()
             await self.clear_session_data()
             logger.info(f"Check-in session {self.session_id} successfully ended by {interaction.user.display_name}.")
             ephemeral = await should_use_ephemeral(interaction, self.db)
@@ -1295,25 +1322,22 @@ class CheckinSession:
 
     ## Helper Function - Clear Session Data
     async def clear_session_data(self):
-        # Clear all session data explicitly to avoid any future interaction
+        await complete_operation(self._clear_session_data())
+
+    async def _clear_session_data(self) -> None:
+        await self.db.delete_checkin_session(self.session_id)
+        self.end_session_event.set()
+        self.member_ids.clear()
+        self.member_statuses.clear()
+        self.reminder_count = 0
+        self.cog.active_sessions.pop(self.session_id, None)
         try:
-            # Delete session and members data from the database first
-            await self.db.delete_checkin_session(self.session_id)
-
-            # Clear in-memory session data
-            self.member_ids.clear()
-            self.member_statuses.clear()
+            await self.disable_previous_buttons()
+        except discord.HTTPException:
+            logger.warning("Ended check-in controls could not be disabled session_id=%s", self.session_id)
+        finally:
             self.last_reminder_message_id = None
-            self.reminder_count = 0
-
-            # Remove session from the active sessions list
-            self.cog.active_sessions.pop(self.session_id, None)
-
-            logger.debug(
-                f"Session data for session name {self.name} and Session ID: {self.session_id} cleared successfully."
-            )
-        except Exception as e:
-            logger.error(f"Failed to clear session data for session {self.session_id}: {str(e)}")
+        logger.info("Check-in state cleared session_id=%s guild_id=%s", self.session_id, self.guild_id)
 
 
 class CheckinCog(commands.Cog):
@@ -1322,14 +1346,72 @@ class CheckinCog(commands.Cog):
         self.db: DBHandler = bot.db
         self.active_sessions: Dict[str, CheckinSession] = {}
         self.guild_settings: Dict[int, CheckinGuildSettings] = {}
+        self._reminder_tasks: dict[str, asyncio.Task[None]] = {}
+        self._unloading = False
+        self._settings_locks = guild_operation_locks(bot)
+        self._load_lock = asyncio.Lock()
         logger.debug("Check-in Cog initialized.")
 
+    def _start_reminders(self, session: CheckinSession, *, delay: float = 0) -> None:
+        if self._unloading or session.session_id in self._reminder_tasks:
+            return
+
+        async def run() -> None:
+            try:
+                if isinstance(self.bot, commands.Bot):
+                    await self.bot.wait_until_ready()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                await session.run_checkin_reminders()
+            finally:
+                if self._reminder_tasks.get(session.session_id) is asyncio.current_task():
+                    self._reminder_tasks.pop(session.session_id, None)
+
+        self._reminder_tasks[session.session_id] = asyncio.create_task(run())
+
+    async def cog_unload(self) -> None:
+        self._unloading = True
+        await service_for(self.bot).close_kind("checkin")
+        tasks = list(self._reminder_tasks.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._reminder_tasks.clear()
+
     async def cog_load(self):
+        for guild_id in await self.db.get_checkin_settings_guild_ids():
+            try:
+                await self._get_guild_settings(guild_id)
+            except (sqlite3.Error, OSError, RuntimeError, ValueError):
+                logger.exception("Cannot restore check-in settings guild_id=%s", guild_id)
         await self.load_active_sessions_from_db()
         logger.info(f"Loaded {len(self.active_sessions)} active sessions from the database.")
 
+    async def _get_guild_settings(self, guild_id: int) -> CheckinGuildSettings:
+        async with self._settings_locks.setdefault(guild_id, asyncio.Lock()):
+            if guild_id not in self.guild_settings:
+                state = await self.db.get_checkin_guild_settings(guild_id)
+                settings = (
+                    CheckinGuildSettings.from_state(guild_id, state)
+                    if isinstance(state, dict)
+                    else CheckinGuildSettings()
+                )
+                settings.guild_id = guild_id
+                self.guild_settings[guild_id] = settings
+            return self.guild_settings[guild_id]
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        for session in self.active_sessions.values():
+            session.guild = self.bot.get_guild(session.guild_id)
+        await self.load_active_sessions_from_db()
+
     ## Function - Load Active Sessions from DB
     async def load_active_sessions_from_db(self):
+        async with self._load_lock:
+            await self._load_active_sessions_from_db()
+
+    async def _load_active_sessions_from_db(self):
         """
         Load all active check-in sessions from the database and start their reminder loops.
         """
@@ -1339,6 +1421,8 @@ class CheckinCog(commands.Cog):
 
             for session_data in active_sessions:
                 session_id = session_data["session_id"]
+                if session_id in self.active_sessions:
+                    continue
                 # Fetch member statuses from the database
                 member_statuses = await self.db.fetch_checkin_members(session_id)
 
@@ -1352,10 +1436,11 @@ class CheckinCog(commands.Cog):
                 }
 
                 guild_id = session_data["guild_id"]
-                if guild_id not in self.guild_settings:
-                    self.bot.get_guild(guild_id)
-                    self.guild_settings[guild_id] = CheckinGuildSettings(None)
-                this_guild_settings = self.guild_settings[guild_id]
+                try:
+                    this_guild_settings = await self._get_guild_settings(guild_id)
+                except (sqlite3.Error, OSError, RuntimeError, ValueError):
+                    logger.exception("Cannot restore check-in configuration guild_id=%s", guild_id)
+                    continue
 
                 # Create a new CheckinSession object
                 session = CheckinSession(
@@ -1375,6 +1460,7 @@ class CheckinCog(commands.Cog):
                 # Set session attributes
                 session.session_id = session_data["session_id"]
                 session.guild_id = session_data["guild_id"]
+                session.guild = self.bot.get_guild(guild_id)
                 session.creator_id = session_data["creator_id"]
                 session.owner_id = session_data.get("owner_id") or session.creator_id
                 session.text_id = (
@@ -1389,13 +1475,7 @@ class CheckinCog(commands.Cog):
                 # Add the session to active_sessions and start reminder loop
                 self.active_sessions[session.session_id] = session
 
-                # Staggered start for reminders (random small delay in background task)
-                async def start_staggered_reminder(s: CheckinSession) -> None:
-                    delay = random.uniform(5, 30)
-                    await asyncio.sleep(delay)
-                    await s.run_checkin_reminders()
-
-                asyncio.create_task(start_staggered_reminder(session))
+                self._start_reminders(session, delay=random.uniform(5, 30))
 
                 logger.info(
                     f"Loaded check-in session with name: {session.name} and ID: {session.session_id} from the database.\n And reminder loop started."
@@ -1461,6 +1541,34 @@ class CheckinCog(commands.Cog):
             return  # Exit if validation fails
 
         # Create a new session and save it
+        async with self._settings_locks.setdefault(interaction.guild.id, asyncio.Lock()):
+            settings = self.guild_settings[interaction.guild.id]
+            if not settings.min_duration <= duration_seconds <= settings.max_duration:
+                await send_response(
+                    interaction, "This reminder interval is outside the server's check-in limits.", ephemeral=True
+                )
+                return
+            if (
+                sum(
+                    interaction.user.id in session.member_ids
+                    for session in self.active_sessions.values()
+                    if session.guild_id == interaction.guild.id
+                )
+                >= settings.max_user_sessions
+            ):
+                await send_response(
+                    interaction, "You've reached the limit for active sessions you can join.", ephemeral=True
+                )
+                return
+            await self._start_checkin_locked(interaction, name, duration_seconds, member_ids, invitee_ids, ephemeral)
+
+    async def _register_checkin(self, session: CheckinSession) -> None:
+        await session.setup_checkin_resources()
+        self.active_sessions[session.session_id] = session
+        await session.send_reminder_message(initial=True)
+        self._start_reminders(session)
+
+    async def _start_checkin_locked(self, interaction, name, duration_seconds, member_ids, invitee_ids, ephemeral):
         try:
             session = CheckinSession(
                 db=self.bot.db,
@@ -1471,25 +1579,22 @@ class CheckinCog(commands.Cog):
                 duration=duration_seconds,
                 settings=self.guild_settings[interaction.guild.id],
             )
-            self.active_sessions[session.session_id] = session  # Store session by its ID
+            await complete_operation(self._register_checkin(session))
             channel_id = interaction.channel.id if interaction.channel else 0
             logger.info(
                 f"Check-in session with ID {session.session_id} started by {interaction.user.display_name} in channel {channel_id}."
             )
 
-            # Send the initial message with buttons
-            await session.setup_checkin_resources()
-            await session.send_reminder_message(initial=True)
-            asyncio.create_task(session.run_checkin_reminders())
             await send_response(interaction, f"Check-in session **{name}** started.", ephemeral=ephemeral)
             for invitee_id in invitee_ids:
                 member = interaction.guild.get_member(invitee_id)
                 if member is None:
                     continue
                 try:
-                    await member.send(
-                        f"You are invited to join the check-in **{name}**. Joining is optional.",
-                        view=CheckinInvitationView(session, invitee_id),
+                    await service_for(self.bot).send(
+                        CheckinInvitationView(session, invitee_id),
+                        actor_id=interaction.user.id,
+                        content=f"You are invited to join the check-in **{name}**. Joining is optional.",
                     )
                 except discord.HTTPException:
                     logger.warning(
@@ -1499,8 +1604,6 @@ class CheckinCog(commands.Cog):
                         invitee_id,
                     )
         except Exception as e:
-            if "session" in locals():
-                self.active_sessions.pop(session.session_id, None)
             logger.error(f"Error starting check-in session: {str(e)}")
             await send_response(interaction, "An error occurred while starting the check-in session.", ephemeral=True)
 
@@ -1551,8 +1654,16 @@ class CheckinCog(commands.Cog):
         guild_id = interaction.guild.id
 
         try:
-            if guild_id not in self.guild_settings:
-                self.guild_settings[guild_id] = CheckinGuildSettings(
+            async with self._settings_locks.setdefault(guild_id, asyncio.Lock()):
+                previous = self.guild_settings.get(guild_id)
+                if previous is None:
+                    stored = await self.db.get_checkin_guild_settings(guild_id)
+                    previous = (
+                        CheckinGuildSettings.from_state(guild_id, stored)
+                        if isinstance(stored, dict)
+                        else CheckinGuildSettings()
+                    )
+                settings = CheckinGuildSettings(
                     interaction=interaction,
                     max_members=max_members,
                     min_duration=min_duration,
@@ -1562,29 +1673,9 @@ class CheckinCog(commands.Cog):
                     max_user_sessions=max_user_sessions,
                     permission_mode=permission_mode,
                 )
-            else:
-                guild_settings: CheckinGuildSettings = self.guild_settings[guild_id]
-                guild_settings.max_members = max_members
-                guild_settings.min_duration = min_duration
-                guild_settings.max_duration = max_duration
-                guild_settings.max_absences = max_absences
-                guild_settings.max_breaks = max_breaks
-                guild_settings.max_user_sessions = max_user_sessions
-                guild_settings.permission_mode = permission_mode
-
-            # Optional - Save to database
-
-            """
-            await self.bot.db.update_checkin_settings(
-                guild_id = guild_id,
-                max_members = max_members,
-                min_duration = min_duration,
-                max_duration = max_duration,
-                max_absences = max_absences,
-                max_breaks = max_breaks,
-                max_user_sessions = max_user_sessions
-            )
-            """
+                for key in ("whitelist_channels", "whitelist_roles", "blacklist_channels", "blacklist_roles"):
+                    setattr(settings, key, list(getattr(previous, key)))
+                await complete_operation(self._commit_checkin_settings(guild_id, settings))
 
             # Provide feedback to the user
             response = (
@@ -1600,13 +1691,24 @@ class CheckinCog(commands.Cog):
             await send_response(interaction, response, ephemeral=ephemeral)
             logger.info(f"Updated Check-in settings for guild {guild_id} by user {interaction.user.id}")
 
-        except Exception as e:
-            logger.error(f"Error updating check-in settings: {str(e)}")
+        except (sqlite3.Error, discord.HTTPException, RuntimeError, OSError, ValueError):
+            logger.exception("Error updating check-in settings guild_id=%s user_id=%s", guild_id, interaction.user.id)
             await send_response(
                 interaction,
                 "An error occurred while updating the check-in settings.",
                 ephemeral=True,
             )
+
+    async def _commit_checkin_settings(self, guild_id: int, settings: CheckinGuildSettings) -> None:
+        validated = CheckinGuildSettings.from_state(guild_id, settings.state())
+        await self.db.save_checkin_guild_settings(guild_id, validated.state())
+        self.guild_settings[guild_id] = validated
+        for session in list(self.active_sessions.values()):
+            if session.guild_id == guild_id:
+                async with session.join_lock:
+                    session.max_members = validated.max_members
+                    session.max_absences = validated.max_absences
+                    session.max_breaks = validated.max_breaks
 
 
 """Setup Bot"""

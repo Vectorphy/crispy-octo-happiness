@@ -79,7 +79,7 @@ The group dashboard retains group controls and Pomodoro/check-in status fields. 
   - By default, tasks are scoped to the current server and active group (or global server tasks outside groups). Set `all_groups:True` to list your tasks across all groups and servers.
   - Note: `all_groups:True` results are always sent ephemerally to prevent channel clutter.
 
-- `/task_purge [all_tasks]`: Delete your tasks in the current group with one database operation.
+- `/task_purge [all_tasks]`: Delete your tasks in the current group or server with one database operation. In DMs, the default deletes only your personal tasks without a server or group scope.
   - Set `all_tasks:True` to delete your tasks across every group and server, including global tasks. Its result is always private.
   - Also checks the latest 100 messages in the current text channel and removes matching bot task messages attributed to you. Cleanup failure is reported after the task records are deleted.
 
@@ -103,13 +103,14 @@ Task command results follow the response visibility rules below and work in DMs.
 ## Management & Authorization
 
 ### Authorization Tiers
-- **Level 4 — Bot Developer**: Configured developer or an explicit developer grant; overrides lower levels.
+- **Level 5 — Supreme Commander**: Only `BOT_DEVELOPER_ID` from `.env`; global authority with guild-scoped activity and settings.
+- **Level 4 — Bot Developer**: Explicit grant for this guild; overrides lower levels only within that guild.
 - **Level 3 — Manager / Admin / Mod**: Bot-added grants display Manager. Native/server-synced owners and administrators display Admin; native moderators display Mod. Moderator permissions include `manage_channels`, `manage_roles`, `moderate_members`, `kick_members`, or `ban_members`. Role names alone never grant access.
 - **Level 2 — `{group_name} Owner`**: Current owner of the active study group in the invocation channel.
 - **Level 1 — `{group_name} Group Member`**: Verified member of that contextual group.
 - **Level 0 — Server Member**: Baseline participant.
 
-The highest applicable level wins: 4 > 3 > 2 > 1 > 0. Outside active group channels, `/user_level` reports only server/global authority. Historical manager grants retain explicit provenance; server sync removes stale grants that it created without removing explicit grants.
+The highest applicable level wins: 5 > 4 > 3 > 2 > 1 > 0. Outside active group channels, `/user_level` reports only guild authority or the configured Supreme Commander. Historical null-guild developer grants no longer confer guild authority; regrant developers explicitly in each intended guild. Server sync removes stale grants that it created without removing explicit guild grants.
 
 ### Management Commands
 
@@ -119,24 +120,25 @@ The highest applicable level wins: 4 > 3 > 2 > 1 > 0. Outside active group chann
   - `max_members`: Optional starting value for the default group limit (1–50).
   - `category`: Optional starting selection for an existing category.
   - `default_vc`: Optional starting selection for an existing voice channel destination for non-compliant video relocations.
+  - The wizard also offers an optional required access role. Select an existing role, create one, or clear the selection to leave the bot unrestricted. Nobody is automatically enrolled. A selected role is required for guild commands and controls, including staff and the Supreme Commander; authorized Setup stays accessible to repair this configuration. A missing configured role blocks use until Setup is updated. Personal task commands remain available in DMs.
   - Category and default voice channel choices remain staged until Save. The wizard provides an interactive `VoiceSelect` dropdown to choose an existing voice channel. Save creates the commands, logs, and default voice channels or reuses their recorded channels in the chosen category, then stores the category, channel IDs, member limit, default VC ID, and default lifetimes together. Choose Edit lifetimes to stage positive durations such as `24h` or `1d 12h`; both default to 24 hours and affect new groups or Pomodoros. Cancel or expiry leaves saved settings unchanged; controls reject changes and cancellation while Save is in progress.
-  - Commands, logs, default VC, and new group channels inherit the selected category permissions. The bot requires View Channel, Connect, and Move Members permissions on the default voice channel to relocate non-compliant video members. Configure category visibility to control who can read logs. Logs record group creation, ending, and purges. They do not stream the bot's runtime output.
-  - Save also creates or reuses `CPO Manager` and `CPO Bot Developer` roles and synchronizes staff membership and category/channel access. These roles receive scoped CPO channel permissions, without guild-wide Administrator permission. The bot needs Manage Roles and a higher role position. Saved grants remain recorded if Discord role sync fails; the reply reports the failure.
-  - Reusing recorded channels can move them into a newly selected category with `sync_permissions=True`, including channels already in the category whose permissions differ. If a Save attempt changes Discord resources but cannot store the settings, retry Save, review the retained IDs, or click the **Recover** button to discard uncommitted resources and restore moved channels. Resource recovery performs explicit ownership checks to verify resources were created in the current session, skips any IDs actively recorded in database settings or study groups, and restores moved channels without deleting them.
+  - Commands, default VC, and new group channels inherit the selected category permissions. Logs have separate private permissions for current Levels 3–5 and required bot access. Logs record group creation, ending, and purges. They do not stream the bot's runtime output. The bot requires View Channel, Connect, and Move Members permissions on the default voice channel to relocate non-compliant video members.
+  - After storing settings, Save creates or reuses `CPO Manager` and `CPO Bot Developer` roles and synchronizes staff membership and category/channel access. These roles receive scoped CPO channel permissions, without guild-wide Administrator permission. The bot needs Manage Roles and a higher role position. A role-sync failure leaves saved defaults intact and records pending synchronization for startup, `/sync_managers`, or `/setup` retry.
+  - Reusing recorded channels can move them into a newly selected category. If Save changes resources but cannot store settings, retry Save or use **Recover** to remove uncommitted resources and restore original categories and permissions. Recovery survives restart, checks current authority and ownership, and retains resources whose permissions, settings, or ownership changed. Unconfirmed creation needs a unique matching bot audit entry; ambiguous evidence remains pending for review. Committed settings are never rolled back.
 - `/set_group_category <category>`: Set the category used by `/create_group` (Moderator or higher).
 - `/set_mod_log_channel [channel]`: Save a channel for group creation, ending, and purge event embeds (server manager).
-  - Omit `channel` to disable logging. Event embeds identify the group and actor without sending mentions. Missing channels or Discord send failures are logged locally.
+  - The selected channel receives private permissions for current Levels 3–5 and the bot before it is saved. Omit `channel` to disable logging. Event embeds identify the group and actor without sending mentions. Missing channels or Discord send failures are logged locally.
 - `/sync_commands [guild_only: bool = False]`: Synchronize application slash commands with Discord (staff only; runtime authorization enforced).
   - `guild_only`: When `True`, synchronizes slash commands to the current server; when `False`, syncs globally.
 
 - `/user_level [user: Optional[discord.Member]]`: Check the authorization level and tier of any member (Visible to all)
   - `user`: Optional member to inspect (defaults to yourself). Returns a fixed-title authorization embed with the member, contextual tier label, and numeric level. A display name is never used as the authorization level.
 
-- `/add_bot_developer <user>`: Add a bot developer (Bot Developer only).
-  - `user`: The user to promote to bot developer.
+- `/add_bot_developer <user>`: Add a developer in the current guild (Level 4 or Supreme Commander).
+  - `user`: The user to promote to Level 4 in this guild. The grant does not apply to other guilds.
 
-- `/remove_bot_developer <user>`: Remove a bot developer (Bot Developer only).
-  - `user`: The user to remove as a bot developer. The primary bot developer cannot be removed.
+- `/remove_bot_developer <user>`: Remove a developer grant in the current guild (Level 4 or Supreme Commander).
+  - `user`: The user whose guild developer grant is removed. The configured Supreme Commander cannot be removed by a command.
 
 - `/add_guild_manager <user>`: Add a guild manager (Level 3 staff or Bot Developer).
   - `user`: The user to promote to administrator/manager.
@@ -145,11 +147,11 @@ The highest applicable level wins: 4 > 3 > 2 > 1 > 0. Outside active group chann
   - `user`: The user to demote from manager status.
 
 - `/list_managers`: List all managers and staff for this server (Moderator / Admin permission required)
-  - Includes newly added guild managers and global bot developers immediately, even if the user is not cached. A user appears once at their highest grant; large lists span multiple embeds without truncating entries. The configured bot developer is included too.
+  - Includes this guild's managers and developers immediately, even if the user is not cached, plus the configured Supreme Commander. A user appears once at their highest applicable grant; large lists span multiple embeds without truncating entries.
 
 - `/set_permission_level <user> <level>`: Set the permission level for a user (Bot Developer only)
   - `user`: The user to set permissions for.
-  - `level`: 0 removes the server grant, 3 grants Manager, and 4 grants Bot Developer. Levels 1 and 2 come from contextual group membership and ownership and cannot be assigned by this command.
+  - `level`: 0 removes this guild's grant, 3 grants Manager, and 4 grants Bot Developer in this guild. Levels 1 and 2 come from contextual group membership and ownership. Level 5 comes only from `.env` and cannot be assigned by this command.
 
 - `/sync_managers`: Synchronize server owner and moderators (Level 3 staff or Bot Developer).
   - Scans native guild permissions and records server owners, administrators, and moderators at Level 3 with `server_sync` provenance. Explicit bot-added grants are preserved.

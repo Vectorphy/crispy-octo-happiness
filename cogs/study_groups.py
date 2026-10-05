@@ -9,15 +9,21 @@ from typing import Any, List, Optional, Union
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
-from discord.ui import Button, Modal, TextInput, View
+from discord.ui import Button, TextInput
 
+from cogs._access_policy import AccessModal as Modal
+from cogs._access_policy import AccessView
+from cogs._access_policy import AccessView as View
+from cogs._invitations import initialize_invitation, service_for
 from cogs._session_controls import request_session_end
+from cogs._staff_roles import StaffRoleSyncError, log_overwrites, sync_log_privacy
 from cogs._voice_relocation import relocate_to_default_vc
 from database import DBHandler
 from utils import (
     DEFAULT_SESSION_DURATION,
     acknowledge_interaction,
     check_manager,
+    guild_operation_locks,
     has_guild_permissions,
     parse_mentions,
     parse_seconds_to_hms,
@@ -31,12 +37,13 @@ logger = logging.getLogger(__name__)
 current_namespace = sys.modules[__name__].__name__.split(".")[-1]
 
 
-class GroupInvitationView(discord.ui.View):
+class GroupInvitationView(AccessView):
     def __init__(self, group: "StudyGroup", user_id: int):
         super().__init__(timeout=300)
         self.group = group
         self.user_id = user_id
         self.action_lock = asyncio.Lock()
+        initialize_invitation(self, group.cog.bot, "group", group, user_id)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.user_id:
@@ -48,7 +55,8 @@ class GroupInvitationView(discord.ui.View):
     async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self.interaction_check(interaction):
             return
-        await interaction.response.defer()
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         async with self.action_lock:
             if self.is_finished() or not self.group.active or not self.group.guild:
                 await interaction.edit_original_response(
@@ -92,7 +100,8 @@ class GroupInvitationView(discord.ui.View):
     async def decline_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self.interaction_check(interaction):
             return
-        await interaction.response.defer()
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         async with self.action_lock:
             if self.is_finished():
                 return
@@ -221,6 +230,7 @@ class StudyGroup:
             )
             voice_channel = await category.create_voice_channel(
                 name=f"{self.name}-voice"[:100],
+                user_limit=min(99, max(1, self.max_members)),
                 overwrites=category.overwrites,
                 reason="Voice channel for study group",
             )
@@ -296,7 +306,7 @@ class StudyGroup:
             logger.info(f"StudyGroup '{self.name}' saved to the database.")
         except Exception as e:
             self.active = False
-            asyncio.create_task(self.end_group())
+            await self.end_group(delay=0)
             logger.error(f"Failed to save StudyGroup '{self.name}' to the database: {e}")
             return f"Failed to save StudyGroup '{self.name}' to the database."
 
@@ -348,7 +358,7 @@ class StudyGroup:
             elif member is None or role is None:
                 error = "The member or study group role is unavailable."
             else:
-                joined_count = await self.db.get_user_joined_group_count(user_id)
+                joined_count = await self.db.get_user_joined_group_count(user_id, self.guild_id)
                 if joined_count >= 5:
                     error = "You can only join a maximum of 5 groups."
 
@@ -630,6 +640,7 @@ class StudyGroup:
 
             # Create View and add all components
             self.view = View()
+            self.view.group = self
             self.view.add_item(leave_button)
             self.view.add_item(end_button)
             self.view.add_item(transfer_button)
@@ -672,7 +683,7 @@ class StudyGroup:
     async def disable_buttons(self, message: discord.Message) -> None:
         ### Disable all buttons in the given message
         try:
-            view = discord.ui.View.from_message(message)
+            view = AccessView.from_message(message)
             for item in view.children:
                 if isinstance(item, (discord.ui.Button, discord.ui.Select)):
                     item.disabled = True
@@ -749,11 +760,15 @@ class StudyGroup:
             pomo_session = None
             if pomo_cog:
                 pomo_session = pomo_cog.sessions.get(self.group_id)
+                if pomo_session is not None and pomo_session.guild_id != self.guild_id:
+                    pomo_session = None
                 if not pomo_session:
                     for s in pomo_cog.sessions.values():
                         s_group_id = str(getattr(s, "group_id", ""))
                         s_text_id = getattr(s, "text_id", None)
-                        if s_group_id == str(self.group_id) or (s_text_id is not None and s_text_id == self.text_id):
+                        if s.guild_id == self.guild_id and (
+                            s_group_id == str(self.group_id) or (s_text_id is not None and s_text_id == self.text_id)
+                        ):
                             pomo_session = s
                             break
 
@@ -785,7 +800,7 @@ class StudyGroup:
             checkin_session = None
             if checkin_cog:
                 for s in checkin_cog.active_sessions.values():
-                    if s.text_id == self.text_id:
+                    if s.guild_id == self.guild_id and s.text_id == self.text_id:
                         checkin_session = s
                         break
 
@@ -993,6 +1008,7 @@ class StudyGroup:
                     await study_group_ref.transfer_ownership(select_interaction, selected_user.id)
 
             view = View(timeout=120)
+            view.group = self
             view.add_item(TransferUserSelect())
             await interaction.response.send_message(
                 "Select the user you want to transfer group ownership to:",
@@ -1286,7 +1302,8 @@ class StudyGroup:
                 user_id,
             )
         finally:
-            self.video_enforcement_tasks.pop(user_id, None)
+            if self.video_enforcement_tasks.get(user_id) is asyncio.current_task():
+                self.video_enforcement_tasks.pop(user_id, None)
 
     async def handle_voice_state_update(self, member: discord.Member, before, after) -> None:
         if not self.active or self.video_mode != "force" or member.bot:
@@ -1418,7 +1435,9 @@ class StudyGroup:
             if pomo_cog:
                 sessions = {id(session): session for session in pomo_cog.sessions.values()}
                 for session in sessions.values():
-                    if str(session.group_id) == str(group_id) or session.text_id == self.text_id:
+                    if session.guild_id == self.guild_id and (
+                        str(session.group_id) == str(group_id) or session.text_id == self.text_id
+                    ):
                         await pomo_cog._remove_session(session)
 
             async with self.membership_lock:
@@ -1640,8 +1659,8 @@ class StudyGroup:
             description=f"You are invited to **{self.name}**. Choose Join to become a member.",
         )
         try:
-            await invited_member.send(embed=embed, view=view)
-        except discord.HTTPException:
+            await service_for(self.cog.bot).send(view, actor_id=interaction.user.id, embed=embed)
+        except (discord.HTTPException, ValueError, RuntimeError, sqlite3.Error, OSError):
             view.stop()
             logger.exception(
                 "Invitation DM failed guild_id=%s group_id=%s user_id=%s",
@@ -1664,16 +1683,37 @@ class StudyGroupCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.active_study_groups = {}
-        self._creation_locks: dict[int, asyncio.Lock] = {}
+        self._creation_locks = guild_operation_locks(bot)
+        self._monitor_tasks: set[asyncio.Task[Any]] = set()
+        self._unloading = False
         logger.info("Study Group cog initialized")
+
+    def _start_group_monitor(self, group: StudyGroup) -> None:
+        if self._unloading:
+            return
+        task = asyncio.create_task(group.check_end_condition())
+        self._monitor_tasks.add(task)
+        task.add_done_callback(self._monitor_tasks.discard)
 
     async def cog_load(self) -> None:
         if not self.cleanup_retry_loop.is_running():
             self.cleanup_retry_loop.start()
 
     async def cog_unload(self) -> None:
-        if self.cleanup_retry_loop.is_running():
+        self._unloading = True
+        await service_for(self.bot).close_kind("group")
+        tasks = set(self._monitor_tasks)
+        retry = self.cleanup_retry_loop.get_task()
+        if retry is not None:
             self.cleanup_retry_loop.cancel()
+            tasks.add(retry)
+        for group in list(self.active_study_groups.values()):
+            tasks.update(group.video_enforcement_tasks.values())
+            group._cancel_video_enforcement()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._monitor_tasks.clear()
 
     @tasks.loop(minutes=10)
     async def cleanup_retry_loop(self) -> None:
@@ -1888,12 +1928,44 @@ class StudyGroupCog(commands.Cog):
         if channel is not None and channel.guild.id != interaction.guild.id:
             await send_response(interaction, "Choose a log channel in this server.", ephemeral=True)
             return
+        async with self._creation_locks.setdefault(interaction.guild.id, asyncio.Lock()):
+            await self._set_mod_log_channel_locked(interaction, channel, ephemeral)
+
+    async def _set_mod_log_channel_locked(self, interaction, channel, ephemeral: bool) -> None:
+        if channel is not None:
+            try:
+                channel = await self._configuration_resource(interaction.guild, channel, discord.TextChannel)
+                await channel.edit(
+                    overwrites=await log_overwrites(self.bot, interaction.guild, channel.overwrites),
+                    reason="CPO private moderator logs",
+                )
+            except (StaffRoleSyncError, discord.HTTPException, sqlite3.Error, OSError, RuntimeError, ValueError):
+                logger.exception(
+                    "Cannot configure private moderator log guild_id=%s channel_id=%s", interaction.guild.id, channel.id
+                )
+                await send_response(
+                    interaction, "Could not secure the log channel. Check bot permissions and retry.", ephemeral=True
+                )
+                return
         await self.bot.db.set_mod_log_channel(interaction.guild.id, channel.id if channel else None)
         await send_response(
             interaction,
             f"Action log channel set to {channel.mention}." if channel else "Action logging disabled.",
             ephemeral=ephemeral,
         )
+
+    async def _configuration_resource(self, guild, resource, kind):
+        journal = await self.bot.db.get_setup_recovery_journal(guild.id)
+        if isinstance(journal, dict) and journal["phase"] == "prepared":
+            if any(
+                entry.get("id") == resource.id and entry["status"] != "recovered"
+                for entry in journal["state"]["mutations"].values()
+            ):
+                raise RuntimeError("Recover the pending setup before reusing its resources")
+        current = await self.bot.fetch_channel(resource.id)
+        if not isinstance(current, kind) or current.guild.id != guild.id:
+            raise RuntimeError("The selected resource is no longer available in this server")
+        return current
 
     async def log_mod_action(self, guild, action, group_id, name, actor_id=None):
         try:
@@ -1911,8 +1983,11 @@ class StudyGroupCog(commands.Cog):
         embed.add_field(name="Group", value=str(group_id)[:1024])
         embed.add_field(name="Actor", value=f"<@{actor_id}>" if actor_id else "Automatic cleanup")
         try:
+            channel = await sync_log_privacy(self.bot, guild)
+            if channel is None:
+                return
             await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-        except discord.HTTPException:
+        except (StaffRoleSyncError, discord.HTTPException, sqlite3.Error, OSError, RuntimeError, ValueError):
             logger.exception(
                 "Moderator action log failed guild_id=%s group_id=%s user_id=%s", guild.id, group_id, actor_id
             )
@@ -1958,7 +2033,18 @@ class StudyGroupCog(commands.Cog):
                 )
                 return
 
-        await self.bot.db.update_group_category(interaction.guild.id, category.id)
+        async with self._creation_locks.setdefault(interaction.guild.id, asyncio.Lock()):
+            try:
+                category = await self._configuration_resource(interaction.guild, category, discord.CategoryChannel)
+                await self.bot.db.update_group_category(interaction.guild.id, category.id)
+            except (discord.HTTPException, sqlite3.Error, OSError, RuntimeError, ValueError):
+                logger.exception(
+                    "Cannot set group category guild_id=%s category_id=%s", interaction.guild.id, category.id
+                )
+                await send_response(
+                    interaction, "Could not select that category. Recover pending setup and retry.", ephemeral=True
+                )
+                return
         await send_response(
             interaction, f"Default study group category set to **{category.name}**.", ephemeral=ephemeral
         )
@@ -1996,7 +2082,7 @@ class StudyGroupCog(commands.Cog):
     ) -> None:
         assert interaction.guild is not None
 
-        created_count = await self.bot.db.get_user_created_group_count(interaction.user.id)
+        created_count = await self.bot.db.get_user_created_group_count(interaction.user.id, interaction.guild.id)
         if created_count >= 3:
             await send_response(interaction, "You can only create a maximum of 3 groups.", ephemeral=True)
             return
@@ -2059,7 +2145,7 @@ class StudyGroupCog(commands.Cog):
 
         if study_group.active:
             # If the setup was successful, start the end-condition check
-            asyncio.create_task(study_group.check_end_condition())
+            self._start_group_monitor(study_group)
             await self.log_mod_action(
                 interaction.guild, "Study group created", study_group.group_id, study_group.name, interaction.user.id
             )
@@ -2700,7 +2786,7 @@ class StudyGroupCog(commands.Cog):
         group.video_mode = record.get("video_mode") or "off"
         group.video_timer = record.get("video_timer") or 60
         self.active_study_groups[group_id] = group
-        asyncio.create_task(group.check_end_condition())
+        self._start_group_monitor(group)
         logger.info("Study group hydrated for invite guild_id=%s group_id=%s", guild.id, group_id)
         return group
 

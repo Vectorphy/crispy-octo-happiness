@@ -65,7 +65,7 @@ class TestDBHandler(unittest.TestCase):
 
         asyncio.run(run_test())
 
-    def test_manager_grants_keep_global_developers_and_guild_staff_distinct(self):
+    def test_legacy_global_developers_remain_inert_and_guild_staff_distinct(self):
         async def run_test():
             await self.db.connect()
             await self.db.add_manager(123, 101, 3)
@@ -77,11 +77,11 @@ class TestDBHandler(unittest.TestCase):
             guild_managers = await self.db.get_all_managers(101)
             self.assertEqual(
                 {(row["user_id"], row["guild_id"], row["permission_level"]) for row in guild_managers},
-                {(123, 101, 3), (123, None, 4), (456, 101, 3)},
+                {(123, 101, 3), (456, 101, 3)},
             )
-            self.assertEqual(len(guild_managers), 3)
-            self.assertEqual((await self.db.get_manager(123, 101))["permission_level"], 4)
-            self.assertEqual((await self.db.get_manager(123, 102))["permission_level"], 4)
+            self.assertEqual(len(guild_managers), 2)
+            self.assertEqual((await self.db.get_manager(123, 101))["permission_level"], 3)
+            self.assertIsNone(await self.db.get_manager(123, 102))
             self.assertIsNone(await self.db.get_manager(456, 102))
 
             await self.db.add_manager(456, 101, 3)
@@ -138,7 +138,7 @@ class TestDBHandler(unittest.TestCase):
             self.assertEqual((await self.db.get_manager(20, 101))["grant_source"], "explicit")
             self.assertEqual((await self.db.get_manager(50, 101))["grant_source"], "server_sync")
             self.assertEqual((await self.db.get_manager(30, 102))["grant_source"], "server_sync")
-            self.assertEqual((await self.db.get_manager(10, 102))["permission_level"], 4)
+            self.assertIsNone(await self.db.get_manager(10, 102))
 
             await self.db.add_manager(50, 101, 2)
             await self.db.sync_guild_manager_grants(101, {})

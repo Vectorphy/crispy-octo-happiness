@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 MANAGER_ROLE_NAME = "CPO Manager"
 DEVELOPER_ROLE_NAME = "CPO Bot Developer"
+SUPREME_ROLE_NAME = "CPO Supreme Commander"
 
 _COMMON_ACCESS = (
     "view_channel",
@@ -31,11 +32,73 @@ _MANAGER_ACCESS = (
     "deafen_members",
 )
 _DEVELOPER_ACCESS = ("manage_roles", "manage_webhooks")
-_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+def _staff_lock(bot: Any, guild_id: int) -> asyncio.Lock:
+    locks = bot.__dict__.setdefault("_staff_role_locks", {})
+    return locks.setdefault(guild_id, asyncio.Lock())
 
 
 class StaffRoleSyncError(RuntimeError):
     """A saved staff grant could not be reflected in Discord roles or channels."""
+
+
+async def log_overwrites(
+    bot: Any, guild: discord.Guild, overwrites: Any, *, staff: bool = True
+) -> dict[Any, discord.PermissionOverwrite]:
+    """Use member grants so stale CPO role membership cannot expose logs."""
+    result = {}
+    for target, existing in overwrites.items():
+        overwrite = discord.PermissionOverwrite.from_pair(*existing.pair())
+        overwrite.update(view_channel=False)
+        result[target] = overwrite
+    default = result.get(guild.default_role, discord.PermissionOverwrite())
+    default.update(view_channel=False)
+    result[guild.default_role] = default
+    for role in guild.roles:
+        if role.name in (MANAGER_ROLE_NAME, DEVELOPER_ROLE_NAME, SUPREME_ROLE_NAME):
+            access = result.get(role, discord.PermissionOverwrite())
+            access.update(view_channel=False)
+            result[role] = access
+    if guild.me is None:
+        raise StaffRoleSyncError("The bot member is unavailable; log privacy cannot be configured.")
+    bot_access = result.get(guild.me, discord.PermissionOverwrite())
+    bot_access.update(view_channel=True, send_messages=True, embed_links=True, read_message_history=True)
+    result[guild.me] = bot_access
+    if staff:
+        records = await bot.db.get_all_managers(guild.id)
+        members = {member.id: member for member in guild.members}
+        for record in records:
+            member = guild.get_member(int(record["user_id"]))
+            if member is not None:
+                members[member.id] = member
+        for member in members.values():
+            if await has_guild_permissions(member, guild, bot):
+                access = result.get(member, discord.PermissionOverwrite())
+                access.update(view_channel=True, read_message_history=True)
+                result[member] = access
+    return result
+
+
+async def sync_log_privacy(bot: Any, guild: discord.Guild, *, staff: bool = True) -> discord.TextChannel | None:
+    async with _staff_lock(bot, guild.id):
+        return await _sync_log_privacy_locked(bot, guild, staff=staff)
+
+
+async def _sync_log_privacy_locked(bot: Any, guild: discord.Guild, *, staff: bool) -> discord.TextChannel | None:
+    log_id = await bot.db.get_mod_log_channel(guild.id)
+    if not isinstance(log_id, int):
+        return None
+    channel: Any = guild.get_channel(log_id)
+    if channel is None:
+        channel = await bot.fetch_channel(log_id)
+    if not isinstance(channel, discord.TextChannel) or channel.guild.id != guild.id:
+        raise StaffRoleSyncError("The saved log channel is unavailable in this server.")
+    sealed = await log_overwrites(bot, guild, channel.overwrites, staff=False)
+    channel = await channel.edit(overwrites=sealed, reason="CPO log privacy") or channel
+    if staff:
+        await channel.edit(overwrites=await log_overwrites(bot, guild, sealed), reason="CPO log staff access")
+    return channel
 
 
 def _member_in_guild(member: discord.Member | None, guild: discord.Guild) -> bool:
@@ -76,7 +139,8 @@ async def sync_staff_roles(
     if category.guild.id != guild.id:
         raise StaffRoleSyncError("Choose a CPO category from this server before syncing staff roles.")
 
-    async with _LOCKS.setdefault(guild.id, asyncio.Lock()):
+    async with _staff_lock(bot, guild.id):
+        log_channel = await _sync_log_privacy_locked(bot, guild, staff=False)
         me = guild.me
         if me is None or not me.guild_permissions.manage_roles:
             raise StaffRoleSyncError(
@@ -84,7 +148,8 @@ async def sync_staff_roles(
             )
         manager_role = discord.utils.get(guild.roles, name=MANAGER_ROLE_NAME)
         developer_role = discord.utils.get(guild.roles, name=DEVELOPER_ROLE_NAME)
-        for role in (manager_role, developer_role):
+        supreme_role = discord.utils.get(guild.roles, name=SUPREME_ROLE_NAME)
+        for role in (manager_role, developer_role, supreme_role):
             if role is not None and me.top_role.position <= role.position:
                 raise StaffRoleSyncError(
                     f"Move the bot's highest role above {role.name} (ID {role.id}), then retry CPO staff role sync."
@@ -101,26 +166,37 @@ async def sync_staff_roles(
                 member = guild.get_member(user_id)
                 if not _member_in_guild(member, guild) or not await has_guild_permissions(member, guild, bot):
                     continue
-            if level == 4 and (grant_guild_id is None or grant_guild_id == guild.id):
+            if level == 4 and grant_guild_id == guild.id:
                 developer_ids.add(user_id)
-            elif level >= 3 and grant_guild_id == guild.id:
+            elif level == 3 and grant_guild_id == guild.id:
                 manager_ids.add(user_id)
+        supreme_ids: set[int] = set()
         configured_developer_id = getattr(bot, "bot_developer_id", None)
         if isinstance(configured_developer_id, int) and configured_developer_id > 0:
-            developer_ids.add(configured_developer_id)
-        manager_ids -= developer_ids
+            supreme_ids.add(configured_developer_id)
+        developer_ids -= supreme_ids
+        manager_ids -= developer_ids | supreme_ids
 
         try:
             manager_role = await _ensure_role(guild, MANAGER_ROLE_NAME)
             developer_role = await _ensure_role(guild, DEVELOPER_ROLE_NAME)
-            for role in (manager_role, developer_role):
+            supreme_role = await _ensure_role(guild, SUPREME_ROLE_NAME)
+            roles = ((manager_role, False), (developer_role, True), (supreme_role, True))
+            for role, _ in roles:
                 if me.top_role.position <= role.position:
                     raise StaffRoleSyncError(
                         f"Move the bot's highest role above {role.name} (ID {role.id}), then retry CPO staff role sync."
                     )
 
+            if log_channel is not None:
+                sealed = await log_overwrites(bot, guild, log_channel.overwrites, staff=False)
+                log_channel = await log_channel.edit(overwrites=sealed, reason="CPO log privacy") or log_channel
+                # Discord propagates category edits whenever the overwrite maps match.
+                if sealed == category.overwrites:
+                    raise StaffRoleSyncError("The log channel needs independent private permissions before staff sync.")
+
             category_overwrites = dict(category.overwrites)
-            for role, developer in ((manager_role, False), (developer_role, True)):
+            for role, developer in roles:
                 overwrite = category_overwrites.get(role, discord.PermissionOverwrite())
                 for permission in _COMMON_ACCESS + _MANAGER_ACCESS:
                     setattr(overwrite, permission, True)
@@ -132,24 +208,44 @@ async def sync_staff_roles(
                 updated_category = category
 
             for channel in category.channels:
-                for role, developer in ((manager_role, False), (developer_role, True)):
+                if log_channel is not None and channel.id == log_channel.id:
+                    continue
+                for role, developer in roles:
                     overwrite = _overwrite(channel, role, developer=developer)
                     await channel.set_permissions(role, overwrite=overwrite, reason="CPO staff access sync")
 
             candidates = {member.id: member for member in guild.members if _member_in_guild(member, guild)}
-            for user_id in manager_ids | developer_ids:
+            for user_id in manager_ids | developer_ids | supreme_ids:
                 granted_member = guild.get_member(user_id)
                 if granted_member is not None and _member_in_guild(granted_member, guild):
                     candidates[user_id] = granted_member
             for member in candidates.values():
-                for role, wanted_ids in ((manager_role, manager_ids), (developer_role, developer_ids)):
+                for role, wanted_ids in (
+                    (manager_role, manager_ids),
+                    (developer_role, developer_ids),
+                    (supreme_role, supreme_ids),
+                ):
                     has_role = role in member.roles
                     if member.id in wanted_ids and not has_role:
                         await member.add_roles(role, reason="CPO staff grant sync")
                     elif member.id not in wanted_ids and has_role:
                         await member.remove_roles(role, reason="CPO staff grant sync")
+            if isinstance(log_channel, discord.TextChannel):
+                await log_channel.edit(
+                    overwrites=await log_overwrites(bot, guild, log_channel.overwrites), reason="CPO log staff access"
+                )
         except discord.HTTPException as exc:
-            role_ids = ", ".join(str(role.id) for role in (manager_role, developer_role) if role is not None)
+            if log_channel is not None:
+                try:
+                    await log_channel.edit(
+                        overwrites=await log_overwrites(bot, guild, log_channel.overwrites, staff=False),
+                        reason="CPO log privacy after failed staff sync",
+                    )
+                except discord.HTTPException:
+                    logger.exception("Cannot reseal log channel guild_id=%s channel_id=%s", guild.id, log_channel.id)
+            role_ids = ", ".join(
+                str(role.id) for role in (manager_role, developer_role, supreme_role) if role is not None
+            )
             logger.exception(
                 "CPO staff role sync failed guild_id=%s category_id=%s role_ids=%s", guild.id, category.id, role_ids
             )
@@ -160,10 +256,11 @@ async def sync_staff_roles(
             ) from exc
 
         logger.info(
-            "CPO staff roles synced guild_id=%s category_id=%s manager_role_id=%s developer_role_id=%s",
+            "CPO staff roles synced guild_id=%s category_id=%s manager_role_id=%s developer_role_id=%s supreme_role_id=%s",
             guild.id,
             category.id,
             manager_role.id,
             developer_role.id,
+            supreme_role.id,
         )
         return updated_category

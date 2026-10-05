@@ -114,7 +114,7 @@ async def test_real_database_recovery_preserves_paused_state_and_consent(runtime
     assert recovered.absent_counts == {10: 1, 11: 4}
     assert recovered.tracking_id == session.tracking_id
     assert recovered.focus_seconds == session.focus_seconds
-    assert await db.get_productivity_focus_seconds(10) == 57.0
+    assert await db.get_productivity_focus_seconds(10, 42) == 57.0
 
 
 @pytest.mark.asyncio
@@ -135,7 +135,7 @@ async def test_offline_elapsed_crosses_stages_without_attendance_or_focus_credit
     assert recovered.absent_counts == {10: 1}
     assert not recovered.current_session_marked
     assert recovered.focus_seconds == {10: 57.0}
-    assert await db.get_productivity_focus_seconds(10) == 57.0
+    assert await db.get_productivity_focus_seconds(10, 42) == 57.0
     restored.run_timer.start.assert_called_once()
     await restored.load_active_sessions_from_db()
     assert restored.sessions[GROUP_ID] is recovered
@@ -279,11 +279,11 @@ async def test_only_observed_present_focus_time_is_measured(
     await cog.run_timer.coro(cog)
     await cog._persist_session(session)
     assert session.focus_seconds.get(10, 0.0) == expected
-    assert await db.get_productivity_focus_seconds(10) == expected
+    assert await db.get_productivity_focus_seconds(10, 42) == expected
     restored = new_cog(bot)
     await restored.load_active_sessions_from_db()
     await restored._persist_session(restored.sessions[GROUP_ID])
-    assert await db.get_productivity_focus_seconds(10) == expected
+    assert await db.get_productivity_focus_seconds(10, 42) == expected
 
 
 @pytest.mark.asyncio
@@ -318,7 +318,7 @@ async def test_absent_response_never_earns_focus_time(runtime, monkeypatch):
     monkeypatch.setattr("cogs.pomodoro.time.monotonic", lambda: 100.0)
     await cog.run_timer.coro(cog)
     assert session.focus_seconds == {}
-    assert await db.get_productivity_focus_seconds(10) == 0
+    assert await db.get_productivity_focus_seconds(10, 42) == 0
 
 
 @pytest.mark.asyncio
@@ -371,7 +371,7 @@ async def test_fractional_ticks_limit_credit_and_preserve_countdown_on_restart(r
     restored = new_cog(bot)
     await restored.load_active_sessions_from_db()
     assert restored.sessions[GROUP_ID].timer == pytest.approx(102)
-    assert await db.get_productivity_focus_seconds(10) == pytest.approx(20)
+    assert await db.get_productivity_focus_seconds(10, 42) == pytest.approx(20)
 
 
 @pytest.mark.asyncio
@@ -462,7 +462,7 @@ async def test_failed_final_analytics_keeps_counters_recoverable(runtime, monkey
     restored = new_cog(bot)
     await restored.load_active_sessions_from_db()
     await restored._remove_session(restored.sessions[GROUP_ID])
-    assert await db.get_productivity_focus_seconds(10) == 25
+    assert await db.get_productivity_focus_seconds(10, 42) == 25
     assert await db.get_active_pomodoro_runtime() == []
 
 
@@ -512,7 +512,7 @@ async def test_group_final_focus_failure_is_private_and_retry_tears_down_once(ru
     await cog.end_group.callback(cog, request)
     assert group.ended and not group.active
     assert await group.end_group(delay=0)
-    assert await db.get_productivity_focus_seconds(10) == 25.5
+    assert await db.get_productivity_focus_seconds(10, 42) == 25.5
     assert await db.get_active_pomodoro_runtime() == []
     assert not pomo.sessions and not cog.active_study_groups
     assert (await db.fetch_study_group_by_id(GROUP_ID))["active"] == 0
@@ -555,7 +555,7 @@ async def test_group_expiry_monitor_survives_ending_and_failed_final_focus(runti
         await resume.put(None)
         await asyncio.wait_for(monitor, 2)
         assert group.ended
-        assert await db.get_productivity_focus_seconds(10) == 25
+        assert await db.get_productivity_focus_seconds(10, 42) == 25
     finally:
         if not monitor.done():
             monitor.cancel()

@@ -75,6 +75,9 @@ def environment():
     guild.me.guild_permissions = discord.Permissions.all()
     guild.me.top_role = MagicMock(spec=discord.Role, position=10)
     people = {identifier: member(identifier) for identifier in (5, 6, 7, 8)}
+    guild.me.guild = guild
+    for person in people.values():
+        person.guild = guild
     guild.get_member.side_effect = people.get
     role = MagicMock(spec=discord.Role)
     role.id = 90

@@ -185,7 +185,7 @@ async def test_real_discord_permissions_grant_server_authority(name):
 
 
 @pytest.mark.asyncio
-async def test_added_global_developer_overrides_native_administrator_level():
+async def test_legacy_global_developer_does_not_override_native_administrator_level():
     guild = SimpleNamespace(id=1, owner_id=99)
     user = SimpleNamespace(id=5, guild=guild, guild_permissions=discord.Permissions(administrator=True))
     bot = MagicMock()
@@ -193,11 +193,14 @@ async def test_added_global_developer_overrides_native_administrator_level():
     bot.get_guild.return_value = guild
     bot.db = AsyncMock()
     bot.db.get_manager.return_value = {"guild_id": None, "permission_level": 4}
-    assert await Manager(bot).get_permission_level(1, 5, member=user) == PermissionLevel.BOT_DEVELOPER
+    assert await Manager(bot).get_permission_level(1, 5, member=user) == PermissionLevel.ADMIN
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("grant_guild,level,allowed", [(2, 3, False), (None, 3, False), (None, 4, True), (1, 3, True)])
+@pytest.mark.parametrize(
+    "grant_guild,level,allowed",
+    [(2, 3, False), (None, 3, False), (None, 4, False), (1, 3, True), (1, 4, True), (1, 5, False)],
+)
 async def test_stored_authority_is_scoped_to_guild(grant_guild, level, allowed):
     guild = SimpleNamespace(id=1, owner_id=99)
     user = SimpleNamespace(id=5, guild=guild, guild_permissions=discord.Permissions.none())
@@ -293,15 +296,15 @@ async def test_added_developers_and_guild_managers_appear_without_user_cache():
         developer = SimpleNamespace(id=7, name="New developer")
         await cog.add_guild_manager.callback(cog, request, guild_manager)
         await cog.add_bot_developer.callback(cog, interaction(), developer)
-        # A local grant for a global developer must not duplicate or demote them.
-        await db.add_manager(7, 1, PermissionLevel.ADMIN)
+        # A grant in another guild must not demote this guild's developer.
+        await db.add_manager(7, 2, PermissionLevel.ADMIN)
         await db.add_manager(8, 2, PermissionLevel.ADMIN)
         await cog.list_managers.callback(cog, request)
         embed = request.followup.send.call_args.kwargs["embed"]
         fields = {field.name: field.value for field in embed.fields}
         assert "<@6>" in fields["Manager"]
         assert "<@7>" in fields["Bot Developer"]
-        assert "<@5>" in fields["Bot Developer"]
+        assert "<@5>" in fields["Supreme Commander"]
         rendered = "\n".join(fields.values())
         assert rendered.count("<@7>") == 1
         assert "<@8>" not in rendered

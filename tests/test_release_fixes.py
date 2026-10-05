@@ -381,6 +381,10 @@ async def test_deleted_channel_cleanup_result_falls_back_to_dm():
 async def test_group_actions_log_without_pinging():
     group, channel, role = group_fixture()
     log_channel = AsyncMock(spec=discord.TextChannel)
+    log_channel.guild = group.guild
+    log_channel.id = 60
+    log_channel.overwrites = {}
+    log_channel.edit.return_value = log_channel
     group.guild.get_channel.return_value = log_channel
     group.db.get_mod_log_channel.return_value = 60
     await group.cog.log_mod_action(group.guild, "Study group created", group.group_id, group.name, 123)
@@ -527,8 +531,8 @@ async def test_group_cleanup_blocks_join_and_removes_every_pomodoro_alias():
     group.cog.log_mod_action = AsyncMock()
     group.guild.members = []
     role.delete = AsyncMock()
-    session = MagicMock(group_id=7, text_id=30)
-    unrelated = MagicMock(group_id=8, text_id=31)
+    session = MagicMock(group_id=7, text_id=30, guild_id=group.guild_id)
+    unrelated = MagicMock(group_id=8, text_id=31, guild_id=group.guild_id)
     pomo = MagicMock()
     pomo.sessions = {7: session, group_id: session, 8: unrelated}
 

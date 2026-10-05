@@ -1,7 +1,7 @@
 import asyncio
 import sqlite3
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import discord
 import pytest
@@ -33,6 +33,9 @@ def make_setup(category_id: int | None = 10, channel_id: int | None = 20):
     guild = MagicMock(spec=discord.Guild)
     guild.id = 1
     guild.me = MagicMock(spec=discord.Member)
+    guild.me.id = 100
+    guild.me.guild = guild
+    guild.members = []
     perms = MagicMock()
     perms.manage_channels = True
     perms.view_channel = True
@@ -43,15 +46,20 @@ def make_setup(category_id: int | None = 10, channel_id: int | None = 20):
     category = MagicMock(spec=discord.CategoryChannel)
     category.id = 10
     category.guild = guild
+    category.overwrites = {}
     category.permissions_for.return_value = perms
     channel = MagicMock(spec=discord.TextChannel)
     channel.id = 20
+    channel.guild = guild
+    channel.overwrites = {}
     channel.category_id = category_id
     channel.permissions_synced = True
     channel.permissions_for.return_value = perms
     channel.edit = AsyncMock(return_value=None)
     log_channel = MagicMock(spec=discord.TextChannel)
     log_channel.id = 30
+    log_channel.guild = guild
+    log_channel.overwrites = {}
     log_channel.category_id = category_id
     log_channel.permissions_synced = True
     log_channel.permissions_for.return_value = perms
@@ -59,6 +67,7 @@ def make_setup(category_id: int | None = 10, channel_id: int | None = 20):
     voice = MagicMock(spec=discord.VoiceChannel)
     voice.id = 50
     voice.guild = guild
+    voice.overwrites = {}
     voice.category_id = category_id
     voice.permissions_synced = True
     voice.edit = AsyncMock(return_value=None)
@@ -69,10 +78,13 @@ def make_setup(category_id: int | None = 10, channel_id: int | None = 20):
     guild.create_category = AsyncMock(return_value=category)
     guild.create_text_channel = AsyncMock(return_value=channel)
     guild.default_role = MagicMock(spec=discord.Role)
+    guild.default_role.id = 1
+    guild.default_role.guild = guild
     guild.get_member.return_value = MagicMock(spec=discord.Member)
     guild.roles = []
 
     bot = MagicMock()
+    bot.fetch_channel = AsyncMock(side_effect=lambda identifier: guild.get_channel(identifier))
     bot.db = AsyncMock()
     bot.db.get_group_category.return_value = category_id
     bot.db.get_commands_channel.return_value = channel_id
@@ -81,7 +93,24 @@ def make_setup(category_id: int | None = 10, channel_id: int | None = 20):
     bot.db.get_default_group_duration.return_value = 86400
     bot.db.get_default_pomodoro_duration.return_value = 86400
     bot.db.get_default_vc.return_value = None
+    bot.db.get_default_role.return_value = None
     bot.db.get_all_study_groups.return_value = []
+
+    async def fetched(identifier):
+        resource = guild.get_channel(identifier)
+        if resource is not None and resource.edit.await_args is not None:
+            options = resource.edit.await_args.kwargs
+            if "overwrites" in options:
+                resource.overwrites = options["overwrites"]
+            if "category" in options:
+                resource.category_id = options["category"].id if options["category"] else None
+        for create in (guild.create_text_channel, guild.create_voice_channel):
+            if create.await_args is not None and create.return_value is resource:
+                resource.overwrites = create.await_args.kwargs.get("overwrites", {})
+                resource.category_id = create.await_args.kwargs["category"].id
+        return resource
+
+    bot.fetch_channel.side_effect = fetched
     manager = Manager(bot)
     setattr(manager, "get_permission_level", AsyncMock(return_value=PermissionLevel.MODERATOR))
     return manager, guild, category, channel
@@ -104,7 +133,17 @@ async def test_setup_duration_editor_stages_and_saves_defaults():
     manager.bot.db.save_setup.assert_not_awaited()
     await button(view, "Save").callback(make_interaction(guild))
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 10, 20, 10, 30, default_group_duration=129600, default_pomodoro_duration=172800, default_vc_id=50
+        1,
+        10,
+        20,
+        10,
+        30,
+        default_group_duration=129600,
+        default_pomodoro_duration=172800,
+        default_vc_id=50,
+        journal_operation_id=ANY,
+        default_role_id=None,
+        update_default_role=True,
     )
 
 
@@ -159,7 +198,17 @@ async def test_setup_stages_options_without_writing_until_save():
     await button(view, "Save").callback(save_interaction)
 
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 10, 20, 25, 30, default_group_duration=86400, default_pomodoro_duration=86400, default_vc_id=50
+        1,
+        10,
+        20,
+        25,
+        30,
+        default_group_duration=86400,
+        default_pomodoro_duration=86400,
+        default_vc_id=50,
+        journal_operation_id=ANY,
+        default_role_id=None,
+        update_default_role=True,
     )
     assert guild.id not in manager._setup_views
     assert all(item.disabled for item in view.children)
@@ -235,7 +284,7 @@ async def test_default_vc_is_created_with_category_permissions():
     manager._setup_views[guild.id] = view
     await button(view, "Save").callback(make_interaction(guild))
     guild.create_voice_channel.assert_awaited_once_with(
-        "CPO Lobby", category=category, overwrites=category.overwrites, reason="CPO default voice destination"
+        "CPO Lobby", category=category, overwrites=category.overwrites, reason=ANY
     )
     assert view.default_vc_id == 50
 
@@ -250,9 +299,7 @@ async def test_recorded_default_vc_moves_and_syncs_without_duplicate_creation():
     view = SetupView(manager, guild, 5, 10, 20, 10, 30, default_vc_id=50)
     manager._setup_views[guild.id] = view
     await button(view, "Save").callback(make_interaction(guild))
-    voice.edit.assert_awaited_once_with(
-        category=category, sync_permissions=True, reason="CPO default voice destination"
-    )
+    voice.edit.assert_awaited_once_with(category=category, overwrites=category.overwrites, reason=ANY)
     guild.create_voice_channel.assert_not_awaited()
 
 
@@ -277,9 +324,19 @@ async def test_recorded_channel_move_syncs_category_permissions():
     await button(view, "Save").callback(make_interaction(guild))
 
     channel.edit.assert_awaited_once()
-    assert channel.edit.call_args.kwargs["sync_permissions"] is True
+    assert channel.edit.call_args.kwargs["overwrites"] == guild.get_channel(10).overwrites
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400, default_vc_id=50
+        1,
+        10,
+        20,
+        10,
+        30,
+        default_group_duration=86400,
+        default_pomodoro_duration=86400,
+        default_vc_id=50,
+        journal_operation_id=ANY,
+        default_role_id=None,
+        update_default_role=True,
     )
 
 
@@ -301,9 +358,20 @@ async def test_setup_creates_synced_log_channel_and_reuses_it_on_retry():
     options = guild.create_text_channel.call_args.kwargs
     overwrites = options["overwrites"]
     assert options["category"].id == 10
-    assert overwrites == options["category"].overwrites
+    assert overwrites[guild.default_role].view_channel is False
+    assert overwrites[guild.me].view_channel is True
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400, default_vc_id=50
+        1,
+        10,
+        20,
+        10,
+        30,
+        default_group_duration=86400,
+        default_pomodoro_duration=86400,
+        default_vc_id=50,
+        journal_operation_id=ANY,
+        default_role_id=None,
+        update_default_role=True,
     )
 
     await button(view, "Save").callback(make_interaction(guild))
@@ -339,7 +407,17 @@ async def test_cancel_during_save_cannot_claim_no_settings_changed():
     release.set()
     await asyncio.wait_for(save, timeout=2)
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400, default_vc_id=50
+        1,
+        10,
+        20,
+        10,
+        30,
+        default_group_duration=86400,
+        default_pomodoro_duration=86400,
+        default_vc_id=50,
+        journal_operation_id=ANY,
+        default_role_id=None,
+        update_default_role=True,
     )
 
 
@@ -390,10 +468,20 @@ async def test_recorded_log_channel_move_syncs_category_permissions():
     await button(view, "Save").callback(make_interaction(guild))
 
     log_channel.edit.assert_awaited_once()
-    assert log_channel.edit.call_args.kwargs["sync_permissions"] is True
+    assert log_channel.edit.call_args.kwargs["overwrites"][guild.default_role].view_channel is False
     guild.create_text_channel.assert_not_awaited()
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 10, 20, 10, 30, default_group_duration=86400, default_pomodoro_duration=86400, default_vc_id=50
+        1,
+        10,
+        20,
+        10,
+        30,
+        default_group_duration=86400,
+        default_pomodoro_duration=86400,
+        default_vc_id=50,
+        journal_operation_id=ANY,
+        default_role_id=None,
+        update_default_role=True,
     )
 
 
@@ -427,10 +515,20 @@ async def test_new_category_modal_stages_then_creates_category_and_both_channels
 
     await button(view, "Save").callback(make_interaction(guild))
 
-    guild.create_category.assert_awaited_once_with("Study rooms", reason="CPO server setup")
+    guild.create_category.assert_awaited_once_with("Study rooms", reason=ANY)
     assert [call.args[0] for call in guild.create_text_channel.await_args_list] == ["cpo-commands", "cpo-logs"]
     manager.bot.db.save_setup.assert_awaited_once_with(
-        1, 40, 21, 10, 31, default_group_duration=86400, default_pomodoro_duration=86400, default_vc_id=50
+        1,
+        40,
+        21,
+        10,
+        31,
+        default_group_duration=86400,
+        default_pomodoro_duration=86400,
+        default_vc_id=50,
+        journal_operation_id=ANY,
+        default_role_id=None,
+        update_default_role=True,
     )
     assert view.new_category_name is None
 

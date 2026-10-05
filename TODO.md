@@ -2,6 +2,19 @@
 
 Updated on 2026-10-05 for the antigravity-fix branch. Historical verification counts describe earlier checkpoints.
 
+## Resumed security and persistence scope
+
+- [ ] Verify durable setup recovery, guild operation serialization, and ownership rechecks after awaited work.
+- [ ] Verify private logs under native-authority changes, category propagation, and failed role synchronization.
+- [ ] Verify async wait cancellation, replacement task ownership, and cog shutdown before SQLite closes.
+- [ ] Verify non-task activity/settings isolation across guilds; guild-granted developers are Level 4, while only `.env` `BOT_DEVELOPER_ID` is global Level 5 Supreme Commander.
+- [ ] Persist and hydrate validated check-in settings; keep memory consistent after failed writes and teardown.
+- [ ] Persist invitation lifecycle: six-minute warning, ten-minute expiry, restart recovery, and recipient/target validation.
+- [ ] Record invitations, joins, and command authorization/action outcomes in guild-scoped SQLite audit and Discord logs.
+- [ ] Validate current actor IDs, guild membership, role/tier, ownership, membership, and active targets across all commands and controls.
+- [ ] Add an optional saved Setup default role and optional creation; require current guild/default-role membership for invitation recipients and apply the selected guild command gate.
+- [ ] After verified implementation and QA, use two GPT-6 Luna low agents to rebuild `ARCHITECTURE.md` and create `database_architecture.md` with diagrams.
+
 ## Immediate refactoring (Phase 1)
 
 - [x] Correct awaited Discord mocks and keep synchronous `InteractionResponse.is_done()` checks as `MagicMock`.

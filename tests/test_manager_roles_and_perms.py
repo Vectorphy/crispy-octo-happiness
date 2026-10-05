@@ -35,12 +35,12 @@ async def test_remove_bot_developer_authorized():
 
     cog.get_permission_level = AsyncMock(return_value=PermissionLevel.BOT_DEVELOPER)
     cog._sync_staff_access = AsyncMock(return_value="")
-    bot.db.get_manager = AsyncMock(return_value={"permission_level": PermissionLevel.BOT_DEVELOPER})
+    bot.db.get_manager = AsyncMock(return_value={"permission_level": PermissionLevel.BOT_DEVELOPER, "guild_id": 123})
 
     with patch("cogs.manager.send_response") as mock_send:
         await cog.remove_bot_developer.callback(cog, interaction, user=target_user)
 
-        bot.db.remove_manager.assert_awaited_once_with(777, None)
+        bot.db.remove_manager.assert_awaited_once_with(777, 123)
         mock_send.assert_awaited_once()
         assert "has been removed as a bot developer" in mock_send.call_args.args[1]
 
@@ -67,7 +67,7 @@ async def test_remove_bot_developer_rejects_primary():
 
         bot.db.remove_manager.assert_not_awaited()
         mock_send.assert_awaited_once()
-        assert "primary bot developer" in mock_send.call_args.args[1]
+        assert "Supreme Commander" in mock_send.call_args.args[1]
 
 
 @pytest.mark.asyncio

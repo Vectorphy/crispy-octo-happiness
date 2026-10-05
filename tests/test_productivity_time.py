@@ -12,14 +12,17 @@ async def test_focus_totals_are_monotonic_isolated_and_survive_restart(tmp_path)
     await db.save_productivity_focus_time("one", 1, "group", {5: 60})
     await db.save_productivity_focus_time("one", 1, "group", {5: 20})
     await db.save_productivity_focus_time("two", 2, "other", {5: 120})
-    assert await db.get_productivity_focus_seconds(5) == 180
-    assert await db.get_productivity_focus_seconds(6) == 30
-    assert await db.get_productivity_focus_seconds(7) == 0
+    assert await db.get_productivity_focus_seconds(5, 1) == 60
+    assert await db.get_productivity_focus_seconds(5, 2) == 120
+    assert await db.get_productivity_focus_seconds(6, 1) == 30
+    assert await db.get_productivity_focus_seconds(7, 1) == 0
+    assert await db.get_productivity_focus_seconds(5) == 0
     await db.close()
     restarted = DBHandler(path)
     try:
         await restarted.connect()
-        assert await restarted.get_productivity_focus_seconds(5) == 180
+        assert await restarted.get_productivity_focus_seconds(5, 1) == 60
+        assert await restarted.get_productivity_focus_seconds(5, 2) == 120
     finally:
         await restarted.close()
 
@@ -32,6 +35,6 @@ async def test_focus_totals_reject_invalid_values_without_partial_write(value):
     try:
         with pytest.raises(ValueError):
             await db.save_productivity_focus_time("one", 1, "group", {5: 60, 6: value})
-        assert await db.get_productivity_focus_seconds(5) == 0
+        assert await db.get_productivity_focus_seconds(5, 1) == 0
     finally:
         await db.close()

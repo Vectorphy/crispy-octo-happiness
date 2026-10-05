@@ -21,8 +21,8 @@ class MockDBHandler:
             ]
         return []
 
-    async def get_productivity_focus_seconds(self, user_id):
-        return 3600.0 if user_id == 1 else 0.0
+    async def get_productivity_focus_seconds(self, user_id, guild_id=None):
+        return 3600.0 if user_id == 1 and guild_id == 1 else 0.0
 
 
 class TestProductivityService(unittest.TestCase):
@@ -36,12 +36,12 @@ class TestProductivityService(unittest.TestCase):
 
     def test_metrics_use_attended_focus_and_zero_when_untracked(self):
         async def run_test():
-            measured = await self.service.get_productivity_metrics(1)
+            measured = await self.service.get_productivity_metrics(1, 1)
             self.assertEqual(measured["tasks_completed"], 2)
             self.assertEqual(measured["time_spent"], 1.0)
             self.assertEqual(measured["efficiency_score"], 2.0)
 
-            untracked = await self.service.get_productivity_metrics(2)
+            untracked = await self.service.get_productivity_metrics(2, 1)
             self.assertEqual(untracked["time_spent"], 0.0)
             self.assertEqual(untracked["efficiency_score"], 0.0)
 
@@ -52,7 +52,7 @@ class TestProductivityService(unittest.TestCase):
             db = AsyncMock()
             db.get_user_tasks.return_value = [{"completed": True}]
             db.get_productivity_focus_seconds.return_value = 1.0
-            metrics = await ProductivityService(db).get_productivity_metrics(1)
+            metrics = await ProductivityService(db).get_productivity_metrics(1, 1)
             self.assertEqual(metrics["time_spent"], 0.0003)
             self.assertEqual(metrics["efficiency_score"], 3600.0)
 
@@ -78,6 +78,7 @@ class TestProductivityTrackerCog(unittest.TestCase):
         async def run_test():
             mock_interaction = AsyncMock()
             mock_interaction.user.id = 1
+            mock_interaction.guild_id = 1
             mock_interaction.user.display_name = "Test User"
 
             await self.cog.productivity.callback(self.cog, mock_interaction)

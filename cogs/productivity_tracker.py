@@ -20,7 +20,7 @@ class ProductivityTracker(commands.Cog):
         await acknowledge_interaction(interaction)
         ephemeral = await should_use_ephemeral(interaction, self.bot.db)
         user_id = interaction.user.id
-        metrics = await self.productivity_service.get_productivity_metrics(user_id)
+        metrics = await self.productivity_service.get_productivity_metrics(user_id, interaction.guild_id)
 
         embed = discord.Embed(
             title=f"{interaction.user.display_name}'s Productivity Metrics",

@@ -4,12 +4,13 @@ from collections.abc import Awaitable, Callable
 
 import discord
 
+from cogs._access_policy import AccessView
 from utils import acknowledge_interaction, send_response
 
 logger = logging.getLogger(__name__)
 
 
-class EndRequestView(discord.ui.View):
+class EndRequestView(AccessView):
     def __init__(
         self,
         owner_id: int,
@@ -92,6 +93,7 @@ async def request_session_end(
     try:
         owner = guild.get_member(owner_id) or await guild.fetch_member(owner_id)
         view = EndRequestView(owner_id, label, is_active, on_confirm)
+        view.guild_id = guild.id
         view.message = await owner.send(
             f"{interaction.user.display_name} would like to end **{label}**. Do you want to end it?",
             view=view,

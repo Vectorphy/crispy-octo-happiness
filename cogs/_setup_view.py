@@ -1,12 +1,13 @@
 import asyncio
 import logging
 import sqlite3
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 import discord
 
-from cogs._staff_roles import StaffRoleSyncError, sync_staff_roles
+from cogs._staff_roles import StaffRoleSyncError, log_overwrites, sync_staff_roles
 from utils import DEFAULT_SESSION_DURATION, parse_duration, parse_seconds_to_hms
 
 if TYPE_CHECKING:
@@ -113,6 +114,64 @@ class NewCategoryModal(discord.ui.Modal, title="Create a study group category"):
         await interaction.followup.send("Category staged. Save to create it.", ephemeral=True)
 
 
+class DefaultRoleSelect(discord.ui.RoleSelect):
+    def __init__(self, view: "SetupView"):
+        role = view.guild.get_role(view.default_role_id) if view.default_role_id else None
+        super().__init__(
+            placeholder="Optional role required to use CPO (clear for unrestricted)",
+            default_values=[role] if role else [],
+            min_values=0,
+            max_values=1,
+            row=3,
+        )
+        self.setup_view = view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.setup_view
+        if not await view.allowed(interaction):
+            return
+        if view.saving or view.has_pending_resources():
+            await interaction.response.send_message("Finish Save or Recover before changing the role.", ephemeral=True)
+            return
+        role = view.guild.get_role(self.values[0].id) if self.values else None
+        if self.values and (not isinstance(role, discord.Role) or role.guild.id != view.guild.id or role.is_default()):
+            await interaction.response.send_message(
+                "Choose a role in this server other than @everyone.", ephemeral=True
+            )
+            return
+        view.default_role_id = role.id if role else None
+        view.new_role_name = None
+        await interaction.response.edit_message(embed=view.render(), view=view)
+
+
+class NewDefaultRoleModal(discord.ui.Modal, title="Create an optional CPO access role"):
+    def __init__(self, view: "SetupView"):
+        super().__init__()
+        self.setup_view = view
+        self.name: discord.ui.TextInput[NewDefaultRoleModal] = discord.ui.TextInput(
+            label="Role name", default="CPO Member", max_length=100
+        )
+        self.add_item(self.name)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        view = self.setup_view
+        if not await view.allowed(interaction):
+            return
+        if view.saving or view.has_pending_resources():
+            await interaction.response.send_message("Finish Save or Recover before changing the role.", ephemeral=True)
+            return
+        name = str(self.name.value).strip()
+        if not name:
+            await interaction.response.send_message("Enter a role name.", ephemeral=True)
+            return
+        view.new_role_name = name
+        view.default_role_id = None
+        await interaction.response.defer(ephemeral=True)
+        if view.message:
+            await view.message.edit(embed=view.render(), view=view)
+        await interaction.followup.send("Role staged. Save creates it without enrolling anyone.", ephemeral=True)
+
+
 class DurationModal(discord.ui.Modal, title="Default session lifetimes"):
     def __init__(self, view: "SetupView"):
         super().__init__()
@@ -167,6 +226,7 @@ class SetupView(discord.ui.View):
         group_duration: int = DEFAULT_SESSION_DURATION,
         pomodoro_duration: int = DEFAULT_SESSION_DURATION,
         default_vc_id: int | None = None,
+        default_role_id: int | None = None,
     ) -> None:
         super().__init__(timeout=300)
         self.manager = manager
@@ -182,6 +242,10 @@ class SetupView(discord.ui.View):
             default_vc_id,
         )
         self.default_vc_id = default_vc_id
+        self.default_role_id = default_role_id
+        self.original_role_id = default_role_id
+        self.created_role_id: int | None = None
+        self.new_role_name: str | None = None
         self.created_vc_id: int | None = None
         self.moved_vc_id: int | None = None
         self.previous_vc_category_id: int | None = None
@@ -204,13 +268,320 @@ class SetupView(discord.ui.View):
         self.previous_log_overwrites: dict[Any, discord.PermissionOverwrite] | None = None
         self.message: discord.WebhookMessage | None = None
         self.saving = False
+        self.operation_id: str | None = None
+        self.journal_phase = "prepared"
+        self.journal_state: dict[str, Any] | None = None
         category = guild.get_channel(category_id) if category_id is not None else None
         self.add_item(CategorySelect(self, category if isinstance(category, discord.CategoryChannel) else None))
         voice = guild.get_channel(default_vc_id) if default_vc_id is not None else None
         self.add_item(VoiceSelect(self, voice if isinstance(voice, discord.VoiceChannel) else None))
+        self.add_item(DefaultRoleSelect(self))
         for child in self.children:
             if isinstance(child, discord.ui.Button) and child.label == "Recover":
                 child.disabled = not self.has_pending_resources()
+
+    @staticmethod
+    def encode_acl(overwrites) -> list[dict[str, Any]]:
+        result = []
+        for target, overwrite in overwrites.items():
+            if not isinstance(target, (discord.Role, discord.Member)) or not isinstance(target.id, int):
+                raise ValueError("Unknown permission overwrite target")
+            allow, deny = overwrite.pair()
+            result.append(
+                {
+                    "target_id": target.id,
+                    "target_type": "role" if isinstance(target, discord.Role) else "member",
+                    "allow": allow.value,
+                    "deny": deny.value,
+                }
+            )
+        return sorted(result, key=lambda value: (value["target_type"], value["target_id"]))
+
+    async def decode_acl(self, entries) -> dict[Any, discord.PermissionOverwrite] | None:
+        result = {}
+        for entry in entries:
+            target = (
+                self.guild.get_role(entry["target_id"])
+                if entry["target_type"] == "role"
+                else self.guild.get_member(entry["target_id"])
+            )
+            if target is None and entry["target_type"] == "member":
+                try:
+                    target = await self.guild.fetch_member(entry["target_id"])
+                except discord.HTTPException:
+                    logger.warning(
+                        "Recovery ACL member unavailable guild_id=%s user_id=%s", self.guild.id, entry["target_id"]
+                    )
+                    return None
+            kind = discord.Role if entry["target_type"] == "role" else discord.Member
+            if not isinstance(target, kind) or target.id != entry["target_id"] or target.guild.id != self.guild.id:
+                return None
+            result[target] = discord.PermissionOverwrite.from_pair(
+                discord.Permissions(entry["allow"]), discord.Permissions(entry["deny"])
+            )
+        return result
+
+    @classmethod
+    async def from_journal(cls, manager: "Manager", guild: discord.Guild, row: dict[str, Any]) -> "SetupView":
+        state = row["state"]
+        if state.get("version") != 1 or not isinstance(state.get("mutations"), dict):
+            raise ValueError("Unsupported setup recovery journal")
+        original, desired = state["original"], state["desired"]
+        if len(original) != 7 or len(desired) != 7:
+            raise ValueError("Invalid setup recovery settings")
+        view = cls(
+            manager,
+            guild,
+            row["owner_id"],
+            original[0],
+            original[1],
+            original[3],
+            original[2],
+            original[4],
+            original[5],
+            original[6],
+        )
+        view.snapshot = tuple(original)
+        view.original_role_id = state.get("original_role_id")
+        view.default_role_id = state.get("desired_role_id")
+        view.operation_id, view.journal_phase, view.journal_state = row["operation_id"], row["phase"], state
+        (
+            view.category_id,
+            view.commands_channel_id,
+            view.log_channel_id,
+            view.max_members,
+            view.group_duration,
+            view.pomodoro_duration,
+            view.default_vc_id,
+        ) = desired
+        for key, entry in state["mutations"].items():
+            if key not in ("category", "channel", "log_channel", "vc", "role") or entry["action"] not in (
+                "create",
+                "move",
+            ):
+                raise ValueError("Invalid setup recovery mutation")
+            if entry["status"] == "recovered" or entry.get("id") is None:
+                continue
+            if entry["action"] == "create":
+                setattr(view, "created_" + key + "_id", entry["id"])
+            else:
+                setattr(view, "moved_" + key + "_id", entry["id"])
+                setattr(
+                    view,
+                    "previous_"
+                    + (
+                        "category_id" if key == "channel" else ("log" if key == "log_channel" else key) + "_category_id"
+                    ),
+                    entry["before_category"],
+                )
+                setattr(
+                    view,
+                    "previous_" + ("log" if key == "log_channel" else key) + "_overwrites",
+                    await view.decode_acl(entry["before_acl"]),
+                )
+                if key == "channel":
+                    view.previous_channel_overwrites = await view.decode_acl(entry["before_acl"])
+        return view
+
+    def desired_settings(self) -> list[Any]:
+        return [
+            self.category_id,
+            self.commands_channel_id,
+            self.log_channel_id,
+            self.max_members,
+            self.group_duration,
+            self.pomodoro_duration,
+            self.default_vc_id,
+        ]
+
+    async def write_journal(self) -> None:
+        if self.operation_id is None or self.journal_state is None:
+            raise RuntimeError("Setup journal is missing")
+        await self.manager.bot.db.update_setup_recovery_journal(
+            self.guild.id, self.operation_id, self.journal_state, phase=self.journal_phase
+        )
+
+    async def prepare_journal(self) -> None:
+        db = self.manager.bot.db
+        if self.operation_id is None:
+            self.operation_id = str(uuid.uuid4())
+            self.journal_state = {
+                "version": 1,
+                "original": list(self.snapshot),
+                "desired": self.desired_settings(),
+                "mutations": {},
+                "original_role_id": self.original_role_id,
+                "desired_role_id": self.default_role_id,
+            }
+        row = await db.get_setup_recovery_journal(self.guild.id)
+        if isinstance(row, dict):
+            if row["operation_id"] != self.operation_id or row["phase"] != "prepared":
+                raise RuntimeError("Another setup operation needs recovery or staff synchronization")
+            await self.write_journal()
+        else:
+            await db.create_setup_recovery_journal(self.guild.id, self.operation_id, self.owner_id, self.journal_state)
+
+    async def recovery_intent(self, key: str) -> None:
+        if self.journal_state is not None:
+            self.journal_state["mutations"][key]["status"] = "rollback_intent"
+            await self.write_journal()
+
+    async def recovery_finished(self, key: str) -> None:
+        if self.journal_state is not None:
+            self.journal_state["mutations"][key]["status"] = "recovered"
+            await self.write_journal()
+
+    async def identify_created_intents(self) -> None:
+        if self.journal_state is None:
+            return
+        for key, entry in self.journal_state["mutations"].items():
+            if entry["action"] != "create" or entry.get("id") is not None or entry["status"] == "recovered":
+                continue
+            bot_user = self.manager.bot.user
+            if bot_user is None:
+                continue
+            reason = f"CPO setup {self.operation_id} {key}"
+            matches = []
+            try:
+                async for audit in self.guild.audit_logs(
+                    limit=100,
+                    action=discord.AuditLogAction.role_create
+                    if key == "role"
+                    else discord.AuditLogAction.channel_create,
+                ):
+                    if audit.reason == reason and audit.user and audit.user.id == bot_user.id and audit.target:
+                        matches.append(audit.target.id)
+            except discord.HTTPException:
+                logger.warning(
+                    "Recovery audit proof unavailable guild_id=%s operation_id=%s", self.guild.id, self.operation_id
+                )
+                continue
+            if len(matches) == 1:
+                entry["id"], entry["status"] = matches[0], "applied"
+                setattr(self, "created_" + key + "_id", matches[0])
+                await self.write_journal()
+
+    async def provision_channel(self, key: str, channel_id: int | None, category, name: str):
+        assert self.journal_state is not None
+        kind = (
+            discord.CategoryChannel
+            if key == "category"
+            else discord.VoiceChannel
+            if key == "vc"
+            else discord.TextChannel
+        )
+        created_id = getattr(self, "created_" + key + "_id")
+        identifier = created_id or channel_id
+        channel: Any = self.guild.get_channel(identifier) if isinstance(identifier, int) else None
+        entry = self.journal_state["mutations"].get(key)
+        if entry is not None and entry["status"] not in ("applied", "recovered"):
+            raise RuntimeError("An uncertain Discord mutation needs recovery before Save")
+        if isinstance(identifier, int) and channel is None:
+            channel = await self.manager.bot.fetch_channel(identifier)
+        if channel is not None and (not isinstance(channel, kind) or channel.guild.id != self.guild.id):
+            raise ValueError("The selected setup resource has an unexpected type or guild")
+        if entry is not None and entry["status"] == "applied":
+            channel = await self.manager.bot.fetch_channel(entry["id"])
+            if (
+                not isinstance(channel, kind)
+                or channel.guild.id != self.guild.id
+                or getattr(channel, "category_id", None) != entry["after_category"]
+                or self.encode_acl(channel.overwrites) != entry["after_acl"]
+            ):
+                raise RuntimeError("A retained resource changed; recover before Save")
+            return channel
+        if isinstance(channel, kind) and key == "category":
+            return channel
+        if (
+            key != "log_channel"
+            and isinstance(channel, kind)
+            and channel.category_id == category.id
+            and channel.permissions_synced
+        ):
+            return channel
+        action = "move" if isinstance(channel, kind) else "create"
+        overwrites = category.overwrites if category is not None else {}
+        if key == "log_channel":
+            overwrites = await log_overwrites(
+                self.manager.bot, self.guild, channel.overwrites if isinstance(channel, kind) else overwrites
+            )
+        expected_acl = self.encode_acl(overwrites)
+        entry = {
+            "action": action,
+            "status": "intent",
+            "id": channel.id if isinstance(channel, (discord.TextChannel, discord.VoiceChannel)) else None,
+            "after_category": category.id if category is not None else None,
+            "after_acl": expected_acl,
+        }
+        if action == "move":
+            assert isinstance(channel, (discord.TextChannel, discord.VoiceChannel))
+            entry["before_category"], entry["before_acl"] = channel.category_id, self.encode_acl(channel.overwrites)
+            setattr(self, "moved_" + key + "_id", channel.id)
+            setattr(
+                self,
+                "previous_"
+                + ("category_id" if key == "channel" else ("log" if key == "log_channel" else key) + "_category_id"),
+                channel.category_id,
+            )
+            setattr(
+                self, "previous_" + ("log" if key == "log_channel" else key) + "_overwrites", channel.overwrites.copy()
+            )
+        self.journal_state["mutations"][key] = entry
+        await self.write_journal()
+        reason = f"CPO setup {self.operation_id} {key}"
+        if action == "move":
+            assert isinstance(channel, (discord.TextChannel, discord.VoiceChannel))
+            channel = await channel.edit(category=category, overwrites=overwrites, reason=reason) or channel
+        elif key == "category":
+            channel = await self.guild.create_category(name, reason=reason)
+        elif key == "vc":
+            channel = await self.guild.create_voice_channel(
+                name, category=category, overwrites=category.overwrites, reason=reason
+            )
+        else:
+            channel = await self.guild.create_text_channel(
+                name, category=category, overwrites=overwrites, reason=reason
+            )
+        if not isinstance(channel, kind) or channel.guild.id != self.guild.id:
+            raise ValueError("Discord returned a channel in an unexpected guild or with an unexpected type")
+        if action == "create":
+            setattr(self, "created_" + key + "_id", channel.id)
+        entry["id"], entry["status"] = channel.id, "applied"
+        await self.write_journal()
+        return channel
+
+    async def provision_default_role(self) -> int | None:
+        if not self.new_role_name and self.created_role_id is None:
+            if self.default_role_id is not None:
+                roles = await self.guild.fetch_roles()
+                role = discord.utils.get(roles, id=self.default_role_id)
+                if role is None or role.is_default():
+                    raise ValueError("The selected access role is unavailable")
+            return self.default_role_id
+        assert self.journal_state is not None
+        entry = self.journal_state["mutations"].get("role")
+        if entry is not None:
+            if entry["status"] != "applied" or not isinstance(entry.get("id"), int):
+                raise RuntimeError("An uncertain role creation needs recovery before Save")
+            role = discord.utils.get(await self.guild.fetch_roles(), id=entry["id"])
+            if role is None or role.name != entry["role_name"] or role.permissions.value != 0 or role.mentionable:
+                raise RuntimeError("The created access role changed; recover before Save")
+            return role.id
+        entry = {"action": "create", "status": "intent", "id": None, "role_name": self.new_role_name}
+        self.journal_state["mutations"]["role"] = entry
+        await self.write_journal()
+        role = await self.guild.create_role(
+            name=self.new_role_name or "CPO Member",
+            permissions=discord.Permissions.none(),
+            mentionable=False,
+            reason=f"CPO setup {self.operation_id} role",
+        )
+        if not isinstance(role, discord.Role) or role.guild.id != self.guild.id:
+            raise ValueError("Discord returned an unexpected access role")
+        self.created_role_id = role.id
+        entry.update(id=role.id, status="applied")
+        await self.write_journal()
+        return role.id
 
     def render(self) -> discord.Embed:
         for child in self.children:
@@ -226,7 +597,7 @@ class SetupView(discord.ui.View):
         logs = f"<#{self.log_channel_id}>" if self.log_channel_id else "Create **#cpo-logs**"
         embed = discord.Embed(
             title="Server setup",
-            description="Choose the category, review channels and defaults, then save. All channels inherit the category permissions.",
+            description="Choose the category, review channels and defaults, then save. Moderator logs are private to server staff.",
             color=discord.Color.blue(),
         )
         embed.add_field(name="Study group category", value=category, inline=False)
@@ -238,6 +609,15 @@ class SetupView(discord.ui.View):
             inline=False,
         )
         embed.add_field(name="Default group size", value=str(self.max_members), inline=True)
+        embed.add_field(
+            name="Required access role",
+            value=f"Create {self.new_role_name} on Save; nobody is enrolled automatically"
+            if self.new_role_name
+            else f"<@&{self.default_role_id}>"
+            if self.default_role_id
+            else "Unrestricted (no required role)",
+            inline=False,
+        )
         embed.add_field(name="Group lifetime", value=parse_seconds_to_hms(self.group_duration), inline=True)
         embed.add_field(name="Pomodoro lifetime", value=parse_seconds_to_hms(self.pomodoro_duration), inline=True)
         embed.add_field(
@@ -282,10 +662,16 @@ class SetupView(discord.ui.View):
 
     def disable_controls(self) -> None:
         for item in self.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.ChannelSelect)):
+            if isinstance(item, (discord.ui.Button, discord.ui.ChannelSelect, discord.ui.RoleSelect)):
                 item.disabled = True
 
     def has_pending_resources(self) -> bool:
+        if self.journal_phase != "prepared":
+            return False
+        if self.journal_state is not None and any(
+            entry["status"] != "recovered" for entry in self.journal_state["mutations"].values()
+        ):
+            return True
         return any(
             value is not None
             for value in (
@@ -296,6 +682,7 @@ class SetupView(discord.ui.View):
                 self.moved_log_channel_id,
                 self.created_vc_id,
                 self.moved_vc_id,
+                self.created_role_id,
             )
         )
 
@@ -356,6 +743,13 @@ class SetupView(discord.ui.View):
         finally:
             self.saving = False
 
+    @discord.ui.button(label="Create access role", style=discord.ButtonStyle.secondary, row=4)
+    async def create_access_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if self.saving or self.has_pending_resources():
+            await interaction.response.send_message("Finish Save or Recover before changing the role.", ephemeral=True)
+            return
+        await interaction.response.send_modal(NewDefaultRoleModal(self))
+
     async def _save_locked(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
         async with self.manager._setup_locks.setdefault(self.guild.id, asyncio.Lock()):
@@ -382,6 +776,11 @@ class SetupView(discord.ui.View):
                     "Server settings changed. Run /setup to review them again.", ephemeral=True
                 )
                 return
+            if await db.get_default_role(self.guild.id) != self.original_role_id:
+                await interaction.followup.send(
+                    "The required role changed. Run /setup to review settings.", ephemeral=True
+                )
+                return
             me = self.guild.me
             if me is None or not all(
                 (
@@ -401,16 +800,11 @@ class SetupView(discord.ui.View):
                 await interaction.followup.send("Choose a valid category in this server.", ephemeral=True)
                 return
             try:
-                if self.new_category_name:
-                    category = (
-                        self.guild.get_channel(self.created_category_id)
-                        if self.created_category_id is not None
-                        else None
-                    )
-                    if not isinstance(category, discord.CategoryChannel):
-                        category = await self.guild.create_category(self.new_category_name, reason="CPO server setup")
-                        self.created_category_id = category.id
-                    self.category_id = category.id
+                await self.prepare_journal()
+                self.default_role_id = await self.provision_default_role()
+                category = await self.provision_channel(
+                    "category", self.category_id, None, self.new_category_name or "CPO"
+                )
                 assert isinstance(category, discord.CategoryChannel)
                 category_perms = category.permissions_for(me)
                 if not all(
@@ -428,25 +822,7 @@ class SetupView(discord.ui.View):
                     )
                     return
 
-                category = await sync_staff_roles(self.manager.bot, self.guild, category)
-
-                channel_id = self.created_channel_id or self.commands_channel_id
-                channel = self.guild.get_channel(channel_id) if channel_id is not None else None
-                if not isinstance(channel, discord.TextChannel):
-                    channel = await self.guild.create_text_channel(
-                        "cpo-commands", category=category, reason="CPO server setup"
-                    )
-                    self.created_channel_id = channel.id
-                elif channel.category_id != category.id or not channel.permissions_synced:
-                    if self.moved_channel_id is None:
-                        self.moved_channel_id = channel.id
-                        self.previous_category_id = channel.category_id
-                        self.previous_channel_overwrites = channel.overwrites.copy()
-                    edited_channel = await channel.edit(
-                        category=category, sync_permissions=True, reason="CPO server setup"
-                    )
-                    if edited_channel is not None:
-                        channel = edited_channel
+                channel = await self.provision_channel("channel", self.commands_channel_id, category, "cpo-commands")
                 channel_perms = channel.permissions_for(me)
                 if not all((channel_perms.view_channel, channel_perms.send_messages, channel_perms.embed_links)):
                     await interaction.followup.send(
@@ -455,26 +831,7 @@ class SetupView(discord.ui.View):
                         ephemeral=True,
                     )
                     return
-                log_channel_id = self.created_log_channel_id or self.log_channel_id
-                log_channel = self.guild.get_channel(log_channel_id) if log_channel_id is not None else None
-                if not isinstance(log_channel, discord.TextChannel):
-                    log_channel = await self.guild.create_text_channel(
-                        "cpo-logs",
-                        category=category,
-                        overwrites=category.overwrites,
-                        reason="CPO server setup",
-                    )
-                    self.created_log_channel_id = log_channel.id
-                elif log_channel.category_id != category.id or not log_channel.permissions_synced:
-                    if self.moved_log_channel_id is None:
-                        self.moved_log_channel_id = log_channel.id
-                        self.previous_log_category_id = log_channel.category_id
-                        self.previous_log_overwrites = log_channel.overwrites.copy()
-                    edited_log = await log_channel.edit(
-                        category=category, sync_permissions=True, reason="CPO server setup"
-                    )
-                    if edited_log is not None:
-                        log_channel = edited_log
+                log_channel = await self.provision_channel("log_channel", self.log_channel_id, category, "cpo-logs")
                 log_perms = log_channel.permissions_for(me)
                 if not all((log_perms.view_channel, log_perms.send_messages, log_perms.embed_links)):
                     await interaction.followup.send(
@@ -483,26 +840,7 @@ class SetupView(discord.ui.View):
                         ephemeral=True,
                     )
                     return
-                voice_id = self.created_vc_id or self.default_vc_id
-                voice = self.guild.get_channel(voice_id) if voice_id is not None else None
-                if not isinstance(voice, discord.VoiceChannel):
-                    voice = await self.guild.create_voice_channel(
-                        "CPO Lobby",
-                        category=category,
-                        overwrites=category.overwrites,
-                        reason="CPO default voice destination",
-                    )
-                    self.created_vc_id = voice.id
-                elif voice.category_id != category.id or not voice.permissions_synced:
-                    if self.moved_vc_id is None:
-                        self.previous_vc_category_id = voice.category_id
-                        self.moved_vc_id = voice.id
-                        self.previous_vc_overwrites = voice.overwrites.copy()
-                    updated_voice = await voice.edit(
-                        category=category, sync_permissions=True, reason="CPO default voice destination"
-                    )
-                    if updated_voice is not None:
-                        voice = updated_voice
+                voice = await self.provision_channel("vc", self.default_vc_id, category, "CPO Lobby")
                 voice_perms = voice.permissions_for(me)
                 if not all((voice_perms.view_channel, voice_perms.connect, voice_perms.move_members)):
                     await interaction.followup.send(
@@ -511,6 +849,18 @@ class SetupView(discord.ui.View):
                         ephemeral=True,
                     )
                     return
+                assert self.journal_state is not None
+                self.journal_state["desired"] = [
+                    category.id,
+                    channel.id,
+                    log_channel.id,
+                    self.max_members,
+                    self.group_duration,
+                    self.pomodoro_duration,
+                    voice.id,
+                ]
+                self.journal_state["desired_role_id"] = self.default_role_id
+                await self.write_journal()
                 await db.save_setup(
                     self.guild.id,
                     category.id,
@@ -520,7 +870,11 @@ class SetupView(discord.ui.View):
                     default_group_duration=self.group_duration,
                     default_pomodoro_duration=self.pomodoro_duration,
                     default_vc_id=voice.id,
+                    journal_operation_id=self.operation_id,
+                    default_role_id=self.default_role_id,
+                    update_default_role=True,
                 )
+                self.journal_phase = "committed"
             except StaffRoleSyncError as error:
                 logger.exception("Setup staff-role sync failed guild_id=%s", self.guild.id)
                 await interaction.followup.send(str(error) + self.retained_resources(), ephemeral=True)
@@ -532,10 +886,30 @@ class SetupView(discord.ui.View):
                 )
                 return
 
+            sync_pending = False
+            try:
+                await sync_staff_roles(self.manager.bot, self.guild, category)
+                await db.delete_setup_recovery_journal(self.guild.id, self.operation_id, phase="committed")
+                self.operation_id, self.journal_state = None, None
+            except (StaffRoleSyncError, discord.HTTPException, sqlite3.Error, OSError, RuntimeError, ValueError):
+                sync_pending = True
+                logger.exception(
+                    "Setup settings saved; staff synchronization pending guild_id=%s operation_id=%s",
+                    self.guild.id,
+                    self.operation_id,
+                )
+                self.journal_phase = "sync_pending"
+                try:
+                    await self.write_journal()
+                except (sqlite3.Error, OSError, RuntimeError, ValueError):
+                    logger.exception("Could not record pending staff sync guild_id=%s", self.guild.id)
+
             self.category_id = category.id
             self.commands_channel_id = channel.id
             self.log_channel_id = log_channel.id
             self.default_vc_id = voice.id
+            self.created_role_id = None
+            self.new_role_name = None
             self.created_vc_id = None
             self.moved_vc_id = None
             self.previous_vc_category_id = None
@@ -561,7 +935,12 @@ class SetupView(discord.ui.View):
                     logger.warning("Could not close saved setup view guild_id=%s", self.guild.id)
             await interaction.followup.send(
                 f"Setup saved. Study groups: <#{category.id}>. Commands: <#{channel.id}>."
-                f" Logs: <#{log_channel.id}>. Default VC: <#{voice.id}>. Default group size: {self.max_members}.",
+                f" Logs: <#{log_channel.id}>. Default VC: <#{voice.id}>. Default group size: {self.max_members}."
+                + (
+                    " Staff synchronization is pending. Check bot permissions and retry /sync_managers or /setup."
+                    if sync_pending
+                    else ""
+                ),
                 ephemeral=True,
             )
             logger.info(
@@ -630,6 +1009,38 @@ class SetupView(discord.ui.View):
         async with self.manager._setup_locks.setdefault(self.guild.id, asyncio.Lock()):
             return await self._recover_retained_resources_locked(interaction)
 
+    async def _recovery_ownership(self) -> tuple[tuple[Any, ...], set[int], set[int]]:
+        db = self.manager.bot.db
+        current = (
+            await db.get_group_category(self.guild.id),
+            await db.get_commands_channel(self.guild.id),
+            await db.get_mod_log_channel(self.guild.id),
+            await db.get_default_max_members(self.guild.id),
+            await db.get_default_group_duration(self.guild.id),
+            await db.get_default_pomodoro_duration(self.guild.id),
+            await db.get_default_vc(self.guild.id),
+        )
+        if self.journal_state is not None and current != self.snapshot:
+            raise RuntimeError("Setup settings changed during recovery")
+        groups = await db.get_all_study_groups(self.guild.id)
+        group_resources = {
+            value
+            for group in groups
+            if group.get("active", 1) and str(group.get("guild_id")) == str(self.guild.id)
+            for key in ("text_id", "vc_id", "category_id", "group_role_id")
+            if isinstance(value := group.get(key), int)
+        }
+        settings = (current[0], current[1], current[2], current[6])
+        protected = {value for value in settings if isinstance(value, int)} | group_resources
+        return settings, protected, group_resources
+
+    async def _may_recover_resource(self, channel_id: int, *, restoring: bool = False) -> bool:
+        settings, protected, group_resources = await self._recovery_ownership()
+        if restoring:
+            original = (self.snapshot[0], self.snapshot[1], self.snapshot[2], self.snapshot[6])
+            return channel_id not in group_resources and (channel_id not in protected or settings == original)
+        return channel_id not in protected
+
     async def _recover_retained_resources_locked(
         self, interaction: discord.Interaction | None = None
     ) -> dict[str, Any]:
@@ -648,25 +1059,15 @@ class SetupView(discord.ui.View):
             if level < 3:
                 return {**failed, "error": "unauthorized"}
 
+        if self.journal_phase != "prepared":
+            return {**failed, "error": "committed"}
         db = self.manager.bot.db
         try:
-            settings = (
-                await db.get_group_category(self.guild.id),
-                await db.get_commands_channel(self.guild.id),
-                await db.get_mod_log_channel(self.guild.id),
-                await db.get_default_vc(self.guild.id),
-            )
-            groups = await db.get_all_study_groups(self.guild.id)
-            protected = {value for value in settings if isinstance(value, int)}
-            group_resources: set[int] = set()
-            for group in groups:
-                if group.get("active") and str(group.get("guild_id")) == str(self.guild.id):
-                    group_resources.update(
-                        value
-                        for key in ("text_id", "vc_id", "category_id", "group_role_id")
-                        if isinstance(value := group.get(key), int)
-                    )
-            protected.update(group_resources)
+            await self.identify_created_intents()
+            if self.journal_state is not None and "original_role_id" in self.journal_state:
+                if await db.get_default_role(self.guild.id) != self.original_role_id:
+                    return {**failed, "error": "settings_changed"}
+            await self._recovery_ownership()
         except (sqlite3.Error, OSError, RuntimeError, ValueError, TypeError):
             logger.exception("Recovery ownership lookup failed guild_id=%s", self.guild.id)
             return failed
@@ -674,42 +1075,98 @@ class SetupView(discord.ui.View):
         deleted: list[int] = []
         reverted: list[int] = []
         skipped: list[int] = []
+        if self.created_role_id is not None:
+            role_id = self.created_role_id
+            try:
+                entry = self.journal_state["mutations"]["role"] if self.journal_state else None
+                role = discord.utils.get(await self.guild.fetch_roles(), id=role_id)
+                if role is None:
+                    await self.recovery_finished("role")
+                    self.created_role_id = None
+                    deleted.append(role_id)
+                elif (
+                    await db.get_default_role(self.guild.id) == role_id
+                    or entry is None
+                    or role.permissions.value != 0
+                    or role.mentionable
+                    or role.name != entry["role_name"]
+                    or role.managed
+                ):
+                    skipped.append(role_id)
+                else:
+                    members = [member async for member in self.guild.fetch_members(limit=None)]
+                    if any(role in member.roles for member in members):
+                        skipped.append(role_id)
+                    else:
+                        await self.recovery_intent("role")
+                        _, protected_roles, _ = await self._recovery_ownership()
+                        if role_id in protected_roles or await db.get_default_role(self.guild.id) == role_id:
+                            raise RuntimeError("The access role is now in use")
+                        await role.delete(reason="CPO setup rollback: uncommitted access role")
+                        await self.recovery_finished("role")
+                        self.created_role_id = None
+                        deleted.append(role_id)
+            except (discord.HTTPException, sqlite3.Error, OSError, RuntimeError, ValueError):
+                logger.exception("Access role recovery retained guild_id=%s role_id=%s", self.guild.id, role_id)
+                skipped.append(role_id)
         moved = (
             ("moved_channel_id", "previous_category_id", "previous_channel_overwrites", discord.TextChannel),
             ("moved_log_channel_id", "previous_log_category_id", "previous_log_overwrites", discord.TextChannel),
             ("moved_vc_id", "previous_vc_category_id", "previous_vc_overwrites", discord.VoiceChannel),
         )
         for id_attr, category_attr, acl_attr, channel_type in moved:
+            key = id_attr.removeprefix("moved_").removesuffix("_id")
             channel_id = getattr(self, id_attr)
             if channel_id is None:
                 continue
             channel = self.guild.get_channel(channel_id)
+            if self.journal_state is not None:
+                try:
+                    channel = await self.manager.bot.fetch_channel(channel_id)
+                except discord.NotFound:
+                    await self.recovery_finished(key)
+                    setattr(self, id_attr, None)
+                    setattr(self, category_attr, None)
+                    setattr(self, acl_attr, None)
+                    reverted.append(channel_id)
+                    continue
+                except discord.HTTPException:
+                    skipped.append(channel_id)
+                    continue
             category_id = getattr(self, category_attr)
             category = self.guild.get_channel(category_id) if category_id is not None else None
             overwrites = getattr(self, acl_attr)
-            # Recorded settings may reference the original channel; changed settings protect it.
-            original_settings = (self.snapshot[0], self.snapshot[1], self.snapshot[2], self.snapshot[6])
-            changed_setting = channel_id in group_resources or (
-                channel_id in protected and settings != original_settings
-            )
-            if (
-                changed_setting
-                or not isinstance(channel, channel_type)
-                or channel.guild.id != self.guild.id
-                or overwrites is None
-            ):
+            if not isinstance(channel, channel_type) or channel.guild.id != self.guild.id or overwrites is None:
                 skipped.append(channel_id)
                 continue
             if category_id is not None and not isinstance(category, discord.CategoryChannel):
                 skipped.append(channel_id)
                 continue
+            if self.journal_state is not None:
+                entry = self.journal_state["mutations"][key]
+                actual_acl = self.encode_acl(channel.overwrites)
+                if channel.category_id == entry["before_category"] and actual_acl == entry["before_acl"]:
+                    await self.recovery_finished(key)
+                    setattr(self, id_attr, None)
+                    setattr(self, category_attr, None)
+                    setattr(self, acl_attr, None)
+                    reverted.append(channel_id)
+                    continue
+                if channel.category_id != entry["after_category"] or actual_acl != entry["after_acl"]:
+                    skipped.append(channel_id)
+                    continue
             try:
+                await self.recovery_intent(key)
+                if not await self._may_recover_resource(channel_id, restoring=True):
+                    skipped.append(channel_id)
+                    continue
                 await channel.edit(
                     category=category if isinstance(category, discord.CategoryChannel) else None,
                     overwrites=overwrites,
                     reason="CPO setup rollback",
                 )
-            except discord.HTTPException:
+                await self.recovery_finished(key)
+            except (discord.HTTPException, sqlite3.Error, OSError, RuntimeError, ValueError):
                 logger.warning("Recovery restore failed guild_id=%s channel_id=%s", self.guild.id, channel_id)
                 skipped.append(channel_id)
                 continue
@@ -725,11 +1182,9 @@ class SetupView(discord.ui.View):
             ("created_category_id", discord.CategoryChannel),
         )
         for id_attr, created_type in created:
+            key = id_attr.removeprefix("created_").removesuffix("_id")
             channel_id = getattr(self, id_attr)
             if channel_id is None:
-                continue
-            if channel_id in protected:
-                skipped.append(channel_id)
                 continue
             try:
                 owner = await db.get_study_group_by_channel(channel_id)
@@ -737,21 +1192,42 @@ class SetupView(discord.ui.View):
                     skipped.append(channel_id)
                     continue
                 channel = self.guild.get_channel(channel_id)
-                if channel is None:
+                if channel is None or self.journal_state is not None:
                     try:
                         channel = await self.manager.bot.fetch_channel(channel_id)
                     except discord.NotFound:
+                        await self.recovery_finished(key)
                         deleted.append(channel_id)
                         setattr(self, id_attr, None)
                         continue
                 if not isinstance(channel, created_type) or channel.guild.id != self.guild.id:
                     skipped.append(channel_id)
                     continue
+                if self.journal_state is not None:
+                    entry = self.journal_state["mutations"][key]
+                    actual_category = getattr(channel, "category_id", None)
+                    if (
+                        actual_category != entry["after_category"]
+                        or self.encode_acl(channel.overwrites) != entry["after_acl"]
+                    ):
+                        skipped.append(channel_id)
+                        continue
                 if isinstance(channel, discord.CategoryChannel) and channel.channels:
                     skipped.append(channel_id)
                     continue
-                await channel.delete(reason="CPO setup rollback: delete uncommitted resource")
+                await self.recovery_intent(key)
+                if not await self._may_recover_resource(channel_id):
+                    skipped.append(channel_id)
+                    continue
+                try:
+                    await channel.delete(reason="CPO setup rollback: delete uncommitted resource")
+                except discord.NotFound:
+                    logger.info(
+                        "Recovery resource already deleted guild_id=%s channel_id=%s", self.guild.id, channel_id
+                    )
+                await self.recovery_finished(key)
             except discord.NotFound:
+                await self.recovery_finished(key)
                 deleted.append(channel_id)
                 setattr(self, id_attr, None)
                 continue
@@ -763,9 +1239,14 @@ class SetupView(discord.ui.View):
             setattr(self, id_attr, None)
 
         if not self.has_pending_resources():
+            if self.operation_id is not None:
+                await db.delete_setup_recovery_journal(self.guild.id, self.operation_id, phase="prepared")
+                self.operation_id, self.journal_state = None, None
             self.new_category_name = None
             self.category_id, self.commands_channel_id, self.log_channel_id = self.snapshot[:3]
             self.default_vc_id = self.snapshot[6]
+            self.default_role_id = self.original_role_id
+            self.new_role_name = None
         logger.info(
             "Setup recovery guild_id=%s deleted=%s reverted=%s skipped=%s", self.guild.id, deleted, reverted, skipped
         )
@@ -786,6 +1267,13 @@ class SetupView(discord.ui.View):
             parts.append(f"Restored {len(reverted)} moved channel(s)")
         if skipped:
             parts.append(f"Retained {len(skipped)} resource(s) due to active ownership or errors")
+        if self.journal_state is not None and any(
+            entry.get("id") is None and entry["status"] != "recovered"
+            for entry in self.journal_state["mutations"].values()
+        ):
+            parts.append(
+                f"Unconfirmed creation remains. Review the Discord audit log for CPO setup {self.operation_id}; no resource will be deleted without matching bot audit evidence"
+            )
         if not parts:
             return "No retained resources required recovery."
         return "; ".join(parts) + "."
@@ -809,6 +1297,16 @@ class SetupView(discord.ui.View):
             logger.exception("Could not report setup error guild_id=%s", self.guild.id)
 
     def retained_resources(self) -> str:
+        uncertain = ""
+        if (
+            self.journal_phase == "prepared"
+            and self.journal_state is not None
+            and any(
+                entry.get("id") is None and entry["status"] != "recovered"
+                for entry in self.journal_state["mutations"].values()
+            )
+        ):
+            uncertain = f" An unconfirmed Discord creation is retained for recovery (operation {self.operation_id}). Review the matching bot audit log; resources are never identified by name."
         if (
             self.created_category_id is None
             and self.created_channel_id is None
@@ -817,15 +1315,18 @@ class SetupView(discord.ui.View):
             and self.moved_log_channel_id is None
             and self.created_vc_id is None
             and self.moved_vc_id is None
+            and self.created_role_id is None
         ):
-            return ""
-        details = ""
+            return uncertain
+        details = uncertain
+        if self.created_role_id is not None:
+            details += f" Access role ID {self.created_role_id} remains uncommitted; retry Save or Recover."
         if (
             self.created_category_id is not None
             or self.created_channel_id is not None
             or self.created_log_channel_id is not None
         ):
-            details = (
+            details += (
                 " Created Discord resources remain for review:"
                 f" category ID {self.created_category_id}, commands channel ID {self.created_channel_id},"
                 f" log channel ID {self.created_log_channel_id}."

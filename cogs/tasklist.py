@@ -5,6 +5,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from cogs._access_policy import AccessView
 from utils import acknowledge_interaction, send_response, should_use_ephemeral
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ class TaskActionSelect(discord.ui.Select):
             self.view.stop()
 
 
-class TaskActionView(discord.ui.View):
+class TaskActionView(AccessView):
     def __init__(self, tasks, db, user_id, action):
         super().__init__(timeout=120)
         self.user_id = user_id
@@ -74,7 +75,7 @@ class TaskActionView(discord.ui.View):
         return False
 
 
-class TaskPaginationView(discord.ui.View):
+class TaskPaginationView(AccessView):
     def __init__(self, tasks: list, title: str):
         super().__init__(timeout=180)
         self.tasks = tasks
@@ -385,11 +386,8 @@ class TaskList(commands.Cog):
                 ephemeral=True if cleanup else ephemeral,
             )
         else:
-            await send_response(
-                interaction,
-                "You must use this command inside a study group channel or server to purge its tasks.",
-                ephemeral=True,
-            )
+            count = await self.bot.db.purge_personal_tasks(interaction.user.id)
+            await send_response(interaction, f"Successfully purged {count} personal tasks.", ephemeral=True)
 
     async def _purge_task_messages(self, interaction):
         channel = interaction.channel

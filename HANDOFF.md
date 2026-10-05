@@ -2,6 +2,63 @@
 
 Updated 2026-10-05. Branch: antigravity-fix. Workspace: C:\Users\Vector\Downloads\Chief-Productivity-Officer-1.0.0-rc.3.
 
+## Resume in progress — 2026-10-05
+
+### Compact coordination checkpoint
+
+User requested compaction, then context reset. No main-chat force-compaction/reset tool is exposed. `/root/coding_resumed` was interrupted at its saved checkpoint and recreated as `/root/coding_reset` with fresh context and the same GPT-6.1 Sol medium profile. Recreate remaining roles with fresh context when needed. Project work remains active. Subsequent usage inspection found no available account resets; the five-hour window was 99% used, resetting 2026-10-05 19:34:15 IST, and weekly usage 87%, resetting 2026-10-10 02:42:05 IST. Context reset does not reset account limits.
+
+- Source/test owner: `/root/coding_reset`, GPT-6.1 Sol medium. Core debugger work is complete; coding is integrating durable invitations, audits, and comprehensive command/control validation. Root owns governance only. One subagent runs at a time.
+- Core evidence: 461 tests, Mypy 38 files, Ruff/format/whitespace passed. Role-stage evidence: 478 tests and clean static checks; subsequent access-helper changes passed 18 targeted role tests. These staged snapshots do not verify the unfinished invitation/audit integration.
+- Role stage: persisted nullable default role; Setup picker/create/clear; no automatic enrollment; role creation journal and conservative recovery; strict command/UI gate for staff and Supreme Commander too. Only authorized Setup is exempt. Membership is refetched after awaited settings reads.
+- Invitation stage: approved tables, locked guild-scoped lifecycle/CAS and audit CRUD, shared service, and three recipient send paths are dirty and unverified. Absolute warning is 360 seconds and expiry 600 seconds. Pending: startup restoration/order, accepting-state races and lifecycle proof, real SQLite tests, stale fixtures, and comprehensive command/control auditing.
+- Confirmed defect: Pomodoro invitation acceptance saved the participant before study-group admission. Coding reordered it; regression/validation remains pending, including participant-save failure after successful admission.
+- Approved schemas: `setup_recovery_journals`, `checkin_guild_settings`, `session_invitations`, `command_audit_events`, nullable `guild_settings.default_role_id`, and created-role journal tracking. No repeat approval needed. Only `.env` developer ID confers global Level 5 Supreme Commander; Level 4 grants are guild-scoped. Non-task activity/settings stay guild-scoped; explicit personal/cross-scope task behavior remains available.
+- Next: finish coding; sequential read-only setup/security, database/cleanup, and Pomodoro/lifecycle QA; debugger GPT-6.1 Sol xhigh fixes findings; affected QA; TODO audit GPT-6.1 Sol low; final checks; two documentation-only GPT-6 Luna low agents rebuild `ARCHITECTURE.md` and `database_architecture.md` with diagrams; package hygiene and authorized CI/branch pushes to both repositories. Existing rc.5 tags/assets remain immutable.
+- No resumed commit, push, live Discord action, or new dependency. Preserve dirty work. Stop only on explicit user instruction and save actual state. Earlier pause/release evidence below is historical.
+
+The user explicitly requested `continue`. Work resumed from the preserved dirty tree on `antigravity-fix` at `a4c607d812ce982523be25c5adca1d95ead80abc`. The coding role was recreated with GPT-6.1 Sol medium; subsequent QA, debugger, audit, mapping, and CI/CD work follows `RESUME_WORKFLOW.md` sequentially. The earlier pause checkpoint below records the starting state. Its release checks do not verify the resumed implementation. No resumed changes have been committed or pushed yet.
+
+Later user steering expands verification to races, async waits, cancellation, task ownership, and shutdown. The user also explicitly authorizes guild isolation for all non-task activity/settings and command-granted developer access. Only `.env` `BOT_DEVELOPER_ID` stays global, now as **Level 5 Supreme Commander**. Guild-granted developers remain Level 4; no command can assign Level 5. These requests supersede the earlier five-tier preservation constraint. The debugger owns the resulting source/test changes; read-only QA must rerun affected scopes after completion.
+
+The user requested database synchronization/retrieval for saved state and approved an additive `checkin_guild_settings` table on 2026-10-05. Check-in settings were memory-only with a commented save block. The approved design is recorded in ARCHITECTURE.md; add validated guild-scoped storage, startup hydration, and save-before-memory updates with failure/restart tests. Do not ask again for this approved schema.
+
+After implementation and QA are complete, the user requests two GPT-6 Luna low agents: retrace the codebase and rebuild `ARCHITECTURE.md`, and retrace persistence and create `database_architecture.md`, both with diagrams. This supersedes the earlier GPT-5.6 Luna mapping profiles. Keep these roles documentation-only and use the final verified source.
+
+Further user scope: all group/check-in/Pomodoro invitations warn at 360 seconds and expire at 600 seconds, with an expiry notice asking the invitee to request a new invitation from the owner. The user approved additive `session_invitations` and `command_audit_events` tables for durable invitation recovery and guild-scoped database audit. Invitations and joins must be logged in Discord and SQLite. Audit every command/control's actor ID, current tier, guild/resource provenance, ownership/membership, and active state; usernames are display labels. These security changes are explicitly authorized beyond the original fixes-only scope.
+
+The user approved nullable `guild_settings.default_role_id` and journal tracking for a Setup-created role. Setup offers existing-role selection or optional creation; no auto-enrollment. The current stated policy is strict role gating for everyone on guild commands/controls, with authorized Setup configuration/recovery exempt to prevent lockout. Null selection is unrestricted. Invitations always require current guild membership and the configured default role, without a staff exception. No live guild actions are authorized.
+
+Core implementation checkpoint before invitation/default-role work: debugger completed log-authority reconciliation, setup recovery serialization, async task ownership and shutdown, guild isolation, Level 5 Supreme Commander, and durable check-in policy. Its final checks passed 461 offline tests, Mypy across 38 files, Ruff lint/format, and whitespace checks. These checks cover the core snapshot only. `/root/coding_resumed` now owns source/tests for the approved invitation, audit, and optional default-role additions; expanded read-only QA follows afterward. No resumed commits or pushes have occurred.
+
+Role-stage checkpoint: optional Setup role selection/creation/clearing, nullable guild storage, legacy-compatible role journal recovery, and shared command/UI role gates are implemented. The role-stage full suite passed 478 tests with Mypy/Ruff/format/whitespace clean. A final access-helper change (current member refetch after awaited settings reads) passed 18 targeted role tests; full verification must run again after the remaining integration. `_access_policy.py` and `test_default_role.py` were added. Invitation and audit tables exist, but their DAL lifecycle and runtime integration remain unfinished. The same coding role now owns that next stage.
+
+## Pause checkpoint — 2026-10-05
+
+The user explicitly stopped project work and requested a persistent resume workflow. Only rule/checkpoint creation continued afterward. Coding was interrupted; no subagent remains active. Read `RESUME_WORKFLOW.md` on the next explicit request to continue this repository. Preserve current edits and reuse the saved agents sequentially; recreate missing sessions with their saved profiles.
+
+Local HEAD and both remote `antigravity-fix` branches are `a4c607d812ce982523be25c5adca1d95ead80abc` before these uncommitted edits. Both rc.5 releases/tags remain at `a01656c77c637bbf831624fa9b917d19961ae2b1`. Python 3.11.17 CI and downloaded release archives passed; these checks cover the committed release/workflow snapshots, NOT the dirty implementation below.
+
+Uncommitted, unfinished implementation by `/root/coding`:
+
+- `database.py`: additive recovery journal table/index, locked CRUD with operation/phase checks, atomic settings+journal commit, and personal-only task purge. The user explicitly approved this recovery schema; do not ask again.
+- `cogs/tasklist.py`: default DM purge now calls the personal-only DAL path.
+- `cogs/_setup_view.py`: substantial in-progress journal serialization, mutation intent/result and rollback wiring. Review all paths before trusting it; manager/readiness integration and regression tests were still outstanding at interruption.
+- `cogs/study_groups.py`: voice creation includes `user_limit=min(99, max(1, self.max_members))`. Confirm this clamp matches the intended effective group limit; do not treat the member-limit bug as verified or finished.
+- `ARCHITECTURE.md`: root added the approved recovery design, marked implementation in progress.
+
+No new partial-implementation tests/full verification have completed. No unfinished source changes were committed or pushed. Rule/checkpoint edits in AGENTS.md, RESUME_WORKFLOW.md, HANDOFF.md and .gitattributes are local only.
+
+Remaining authorized work on resume:
+
+1. Complete default DM purge with real SQLite isolation tests: only invoker's personal tasks (`guild_id IS NULL`, `group_id IS NULL`); group/server/other-user tasks survive. Preserve explicit all_tasks behavior.
+2. Complete approved durable setup recovery: journal intents before REST and results before next mutation; reconstruct exact categories/ACLs after restart; fail closed on unresolved ownership, changed settings/ACLs and ambiguous creation. Never roll back committed settings. Defer staff synchronization until settings commit; retain and retry postcommit sync_pending via readiness and existing manager/setup flows.
+3. User confirmed setup max_members fails for NEW study-group limits AND voice capacity. Verify setup Save → saved default → omitted /create_group max → group memory/DB/embed/admission/VC capacity, with explicit overrides, separate guilds and restart. Existing new-group default getter is present; staff-sync failure before settings commit is a concrete path that prevents the default saving. Do not automatically resize existing groups.
+4. Latest additional request: logs visible only to permission Levels 3–4 plus bot access. This has NOT been implemented. Cover new/reused/moved/configured logs, default/public category inheritance, nonstaff role/member allows, stale CPO staff-role membership, startup/staff resync and selected mod-log channels. Preserve unrelated permissions and the five-tier evaluation. Keep logs private even if staff sync fails; journal original reused-channel ACL before editing.
+5. Sequential read-only QA, then debugger fixes (GPT-6.1 Sol xhigh), affected QA again, TODO audit and changed code/database map refresh. Run scoped and full checks; package hygiene review. Reuse CI/CD for verified branch pushes to both repositories after resume; existing rc.5 tags/assets stay immutable. No production Discord actions.
+
+User preferences: conservative tokens, fixes only, no humaniser, QA never edits code, design only system/architecture. Coding GPT-6.1 Sol medium; debugger GPT-6.1 Sol xhigh; audit GPT-6.1 Sol low; both map agents GPT-5.6 Luna low. Other agents use inherited settings with no explicit override recorded. Full roster and sequence are in RESUME_WORKFLOW.md.
+
 ## Baseline and current work
 
 Antigravity's baseline is commit 16d7266. QA fixes and documentation were committed as `a01656c77c637bbf831624fa9b917d19961ae2b1`. Both authorized repositories contain the workflow correction `817cccf` and exact CI pin `10acee4`; subsequent closeout commits change documentation only. The earlier release baseline is 6b51722 on release/v1.0.0-rc.4. Origin is https://github.com/Vectorphy/crispy-octo-happiness.git.

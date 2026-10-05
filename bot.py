@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from typing import Any, Optional
@@ -6,6 +7,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from cogs._access_policy import AccessCommandTree
 from database import DBHandler as Database
 from utils import send_response, validate_bot_developer_id
 
@@ -29,8 +31,9 @@ intents.voice_states = True
 
 class CPO(commands.Bot):
     def __init__(self, bot_developer_id: Optional[Any] = None):
-        super().__init__(command_prefix="!", intents=intents)
+        super().__init__(command_prefix="!", intents=intents, tree_cls=AccessCommandTree)
         self.db = Database()
+        self._shutdown_task: asyncio.Task[None] | None = None
         if bot_developer_id is not None:
             self.bot_developer_id = validate_bot_developer_id(bot_developer_id, allow_mock=True)
         else:
@@ -72,8 +75,15 @@ class CPO(commands.Bot):
                 logger.warning(f"Failed to clear guild commands for '{guild.name}' ({guild.id}): {e}")
 
     async def close(self):
-        await self.db.close()
-        await super().close()
+        if self._shutdown_task is None:
+            self._shutdown_task = asyncio.create_task(self._close_resources())
+        await asyncio.shield(self._shutdown_task)
+
+    async def _close_resources(self) -> None:
+        try:
+            await super().close()
+        finally:
+            await self.db.close()
         logger.info("Bot has been closed.")
 
 

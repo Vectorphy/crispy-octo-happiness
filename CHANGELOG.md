@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Resumed fixes, 2026-10-05
+- Default DM task purge deletes only the invoker's personal tasks with no server or study-group scope. Explicit `all_tasks: true` retains its cross-scope behavior.
+- Setup records resource mutation intents, IDs, original categories, and permission overwrites in the approved durable recovery journal. Settings commit atomically with the journal phase; staff synchronization follows the commit and remains retryable after restart.
+- New study groups apply their saved or explicitly overridden member limit to voice-channel capacity. Updating setup defaults does not resize existing groups.
+- Setup and selected moderator logs use private channel overwrites for current staff and the bot. Staff synchronization seals log access before role changes, and action logging verifies access before sending.
+- Guild configuration and group allocation share setup recovery's lock; recovery revalidates resource ownership after recording rollback intent. Discord authority changes reconcile log access, and private logs remain independent of category staff-role permissions.
+- Check-in reminder waits drain cancellation without leaving sleep/event tasks behind. Reminder, admission, and ending operations serialize; cancelled video-enforcement tasks cannot unregister replacements.
+- Shutdown unloads and drains background timers, reminders, monitors, and video tasks before closing SQLite. Pomodoro state remains persisted for restart.
+- Command-granted developers are Level 4 within their guild; only `.env` `BOT_DEVELOPER_ID` is global Level 5, named Supreme Commander. Legacy null-guild developer rows remain stored without conferring guild authority. Non-task activity, focus metrics, limits, and settings use the current guild; explicit cross-scope task operations remain available.
+- Check-in guild settings and permission lists are validated and persisted in the approved `checkin_guild_settings` table. Startup restores them; successful saves update memory and active-session policy, while failed writes preserve the previous policy. Failed session deletion remains retryable.
+- Setup can select, create, or clear an optional required access role. Its nullable guild setting and creation recovery journal survive restart; no members are enrolled automatically. Guild commands and controls require the selected role, including staff and the Supreme Commander. Authorized Setup remains available to repair access; no selection leaves the server unrestricted.
+
 ### QA and packaging, 2026-10-05
 - Prerelease validation/build jobs now pin Python `3.11.17` on Ubuntu 24.04. General CI replaces its floating 3.11 entry with `3.11.17`, retains 3.10/3.12 coverage, and consistently invokes `python -m pytest`. Availability was verified against Python.org and the official Actions Python manifest.
 - Published prerelease `v1.0.0-rc.5` on Chief-Productivity-Officer from immutable source commit `a01656c`. Both authorized branches include workflow repair `817cccf`. Downloaded wheel, sdist, runtime ZIP, and GitHub source ZIP passed integrity, digest, membership, version, and source checks. The same rc.5 prerelease was subsequently published on crispy-octo-happiness after exact Python 3.11.17 validation/build succeeded. Both repositories' 3.10/3.11.17/3.12 CI matrices passed. Downloaded crispy assets passed the same archive/source checks. The existing Chief release was preserved; neither release includes later partial-implementation work.

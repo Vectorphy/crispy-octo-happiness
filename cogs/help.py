@@ -67,7 +67,7 @@ class Help(commands.Cog):
             )
             embed.add_field(
                 name="Bot developer commands",
-                value="`/add_bot_developer` and `/remove_bot_developer`: manage global developer access. `/set_permission_level`: remove a server grant or grant Manager/Developer. These operations require Level 4.",
+                value="`/add_bot_developer` and `/remove_bot_developer`: manage developer access in this server. `/set_permission_level`: remove a server grant or grant Manager/Developer. These operations require Level 4 or 5. Guild developers cannot manage other servers. The configured Supreme Commander is Level 5.",
                 inline=False,
             )
         await send_response(interaction, embed=embed, ephemeral=True)

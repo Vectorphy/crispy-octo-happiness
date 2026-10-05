@@ -1,7 +1,8 @@
+import asyncio
 import logging
 import re
 import sqlite3
-from typing import Any, List, Optional, Set
+from typing import Any, Coroutine, List, Optional, Set, TypeVar
 
 import discord
 from discord import app_commands
@@ -12,6 +13,36 @@ logger = logging.getLogger(__name__)
 MIN_STAGE_MINUTES = 2
 MAX_STAGE_MINUTES = 240
 DEFAULT_SESSION_DURATION = 24 * 60 * 60
+T = TypeVar("T")
+
+
+def guild_operation_locks(bot: Any) -> dict[int, asyncio.Lock]:
+    """Share setup recovery, configuration and allocation locks across cogs."""
+    return bot.__dict__.setdefault("_guild_operation_locks", {})
+
+
+async def complete_operation(operation: Coroutine[Any, Any, T]) -> T:
+    """Keep a committed database change and its memory update together on cancellation."""
+    task = asyncio.create_task(operation)
+    cancelled = False
+    while True:
+        try:
+            result = await asyncio.shield(task)
+            break
+        except asyncio.CancelledError:
+            cancelled = True
+            if task.done():
+                break
+        except Exception:
+            if cancelled:
+                logger.exception("Cancelled operation failed while completing its state update")
+                raise asyncio.CancelledError from None
+            raise
+    if cancelled:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error("Cancelled operation failed while completing its state update", exc_info=error)
+        raise asyncio.CancelledError
+    return result
 
 
 async def should_use_ephemeral(interaction: discord.Interaction, db) -> bool:
@@ -282,6 +313,9 @@ async def has_guild_permissions(user, guild, bot) -> bool:
     user_id = getattr(user, "id", None)
     if not isinstance(user_id, int):
         return False
+    member_guild = getattr(user, "guild", None)
+    if member_guild is not None and member_guild.id != guild.id:
+        return False
     if user_id == getattr(bot, "bot_developer_id", None) or user_id == guild.owner_id:
         return True
     perms = getattr(user, "guild_permissions", None)
@@ -310,11 +344,7 @@ async def has_guild_permissions(user, guild, bot) -> bool:
             return False
         level = manager["permission_level"]
         grant_guild_id = manager["guild_id"]
-        return (
-            isinstance(level, int)
-            and level >= 3
-            and (grant_guild_id == guild.id or (grant_guild_id is None and level == 4))
-        )
+        return isinstance(level, int) and 3 <= level <= 4 and grant_guild_id == guild.id
     return False
 
 
@@ -393,9 +423,9 @@ class ProductivityService:
     def __init__(self, db_handler):
         self.db = db_handler
 
-    async def get_productivity_metrics(self, user_id):
+    async def get_productivity_metrics(self, user_id, guild_id=None):
         tasks_completed = await self.get_tasks_completed(user_id)
-        focus_seconds = await self.db.get_productivity_focus_seconds(user_id)
+        focus_seconds = await self.db.get_productivity_focus_seconds(user_id, guild_id)
         focus_hours = max(0.0, float(focus_seconds)) / 3600
         efficiency_score = self.calculate_efficiency(tasks_completed, focus_hours)
 

@@ -1,5 +1,11 @@
 # AGENTS.md — Autonomous Operations Manual & Developer Playbook
 
+## Repository resume rule
+
+When the user asks to continue or resume work on this repository, read `RESUME_WORKFLOW.md` and the latest pause checkpoint in `HANDOFF.md` before taking action. Follow the saved agent roles, explicit model/effort settings, sequential execution order, ownership, approvals, and outstanding tasks. This is standing user authorization to reuse those agents or recreate unavailable agents with those profiles for this repository's existing work. Do not substitute requested models silently.
+
+A request scoped to workflow/rule creation resumes only that activity. A paused checkpoint must not trigger coding, tests, deployments, or remote writes without a later user instruction to resume project work. On stop, interrupt active agents and save current state locally. Preserve dirty work; never restart from the old release baseline or treat earlier checks as verification of unfinished edits.
+
 > **Repository**: Chief Productivity Officer (CPO)  
 > **Tech Stack**: Python 3.12, Discord.py 2.4.x, SQLite 3 (async DAL wrapper), Pytest, Ruff, Mypy  
 > **Core Purpose**: Discord Productivity, Study Group Orchestration, Dynamic Pomodoro Timer & Standup Check-in Bot
@@ -101,7 +107,7 @@ python -m build
 - **Changing Public Slash Command Signatures**: Altering command names, required parameters, or option choices consumed by Discord users.
 - **Adding New Dependencies**: Introducing third-party libraries into `requirements.txt` or `pyproject.toml`.
 - **Deleting Discord Resources in Production**: Purging channels, roles, or server categories in live guild environments.
-- **Altering the 5-Tier Permission Hierarchy**: Modifying the permission evaluation logic in `cogs/manager.py` or `utils.py`.
+- **Altering the Permission Hierarchy**: Modifying permission evaluation in `cogs/manager.py` or `utils.py` requires explicit authorization. The 2026-10-05 user request authorizes guild-scoped Level 4 grants and a global Level 5 Supreme Commander from `.env`.
 
 ### Never Do (Hard Stops)
 - **NEVER Commit Secrets**: Never hardcode or print bot tokens (`DISCORD_BOT_TOKEN`), user credentials, or API keys.
@@ -117,8 +123,9 @@ python -m build
 
 Conventions and rules not fully enforceable by compiler syntax alone:
 
-1. **5-Tier Authorization Model (`cogs/manager.py`)**:
-   - `BOT_DEVELOPER` (Tier 4): Superuser defined in `.env` / `BOT_DEVELOPER_ID`. Full global override.
+1. **6-Tier Authorization Model (`cogs/manager.py`)**:
+   - `SUPREME_COMMANDER` (Tier 5): Only the `.env` / `BOT_DEVELOPER_ID` identity has global authority. Non-task activity and settings remain scoped to the current guild.
+   - `BOT_DEVELOPER` (Tier 4): Explicit developer grant in the current guild; never inherited into another guild.
    - `GUILD_MANAGER` (Tier 3): Server owner (`guild.owner_id`) or members with administrator / manage guild privileges.
    - `GROUP_OWNER` (Tier 2): Creator or assigned owner of a study group / check-in session.
    - `GROUP_MEMBER` (Tier 1): Verified member inside a study group / check-in roster.

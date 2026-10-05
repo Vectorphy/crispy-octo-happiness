@@ -3,7 +3,8 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from cogs._staff_roles import StaffRoleSyncError, sync_staff_roles
+from cogs._staff_roles import StaffRoleSyncError, log_overwrites, sync_staff_roles
+from cogs.manager import Manager
 
 
 def staff_environment():
@@ -102,19 +103,20 @@ async def test_staff_roles_are_scoped_and_category_children_receive_overwrites()
 
     assert await sync_staff_roles(bot, guild, category) is category
 
-    manager_role, developer_role = guild.roles
+    manager_role, developer_role, supreme_role = guild.roles
     assert manager_role.name == "CPO Manager"
     assert developer_role.name == "CPO Bot Developer"
     assert manager_role.permissions == discord.Permissions.none()
     assert developer_role.permissions == discord.Permissions.none()
     assert members[5].roles == [manager_role]
-    assert members[6].roles == [developer_role]
+    assert supreme_role.name == "CPO Supreme Commander"
+    assert members[6].roles == [supreme_role]
     assert members[7].roles == []
     assert category.overwrites[guild.default_role].manage_threads is False
     assert category.overwrites[manager_role].view_channel is True
     assert category.overwrites[developer_role].manage_roles is True
     for channel in (text, voice):
-        assert channel.set_permissions.await_count == 2
+        assert channel.set_permissions.await_count == 3
         overwrites = {call.args[0]: call.kwargs["overwrite"] for call in channel.set_permissions.await_args_list}
         assert overwrites[manager_role].view_channel is True
         assert overwrites[manager_role].manage_channels is True
@@ -134,11 +136,11 @@ async def test_demoted_manager_loses_cpo_role_but_configured_developer_keeps_acc
     await sync_staff_roles(bot, guild, category)
 
     assert members[5].roles == []
-    assert members[6].roles == [guild.roles[1]]
+    assert members[6].roles == [guild.roles[2]]
     members[5].remove_roles.assert_awaited_once()
     members[6].remove_roles.assert_not_awaited()
     guild.create_role.assert_awaited()
-    assert guild.create_role.await_count == 2
+    assert guild.create_role.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -209,4 +211,128 @@ async def test_discord_category_failure_reports_created_role_ids():
         await sync_staff_roles(bot, guild, category)
 
     bot.db.get_all_managers.assert_awaited_once_with(guild.id)
-    assert len(guild.roles) == 2
+    assert len(guild.roles) == 3
+
+
+@pytest.mark.asyncio
+async def test_synced_log_stays_private_when_stale_role_removal_fails():
+    bot, guild, category, _, _, members = staff_environment()
+    guild.default_role.id = 1
+    guild.me.id = 100
+    guild.me.guild = guild
+    bot.db.get_all_managers.return_value = []
+    stale_role = await guild.create_role(
+        name="CPO Manager", permissions=discord.Permissions.none(), mentionable=False, reason="test"
+    )
+    members[5].roles = [stale_role]
+    members[5].remove_roles.side_effect = discord.Forbidden(MagicMock(status=403), "denied")
+    log = MagicMock(spec=discord.TextChannel, id=30, guild=guild)
+    category.overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, embed_links=True, read_message_history=True
+        ),
+    }
+    log.overwrites = dict(category.overwrites)
+    category.channels = [log]
+    bot.db.get_mod_log_channel.return_value = log.id
+    guild.get_channel.return_value = log
+
+    async def log_edit(*, overwrites, reason):
+        log.overwrites = overwrites
+        return log
+
+    async def category_edit(*, overwrites, reason):
+        if log.overwrites == category.overwrites:
+            log.overwrites = dict(overwrites)
+        category.overwrites = overwrites
+        assert log.overwrites[stale_role].view_channel is False
+        return category
+
+    log.edit = AsyncMock(side_effect=log_edit)
+    category.edit = AsyncMock(side_effect=category_edit)
+    with pytest.raises(StaffRoleSyncError):
+        await sync_staff_roles(bot, guild, category)
+    assert stale_role in members[5].roles
+    assert log.overwrites[stale_role].view_channel is False
+    assert log.overwrites[guild.default_role].view_channel is False
+    assert log.overwrites[guild.me].view_channel is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event", ["member", "role", "deleted_role", "leave", "join", "owner"])
+async def test_authority_events_revoke_stale_direct_log_access(event):
+    bot, guild, _, _, _, members = staff_environment()
+    guild.owner_id = 999
+    guild.me.id = 100
+    guild.default_role.id = 1
+    record = {"user_id": 5, "guild_id": 1, "permission_level": 3, "grant_source": "server_sync"}
+    bot.db.get_all_managers.return_value = [record]
+    bot.db.get_manager.return_value = record
+    log = MagicMock(spec=discord.TextChannel, id=30, guild=guild)
+    log.overwrites = {members[5]: discord.PermissionOverwrite(view_channel=True, send_messages=False)}
+    bot.db.get_mod_log_channel.return_value = 30
+    guild.get_channel.return_value = log
+
+    async def edit(*, overwrites, reason):
+        log.overwrites = overwrites
+        return log
+
+    log.edit = AsyncMock(side_effect=edit)
+    manager = Manager(bot)
+    manager.sync_guild_managers = AsyncMock()
+    if event == "member":
+        before = MagicMock(spec=discord.Member, guild_permissions=discord.Permissions(moderate_members=True))
+        await manager.on_member_update(before, members[5])
+    elif event == "role":
+        before = MagicMock(spec=discord.Role, permissions=discord.Permissions(moderate_members=True))
+        after = MagicMock(spec=discord.Role, guild=guild, permissions=discord.Permissions.none())
+        await manager.on_guild_role_update(before, after)
+    elif event == "deleted_role":
+        await manager.on_guild_role_delete(MagicMock(spec=discord.Role, guild=guild))
+    elif event == "leave":
+        guild.members.remove(members[5])
+        guild.get_member.side_effect = lambda identifier: members.get(identifier) if identifier != 5 else None
+        await manager.on_member_remove(members[5])
+    elif event == "join":
+        await manager.on_member_join(members[5])
+    else:
+        await manager.on_guild_update(MagicMock(spec=discord.Guild, owner_id=5), guild)
+    assert log.overwrites[members[5]].view_channel is False
+    assert log.overwrites[members[5]].send_messages is False
+    assert log.overwrites[guild.me].view_channel is True
+
+
+@pytest.mark.asyncio
+async def test_authority_refresh_leaves_log_sealed_when_staff_lookup_fails():
+    bot, guild, _, _, _, members = staff_environment()
+    log = MagicMock(spec=discord.TextChannel, id=30, guild=guild)
+    log.overwrites = {members[5]: discord.PermissionOverwrite(view_channel=True)}
+    bot.db.get_mod_log_channel.return_value = 30
+    bot.db.get_all_managers.side_effect = RuntimeError("unavailable")
+    guild.get_channel.return_value = log
+
+    async def edit(*, overwrites, reason):
+        log.overwrites = overwrites
+        return log
+
+    log.edit = AsyncMock(side_effect=edit)
+    manager = Manager(bot)
+    manager.sync_guild_managers = AsyncMock()
+    await manager._refresh_staff_authority(guild)
+    assert log.overwrites[members[5]].view_channel is False
+
+
+@pytest.mark.asyncio
+async def test_identical_private_log_and_category_abort_before_category_allows():
+    bot, guild, category, _, _, _ = staff_environment()
+    for name in ("CPO Manager", "CPO Bot Developer", "CPO Supreme Commander"):
+        await guild.create_role(name=name, permissions=discord.Permissions.none(), mentionable=False, reason="test")
+    category.overwrites = await log_overwrites(bot, guild, {}, staff=False)
+    log = MagicMock(spec=discord.TextChannel, id=30, guild=guild, overwrites=dict(category.overwrites))
+    log.edit = AsyncMock(return_value=log)
+    bot.db.get_mod_log_channel.return_value = 30
+    guild.get_channel.return_value = log
+    with pytest.raises(StaffRoleSyncError, match="independent"):
+        await sync_staff_roles(bot, guild, category)
+    category.edit.assert_not_awaited()

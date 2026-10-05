@@ -74,6 +74,24 @@ Verification (2026-10-05 antigravity-fix): all 402 offline tests pass. Mypy repo
 
 ## 3. Security & Reliability Risks
 
+### SEC-07: Log access can outlive native staff authority
+- **Severity**: High (P1)
+- **Status**: **Fix implemented; independent resumed QA pending**
+- **Affected Files**: `cogs/_staff_roles.py`, `cogs/manager.py`
+- **Details**: The debugger added native-authority event reconciliation, explicit CPO-role log denies, and sealing before category mutations and after failures. Core regression checks passed; independent QA must rerun the original revocation and category-propagation findings after the remaining feature work.
+
+### SEC-08: Non-task activity and command-granted developer scope span guilds
+- **Severity**: High (P1)
+- **Status**: **Fix implemented; independent resumed QA pending**
+- **Affected Files**: `database.py`, `utils.py`, `cogs/manager.py`, `cogs/checkin.py`, `cogs/productivity_tracker.py`, `cogs/study_groups.py`
+- **Details**: Focus-time aggregation, participation counts, settings, and command-granted Level 4 developers now use the current guild. Only the developer ID configured in `.env` confers global Level 5 Supreme Commander authority. Legacy null-guild and stored Level 5 rows remain inert. Tracking/session provenance checks reject cross-guild identity collisions. Explicit task cross-scope behavior stays available. Core regression checks passed; independent QA remains pending.
+
+### SEC-09: Pomodoro invitation acceptance precedes group admission
+- **Severity**: High (P1)
+- **Status**: **Fix in progress during invitation integration**
+- **Affected File**: `cogs/pomodoro.py`
+- **Details**: Invitation review found participant persistence occurring before study-group admission. A full group or failed admission could leave a Pomodoro participant who never joined the group. The coding agent is moving participant commit after successful admission and adding failure-boundary regressions. Independent QA must verify both admission and subsequent persistence failure.
+
 ### SEC-01: Default Superuser ID in Configuration Template
 - **Severity**: Medium (P1)
 - **Status**: **RESOLVED (configuration validation)**
@@ -200,10 +218,22 @@ Owner-approval controls, invitation consent, group naming, dashboard delegation,
 - **Affected Files**: `cogs/study_groups.py`, `cogs/pomodoro.py`
 - **Details**: Manual teardown and the background monitor could both enter cleanup, causing repeated Unknown Channel/Role errors and dereferences of cleared guild state. An end lock and ending/ended states prevent duplicate cleanup. Final focus persistence runs before deleting resources. A failed final write reports failure privately, leaves the group active for retry, and keeps the monitor running. Real SQLite-backed failure, retry, and duplicate-end regressions pass.
 
-### ARC-08: Setup recovery provenance remains in memory
+### ARC-08: Setup recovery provenance was lost on restart
 - **Severity**: Low (P2)
-- **Status**: **OPEN limitation**
+- **Status**: **Fix implemented; independent resumed QA pending**
 - **Affected Files**: `cogs/_setup_view.py`, `cogs/manager.py`
-- **Details**: Cancelled, expired, or failed setup drafts retain resource IDs and original channel permissions for retry through `/setup`. Restarting the bot loses those handles, so retained resources may need manual review. Staff role, membership, and permission changes made during a failed Save are also outside channel/category rollback. No persistent recovery schema was added during QA.
+- **Details**: The approved additive recovery journal stores resource intents, IDs, original categories, and exact overwrites across restart. Settings and committed phase share one transaction; staff synchronization follows the commit and remains durable pending work on failure. Missing or ambiguous audit proof, changed permissions/settings, and uncertain ownership retain resources for review. Restart regressions pass; ARC-09 tracks the remaining ownership race found during resumed QA.
+
+### ARC-09: Setup recovery ownership can change during awaits
+- **Severity**: High (P1)
+- **Status**: **Fix implemented; independent resumed QA pending**
+- **Affected Files**: `cogs/_setup_view.py`, `cogs/study_groups.py`
+- **Details**: A real SQLite interleaving probe originally saved a recovery-created channel as the moderator-log destination during a channel fetch. Shared guild operation locks now serialize recovery, configuration, and resource allocation; recovery also refreshes ownership after journal writes before destructive mutations. Core regression checks passed; independent QA must rerun the interleaving.
+
+### ARC-10: Reminder waits and replacement video tasks lose lifecycle ownership
+- **Severity**: Medium (P1)
+- **Status**: **Fix implemented; independent resumed QA pending**
+- **Affected Files**: `cogs/checkin.py`, `cogs/study_groups.py`
+- **Details**: Check-in reminder waits now use cancellation-safe timeout handling, and video cleanup only unregisters the task that still owns its registry entry. Cogs drain owned tasks before database shutdown. Core lifecycle/cancellation regressions passed; independent QA remains pending.
 
 Legacy runtime snapshots cannot distinguish historical Present and Absent responses. Recovery preserves consent but starts explicit Present tracking empty for such snapshots, so members must mark Present again. Snapshot intervals target 15 seconds when persistence succeeds; write failures can widen crash loss.

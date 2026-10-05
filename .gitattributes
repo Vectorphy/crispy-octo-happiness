@@ -11,9 +11,11 @@
 /update_changelog.py export-ignore
 /AGENTS.md export-ignore
 /ARCHITECTURE.md export-ignore
+/database_architecture.md export-ignore
 /CHANGELOG.md export-ignore
 /GEMINI.md export-ignore
 /HANDOFF.md export-ignore
+/RESUME_WORKFLOW.md export-ignore
 /KNOWLEDGE_GRAPH.md export-ignore
 /KNOWN_ISSUES.md export-ignore
 /TODO.md export-ignore

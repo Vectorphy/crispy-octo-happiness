@@ -1,5 +1,7 @@
 # Chief Productivity Officer (CPO) — Knowledge Graph & Semantic Architecture
 
+Resumed implementation checkpoint (2026-10-05): authority now has Levels 0–5. Only `.env` `BOT_DEVELOPER_ID` confers global Level 5 Supreme Commander; command-granted Level 4 developers are guild-scoped. Non-task activity and settings use current-guild provenance. Shared guild operation locks serialize setup recovery and configuration, while cogs drain background tasks before database shutdown. Setup recovery journals and check-in guild policies persist in SQLite. Core verification passed 461 offline tests; approved invitation, command-audit, and default-role additions are still in progress. The diagrams and detailed maps below describe the older snapshot until the requested final mapping pass.
+
 Current source evidence: [code walkthrough](docs/CODE_WALKTHROUGH.md), [database map](docs/DATABASE_MAP.md), and [checked-TODO audit](docs/TODO_AUDIT.md). Package version `1.0.0rc5` targets `v1.0.0-rc.5`; `.github/scripts/package_runtime.py` validates wheel/source-distribution members and creates the allowlisted hosting ZIP. Development tests stay in Git and are excluded from deployment archives.
 
 Prerelease verification/build jobs pin Python `3.11.17` on Ubuntu 24.04. General CI covers 3.10, exact 3.11.17, and 3.12. Verification runs through `python -m pytest` to keep source imports available. Manual release recovery uses the requested tag for verification and packaging, even when the workflow is dispatched from a newer branch revision.

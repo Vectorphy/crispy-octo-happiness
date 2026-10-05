@@ -230,6 +230,14 @@ class DBHandler:
             self.conn.commit()
             logger.info("Created 'managers' table.")
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS checkin_guild_settings (
+                    guild_id INTEGER PRIMARY KEY,
+                    state_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             ### VOICE CHANNEL LOGS
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS voice_channel_logs (
@@ -269,6 +277,31 @@ class DBHandler:
                 logger.info("Added 'commands_channel_id' column to 'guild_settings' table.")
             if "default_vc_id" not in guild_settings_columns:
                 cursor.execute("ALTER TABLE guild_settings ADD COLUMN default_vc_id INTEGER DEFAULT NULL")
+            if "default_role_id" not in guild_settings_columns:
+                cursor.execute("ALTER TABLE guild_settings ADD COLUMN default_role_id INTEGER DEFAULT NULL")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS session_invitations (
+                    invitation_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL,
+                    session_kind TEXT NOT NULL CHECK(session_kind IN ('group', 'checkin', 'pomodoro')),
+                    session_id TEXT NOT NULL, recipient_id INTEGER NOT NULL, owner_id INTEGER NOT NULL,
+                    dm_channel_id INTEGER, dm_message_id INTEGER,
+                    created_at REAL NOT NULL, warn_at REAL NOT NULL, expires_at REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'accepting', 'accepted', 'declined', 'expired', 'invalid')),
+                    warned INTEGER NOT NULL DEFAULT 0, expiry_notified INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_invitations_pending ON session_invitations(status, expires_at)"
+            )
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS command_audit_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL,
+                    actor_id INTEGER NOT NULL, actor_tier INTEGER NOT NULL,
+                    target_ids TEXT NOT NULL, action TEXT NOT NULL, outcome TEXT NOT NULL,
+                    occurred_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_guild ON command_audit_events(guild_id, id)")
             cursor.execute("""
                     CREATE TABLE IF NOT EXISTS pomodoro_runtime (
                         session_key TEXT PRIMARY KEY,
@@ -323,6 +356,20 @@ class DBHandler:
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cleanup_pending ON pending_resource_cleanups(status, guild_id)"
             )
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS setup_recovery_journals (
+                    guild_id INTEGER PRIMARY KEY,
+                    operation_id TEXT NOT NULL UNIQUE,
+                    owner_id INTEGER NOT NULL,
+                    phase TEXT NOT NULL DEFAULT 'prepared' CHECK (phase IN ('prepared', 'committed', 'sync_pending')),
+                    state_json TEXT NOT NULL,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_setup_recovery_phase ON setup_recovery_journals(phase)")
 
             ### TASKS
             cursor.execute("""
@@ -527,33 +574,91 @@ class DBHandler:
             values.append((str(session_id), user_id, guild_id, str(group_id), float(seconds)))
         if not values:
             return
-        async with self.lock:
-            await self._run_in_thread(
-                self._executemany_commit_sync,
-                "INSERT INTO productivity_focus_time "
-                "(session_id, user_id, guild_id, group_id, focus_seconds) VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(session_id, user_id) DO UPDATE SET focus_seconds = "
-                "MAX(productivity_focus_time.focus_seconds, excluded.focus_seconds)",
-                values,
-            )
 
-    async def get_session_productivity_focus_seconds(self, tracking_id: str) -> dict[int, float]:
+        def _sync() -> None:
+            with self.conn:
+                conflict = self.conn.execute(
+                    "SELECT 1 FROM productivity_focus_time WHERE session_id = ? AND (guild_id != ? OR group_id != ?) LIMIT 1",
+                    (str(session_id), guild_id, str(group_id)),
+                ).fetchone()
+                if conflict:
+                    raise ValueError("Productivity tracking identity belongs to another guild or group")
+                self.conn.executemany(
+                    "INSERT INTO productivity_focus_time "
+                    "(session_id, user_id, guild_id, group_id, focus_seconds) VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(session_id, user_id) DO UPDATE SET focus_seconds = "
+                    "MAX(productivity_focus_time.focus_seconds, excluded.focus_seconds)",
+                    values,
+                )
+
+        async with self.lock:
+            await self._run_in_thread(_sync)
+
+    async def get_session_productivity_focus_seconds(
+        self, tracking_id: str, guild_id: Optional[int] = None, group_id: Optional[str] = None
+    ) -> dict[int, float]:
         async with self.lock:
             rows = await self._run_in_thread(
                 self._fetchall_sync,
-                "SELECT user_id, focus_seconds FROM productivity_focus_time WHERE session_id = ?",
-                (tracking_id,),
+                "SELECT user_id, focus_seconds FROM productivity_focus_time WHERE session_id = ? AND guild_id = ? AND group_id = ?",
+                (tracking_id, guild_id, group_id),
             )
             return {int(row[0]): float(row[1]) for row in rows}
 
-    async def get_productivity_focus_seconds(self, user_id: int) -> float:
+    async def get_productivity_focus_seconds(self, user_id: int, guild_id: Optional[int] = None) -> float:
         async with self.lock:
             row = await self._run_in_thread(
                 self._fetchone_sync,
-                "SELECT COALESCE(SUM(focus_seconds), 0) FROM productivity_focus_time WHERE user_id = ?",
-                (user_id,),
+                "SELECT COALESCE(SUM(focus_seconds), 0) FROM productivity_focus_time WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
             )
             return float(row[0]) if row else 0.0
+
+    @staticmethod
+    def validate_checkin_settings(state: Any) -> dict[str, Any]:
+        numeric = ("max_members", "min_duration", "max_duration", "max_absences", "max_breaks", "max_user_sessions")
+        lists = ("whitelist_channels", "whitelist_roles", "blacklist_channels", "blacklist_roles")
+        if not isinstance(state, dict) or type(state.get("version")) is not int or state["version"] != 1:
+            raise ValueError("Unsupported check-in settings")
+        if set(state) != {"version", "permission_mode", *numeric, *lists}:
+            raise ValueError("Invalid check-in settings fields")
+        if any(type(state[key]) is not int or state[key] < 1 for key in numeric):
+            raise ValueError("Check-in limits must be positive integers")
+        if not 120 <= state["min_duration"] <= state["max_duration"] <= 14400:
+            raise ValueError("Check-in reminder limits must be between 2 minutes and 4 hours")
+        if state["permission_mode"] not in ("ALLOW", "DENY"):
+            raise ValueError("Check-in permission mode must be ALLOW or DENY")
+        result = {key: state[key] for key in ("version", "permission_mode", *numeric)}
+        for key in lists:
+            values = state[key]
+            if not isinstance(values, list) or any(type(value) is not int or value <= 0 for value in values):
+                raise ValueError("Check-in permission lists must contain positive IDs")
+            result[key] = sorted(set(values))
+        return result
+
+    async def save_checkin_guild_settings(self, guild_id: int, state: dict[str, Any]) -> None:
+        if type(guild_id) is not int or guild_id <= 0:
+            raise ValueError("Check-in settings require a guild")
+        serialized = json.dumps(self.validate_checkin_settings(state), sort_keys=True, allow_nan=False)
+        async with self.lock:
+            await self._run_in_thread(
+                self._execute_commit_sync,
+                "INSERT INTO checkin_guild_settings (guild_id, state_json) VALUES (?, ?) "
+                "ON CONFLICT(guild_id) DO UPDATE SET state_json = excluded.state_json, updated_at = CURRENT_TIMESTAMP",
+                (guild_id, serialized),
+            )
+
+    async def get_checkin_guild_settings(self, guild_id: int) -> Optional[dict[str, Any]]:
+        async with self.lock:
+            row = await self._run_in_thread(
+                self._fetchone_sync, "SELECT state_json FROM checkin_guild_settings WHERE guild_id = ?", (guild_id,)
+            )
+        return self.validate_checkin_settings(json.loads(row[0])) if row else None
+
+    async def get_checkin_settings_guild_ids(self) -> list[int]:
+        async with self.lock:
+            rows = await self._run_in_thread(self._fetchall_sync, "SELECT guild_id FROM checkin_guild_settings")
+        return [int(row[0]) for row in rows]
 
     async def record_pending_cleanup(
         self,
@@ -686,6 +791,58 @@ class DBHandler:
             )
             return int(row[0]) if row and row[0] is not None else 86400
 
+    async def create_setup_recovery_journal(
+        self, guild_id: int, operation_id: str, owner_id: int, state: dict[str, Any]
+    ) -> None:
+        encoded = json.dumps(state, allow_nan=False)
+        async with self.lock:
+            await self._run_in_thread(
+                self._execute_commit_sync,
+                "INSERT INTO setup_recovery_journals (guild_id, operation_id, owner_id, state_json) VALUES (?, ?, ?, ?)",
+                (guild_id, operation_id, owner_id, encoded),
+            )
+
+    async def get_setup_recovery_journal(self, guild_id: int) -> Optional[dict[str, Any]]:
+        async with self.lock:
+            row = await self._run_in_thread(
+                self._fetchone_sync, "SELECT * FROM setup_recovery_journals WHERE guild_id = ?", (guild_id,)
+            )
+            if row is None:
+                return None
+            result = dict(row)
+            result["state"] = json.loads(result.pop("state_json"))
+            return result
+
+    async def update_setup_recovery_journal(
+        self,
+        guild_id: int,
+        operation_id: str,
+        state: dict[str, Any],
+        *,
+        phase: str = "prepared",
+        last_error: Optional[str] = None,
+    ) -> None:
+        encoded = json.dumps(state, allow_nan=False)
+        async with self.lock:
+            changed = await self._run_in_thread(
+                self._execute_commit_sync,
+                "UPDATE setup_recovery_journals SET state_json = ?, phase = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE guild_id = ? AND operation_id = ? AND ((phase = 'prepared' AND ? = 'prepared') OR (phase IN ('committed', 'sync_pending') AND ? = 'sync_pending'))",
+                (encoded, phase, last_error, guild_id, operation_id, phase, phase),
+            )
+            if changed != 1:
+                raise RuntimeError("Setup recovery journal was replaced or changed phase")
+
+    async def delete_setup_recovery_journal(self, guild_id: int, operation_id: str, *, phase: str) -> None:
+        async with self.lock:
+            changed = await self._run_in_thread(
+                self._execute_commit_sync,
+                "DELETE FROM setup_recovery_journals WHERE guild_id = ? AND operation_id = ? AND phase = ?",
+                (guild_id, operation_id, phase),
+            )
+            if changed != 1:
+                raise RuntimeError("Setup recovery journal was replaced or changed phase")
+
     async def save_setup(
         self,
         guild_id: int,
@@ -697,6 +854,9 @@ class DBHandler:
         default_group_duration: Optional[int] = None,
         default_pomodoro_duration: Optional[int] = None,
         default_vc_id: Optional[int] = None,
+        journal_operation_id: Optional[str] = None,
+        default_role_id: Optional[int] = None,
+        update_default_role: bool = False,
     ) -> None:
         for name, duration in (
             ("default_group_duration", default_group_duration),
@@ -713,6 +873,14 @@ class DBHandler:
 
         def _sync() -> None:
             with self.conn:
+                if journal_operation_id is not None:
+                    changed = self.conn.execute(
+                        "UPDATE setup_recovery_journals SET phase = 'committed', last_error = NULL, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE guild_id = ? AND operation_id = ? AND phase = 'prepared'",
+                        (guild_id, journal_operation_id),
+                    ).rowcount
+                    if changed != 1:
+                        raise RuntimeError("Setup recovery journal no longer matches this save")
                 self.conn.execute(
                     """
                     INSERT INTO guild_settings (
@@ -741,9 +909,175 @@ class DBHandler:
                         default_pomodoro_duration,
                     ),
                 )
+                if update_default_role:
+                    if default_role_id is not None and (type(default_role_id) is not int or default_role_id <= 0):
+                        raise ValueError("Default role must be a positive ID or null")
+                    self.conn.execute(
+                        "UPDATE guild_settings SET default_role_id = ? WHERE guild_id = ?", (default_role_id, guild_id)
+                    )
 
         async with self.lock:
             await self._run_in_thread(_sync)
+
+    async def get_default_role(self, guild_id: int) -> Optional[int]:
+        async with self.lock:
+            row = await self._run_in_thread(
+                self._fetchone_sync, "SELECT default_role_id FROM guild_settings WHERE guild_id = ?", (guild_id,)
+            )
+        return int(row[0]) if row and row[0] is not None else None
+
+    async def create_session_invitation(
+        self,
+        invitation_id: str,
+        guild_id: int,
+        session_kind: str,
+        session_id: str,
+        recipient_id: int,
+        owner_id: int,
+        created_at: float,
+    ) -> dict[str, Any]:
+        if (
+            session_kind not in ("group", "checkin", "pomodoro")
+            or not session_id
+            or any(type(value) is not int or value <= 0 for value in (guild_id, recipient_id, owner_id))
+            or not math.isfinite(created_at)
+        ):
+            raise ValueError("Invalid invitation identity or creation time")
+        async with self.lock:
+            await self._run_in_thread(
+                self._execute_commit_sync,
+                "INSERT INTO session_invitations (invitation_id, guild_id, session_kind, session_id, recipient_id, owner_id, created_at, warn_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    invitation_id,
+                    guild_id,
+                    session_kind,
+                    session_id,
+                    recipient_id,
+                    owner_id,
+                    created_at,
+                    created_at + 360,
+                    created_at + 600,
+                ),
+            )
+            row = await self._run_in_thread(
+                self._fetchone_sync,
+                "SELECT * FROM session_invitations WHERE invitation_id = ? AND guild_id = ?",
+                (invitation_id, guild_id),
+            )
+        assert row is not None
+        return dict(row)
+
+    async def get_session_invitation(self, guild_id: int, invitation_id: str) -> Optional[dict[str, Any]]:
+        async with self.lock:
+            row = await self._run_in_thread(
+                self._fetchone_sync,
+                "SELECT * FROM session_invitations WHERE guild_id = ? AND invitation_id = ?",
+                (guild_id, invitation_id),
+            )
+        return dict(row) if row else None
+
+    async def get_pending_session_invitations(self, guild_id: int) -> list[dict[str, Any]]:
+        async with self.lock:
+            rows = await self._run_in_thread(
+                self._fetchall_sync,
+                "SELECT * FROM session_invitations WHERE guild_id = ? AND (status IN ('pending', 'accepting') OR (status = 'expired' AND expiry_notified = 0)) ORDER BY created_at",
+                (guild_id,),
+            )
+        return [dict(row) for row in rows]
+
+    async def bind_session_invitation_message(
+        self, guild_id: int, invitation_id: str, channel_id: int, message_id: int
+    ) -> bool:
+        async with self.lock:
+            count = await self._run_in_thread(
+                self._execute_commit_sync,
+                "UPDATE session_invitations SET dm_channel_id = ?, dm_message_id = ? WHERE guild_id = ? AND invitation_id = ? AND status = 'pending' AND dm_message_id IS NULL",
+                (channel_id, message_id, guild_id, invitation_id),
+            )
+        return count == 1
+
+    async def transition_session_invitation(
+        self, guild_id: int, invitation_id: str, expected: str, status: str, *, now: float
+    ) -> bool:
+        allowed = {
+            ("pending", "accepting"),
+            ("pending", "declined"),
+            ("pending", "expired"),
+            ("pending", "invalid"),
+            ("accepting", "accepted"),
+            ("accepting", "pending"),
+            ("accepting", "expired"),
+            ("accepting", "invalid"),
+        }
+        if (expected, status) not in allowed or not math.isfinite(now):
+            raise ValueError("Invalid invitation transition")
+        async with self.lock:
+            count = await self._run_in_thread(
+                self._execute_commit_sync,
+                "UPDATE session_invitations SET status = ? WHERE guild_id = ? AND invitation_id = ? AND status = ? AND (? NOT IN ('accepting', 'declined') OR expires_at > ?) AND (? != 'expired' OR expires_at <= ?)",
+                (status, guild_id, invitation_id, expected, status, now, status, now),
+            )
+        return count == 1
+
+    async def mark_invitation_notification(self, guild_id: int, invitation_id: str, *, expired: bool = False) -> None:
+        query = (
+            "UPDATE session_invitations SET expiry_notified = 1 WHERE guild_id = ? AND invitation_id = ? AND status = 'expired'"
+            if expired
+            else "UPDATE session_invitations SET warned = 1 WHERE guild_id = ? AND invitation_id = ? AND status = 'pending'"
+        )
+        async with self.lock:
+            await self._run_in_thread(self._execute_commit_sync, query, (guild_id, invitation_id))
+
+    async def record_command_audit(
+        self,
+        guild_id: int,
+        actor_id: int,
+        actor_tier: int,
+        action: str,
+        outcome: str,
+        target_ids: list[int | str],
+        occurred_at: float,
+    ) -> int:
+        if (
+            type(guild_id) is not int
+            or guild_id <= 0
+            or type(actor_id) is not int
+            or actor_id <= 0
+            or not 0 <= actor_tier <= 5
+            or not math.isfinite(occurred_at)
+        ):
+            raise ValueError("Invalid audit provenance")
+        if (
+            not action
+            or len(action) > 100
+            or outcome not in ("invoked", "completed", "succeeded", "denied", "failed", "expired", "declined")
+            or any(not isinstance(value, (int, str)) or len(str(value)) > 100 for value in target_ids)
+        ):
+            raise ValueError("Invalid audit metadata")
+        encoded = json.dumps(target_ids, allow_nan=False)
+        async with self.lock:
+
+            def save() -> int:
+                with self.conn:
+                    cursor = self.conn.execute(
+                        "INSERT INTO command_audit_events (guild_id, actor_id, actor_tier, target_ids, action, outcome, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (guild_id, actor_id, actor_tier, encoded, action, outcome, occurred_at),
+                    )
+                    assert cursor.lastrowid is not None
+                    return int(cursor.lastrowid)
+
+            return await self._run_in_thread(save)
+
+    async def get_command_audit_events(self, guild_id: int, *, limit: int = 100) -> list[dict[str, Any]]:
+        if type(guild_id) is not int or guild_id <= 0 or type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("Audit retrieval requires one guild and a bounded limit")
+        async with self.lock:
+            rows = await self._run_in_thread(
+                self._fetchall_sync,
+                "SELECT * FROM command_audit_events WHERE guild_id = ? ORDER BY id DESC LIMIT ?",
+                (guild_id, limit),
+            )
+        return [dict(row) for row in rows]
 
     # TODO: saving pomodoro sessions
     async def save_pomodoro_session(self, session) -> None:
@@ -919,17 +1253,20 @@ class DBHandler:
 
         logger.info(f"StudyGroup '{study_group_data.get('name', 'Unknown')}' updated in the database.")
 
-    async def get_user_created_group_count(self, user_id: int) -> int:
+    async def get_user_created_group_count(self, user_id: int, guild_id: Optional[int] = None) -> int:
         def _sync() -> int:
             cursor = self.conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM study_groups WHERE creator_id = ? AND active = 1", (user_id,))
+            cursor.execute(
+                "SELECT COUNT(*) FROM study_groups WHERE creator_id = ? AND guild_id = ? AND active = 1",
+                (user_id, guild_id),
+            )
             row = cursor.fetchone()
             return row[0] if row else 0
 
         async with self.lock:
             return await self._run_in_thread(_sync)
 
-    async def get_user_joined_group_count(self, user_id: int) -> int:
+    async def get_user_joined_group_count(self, user_id: int, guild_id: Optional[int] = None) -> int:
         def _sync() -> int:
             cursor = self.conn.cursor()
             cursor.execute(
@@ -937,9 +1274,9 @@ class DBHandler:
                 SELECT COUNT(DISTINCT study_groups.id)
                 FROM study_groups
                 JOIN study_groups_members ON study_groups.group_id = study_groups_members.group_id
-                WHERE study_groups_members.user_id = ? AND study_groups.active = 1
+                WHERE study_groups_members.user_id = ? AND study_groups.guild_id = ? AND study_groups.active = 1
                 """,
-                (user_id,),
+                (user_id, guild_id),
             )
             row = cursor.fetchone()
             return row[0] if row else 0
@@ -1400,6 +1737,8 @@ class DBHandler:
         if grant_source not in ("explicit", "server_sync"):
             raise ValueError("grant_source must be explicit or server_sync")
         level_val = permission_level.value if hasattr(permission_level, "value") else int(permission_level)
+        if not 0 <= level_val <= 4:
+            raise ValueError("Stored permission grants must be Levels 0–4")
         if level_val == 2:
             level_val = 3
 
@@ -1484,8 +1823,8 @@ class DBHandler:
     async def get_manager(self, user_id, guild_id):
         query = (
             "SELECT * FROM managers WHERE user_id = ? AND "
-            "(guild_id = ? OR (guild_id IS NULL AND permission_level = 4)) "
-            "ORDER BY permission_level DESC, guild_id IS NULL ASC LIMIT 1"
+            "guild_id = ? AND permission_level BETWEEN 0 AND 4 "
+            "ORDER BY permission_level DESC LIMIT 1"
         )
         async with self.lock:
             manager = await self._run_in_thread(self._fetchone_sync, query, (user_id, guild_id))
@@ -1496,7 +1835,7 @@ class DBHandler:
 
     async def get_all_managers(self, guild_id):
         query = (
-            "SELECT * FROM managers WHERE guild_id = ? OR (guild_id IS NULL AND permission_level = 4) "
+            "SELECT * FROM managers WHERE guild_id = ? AND permission_level BETWEEN 0 AND 4 "
             "ORDER BY permission_level DESC, user_id"
         )
         async with self.lock:
@@ -1662,6 +2001,14 @@ class DBHandler:
             count = await self._run_in_thread(self._execute_commit_sync, query, (user_id, guild_id))
             logger.info(f"Purged {count} tasks for user {user_id} in guild {guild_id}")
             return count
+
+    async def purge_personal_tasks(self, user_id: int) -> int:
+        async with self.lock:
+            return await self._run_in_thread(
+                self._execute_commit_sync,
+                "DELETE FROM tasks WHERE user_id = ? AND guild_id IS NULL AND group_id IS NULL",
+                (user_id,),
+            )
 
     async def purge_all_user_tasks(self, user_id):
         query = """

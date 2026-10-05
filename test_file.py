@@ -537,7 +537,7 @@ async def _run_command_matrix(bot):
         assert "User Authorization Level" in embed.title
         field_dict = {f.name: f.value for f in embed.fields}
         assert "User Level Tier" in field_dict
-        assert "Bot Developer" in field_dict["User Level Tier"]
+        assert "Supreme Commander" in field_dict["User Level Tier"]
 
     await execute_test("Manager - /user_level (Self inspect - Admin/Dev)", test_user_level_self_admin())
 

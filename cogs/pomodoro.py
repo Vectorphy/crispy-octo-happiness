@@ -13,6 +13,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from cogs._access_policy import AccessView
+from cogs._invitations import initialize_invitation, service_for
 from cogs._session_controls import request_session_end
 from utils import (
     acknowledge_interaction,
@@ -278,7 +280,7 @@ class PomodoroSession:
         )
 
 
-class PomodoroPresenceView(discord.ui.View):
+class PomodoroPresenceView(AccessView):
     def __init__(self, cog, session):
         super().__init__(timeout=None)
         self.cog = cog
@@ -330,12 +332,13 @@ class PomodoroPresenceView(discord.ui.View):
         await self.cog._persist_session(self.session)
 
 
-class PomodoroInvitationView(discord.ui.View):
+class PomodoroInvitationView(AccessView):
     def __init__(self, cog: "Pomodoro", session: PomodoroSession, invitee_id: int):
         super().__init__(timeout=3600)
         self.cog = cog
         self.session = session
         self.invitee_id = invitee_id
+        initialize_invitation(self, cog.bot, "pomodoro", session, invitee_id)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.invitee_id:
@@ -345,7 +348,8 @@ class PomodoroInvitationView(discord.ui.View):
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.green)
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await interaction.response.defer(ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
         if interaction.user.id != self.invitee_id:
             await send_response(interaction, "This invitation is for someone else.", ephemeral=True)
             return
@@ -363,8 +367,6 @@ class PomodoroInvitationView(discord.ui.View):
         if interaction.user.id in session.participants:
             await send_response(interaction, "You already joined this Pomodoro session.", ephemeral=True)
             return
-        session.participants.add(interaction.user.id)
-        await self.cog._persist_session(session)
         member = guild.get_member(interaction.user.id)
 
         sg_cog = self.cog.bot.get_cog("StudyGroupCog")
@@ -405,6 +407,13 @@ class PomodoroInvitationView(discord.ui.View):
 
                 if interaction.user.id not in group.member_ids:
                     success = await group.add_member(interaction.user.id)
+                    if not success:
+                        await send_response(
+                            interaction,
+                            "The study group is full or your group membership could not be saved.",
+                            ephemeral=True,
+                        )
+                        return
                     if success:
                         await group.group_info_embed(update=True)
                         if group.owner_id:
@@ -416,6 +425,24 @@ class PomodoroInvitationView(discord.ui.View):
                                     )
                                 except discord.HTTPException:
                                     pass
+
+        if (
+            not any(value is session for value in self.cog.sessions.values())
+            or datetime.now(timezone.utc) >= session.expires_at
+        ):
+            await send_response(interaction, "This Pomodoro session has ended.", ephemeral=True)
+            return
+        session.participants.add(interaction.user.id)
+        try:
+            await self.cog._persist_session(session)
+        except (sqlite3.Error, RuntimeError, OSError):
+            session.participants.discard(interaction.user.id)
+            await send_response(
+                interaction,
+                "Your group membership remains saved, but Pomodoro participation could not be saved. Retry this invitation.",
+                ephemeral=True,
+            )
+            return
 
         destination = guild.get_channel(session.vc_id) if session.vc_id else None
         if (
@@ -458,7 +485,7 @@ class PomodoroInvitationView(discord.ui.View):
         self.stop()
 
 
-class PomodoroRenewView(discord.ui.View):
+class PomodoroRenewView(AccessView):
     def __init__(self, cog: "Pomodoro", session: PomodoroSession, deadline: datetime):
         super().__init__(timeout=3600)
         self.cog = cog
@@ -501,7 +528,18 @@ class Pomodoro(commands.Cog):
         self._last_runtime_save: Dict[int, datetime] = {}
         self._runtime_lock = asyncio.Lock()
         self._recovery_lock = asyncio.Lock()
+        self._unloading = False
         logger.info("Pomodoro cog initialized")
+
+    async def cog_unload(self) -> None:
+        await service_for(self.bot).close_kind("pomodoro")
+        self._unloading = True
+        timer = self.run_timer.get_task()
+        if timer is not None:
+            self.run_timer.cancel()
+            await asyncio.gather(timer, return_exceptions=True)
+        for session in {id(value): value for value in self.sessions.values()}.values():
+            await self._persist_session(session)
 
     def _runtime_key(self, session: PomodoroSession) -> str:
         return str(session.group_id)
@@ -739,7 +777,7 @@ class Pomodoro(commands.Cog):
                     session = self._restore_session(row, group, guild)
                     getter = getattr(self.bot.db, "get_session_productivity_focus_seconds", None)
                     if callable(getter):
-                        recorded = await getter(session.tracking_id)
+                        recorded = await getter(session.tracking_id, session.guild_id, str(session.group_id))
                         if isinstance(recorded, dict):
                             for user_id, seconds in recorded.items():
                                 session.focus_seconds[user_id] = max(session.focus_seconds.get(user_id, 0.0), seconds)
@@ -757,7 +795,7 @@ class Pomodoro(commands.Cog):
                     await self._retire_runtime(key)
                 except (sqlite3.Error, OSError, RuntimeError):
                     logger.exception("Could not recover Pomodoro runtime session_key=%s", key)
-            if self.sessions and not self.run_timer.is_running():
+            if self.sessions and not self._unloading and not self.run_timer.is_running():
                 self.run_timer.start()
 
     async def _retire_runtime(self, key: Any) -> None:
@@ -815,15 +853,17 @@ class Pomodoro(commands.Cog):
 
     async def _resolve_group(self, interaction: discord.Interaction) -> Optional[Dict[str, Any]]:
         """Resolve target study group for the interaction."""
+        if interaction.guild_id is None:
+            return None
         # 1. Check if user is a member of an active group
         group = await self.bot.db.get_user_group(interaction.user.id, interaction.channel_id)
-        if group and group.get("guild_id", interaction.guild_id) == interaction.guild_id:
+        if isinstance(group, dict) and group.get("guild_id") == interaction.guild_id:
             return group
 
         # 2. Check if user is currently in a VC associated with an active study group
         if isinstance(interaction.user, discord.Member) and interaction.user.voice and interaction.user.voice.channel:
             vc_group = await self.bot.db.get_study_group_by_channel(interaction.user.voice.channel.id)
-            if vc_group and vc_group.get("guild_id", interaction.guild_id) == interaction.guild_id:
+            if isinstance(vc_group, dict) and vc_group.get("guild_id") == interaction.guild_id:
                 is_manager = await check_manager(interaction)
                 members = await self.bot.db.fetch_members_of_group(vc_group.get("group_id") or str(vc_group.get("id")))
                 if (
@@ -836,7 +876,7 @@ class Pomodoro(commands.Cog):
         # 3. Check channel context (text channel or VC channel chat)
         if interaction.channel_id:
             channel_group = await self.bot.db.get_study_group_by_channel(interaction.channel_id)
-            if channel_group and channel_group.get("guild_id", interaction.guild_id) == interaction.guild_id:
+            if isinstance(channel_group, dict) and channel_group.get("guild_id") == interaction.guild_id:
                 is_manager = await check_manager(interaction)
                 members = await self.bot.db.fetch_members_of_group(
                     channel_group.get("group_id") or str(channel_group.get("id"))
@@ -862,6 +902,9 @@ class Pomodoro(commands.Cog):
             return None
         gid = group.get("id") if isinstance(group, dict) else getattr(group, "id", None)
         uuid_str = group.get("group_id") if isinstance(group, dict) else getattr(group, "group_id", None)
+        guild_id = group.get("guild_id") if isinstance(group, dict) else getattr(group, "guild_id", None)
+        if not isinstance(guild_id, int):
+            return None
         candidates = [
             c
             for c in [
@@ -873,7 +916,7 @@ class Pomodoro(commands.Cog):
             if c is not None
         ]
         for key in candidates:
-            if key in self.sessions:
+            if key in self.sessions and self.sessions[key].guild_id == guild_id:
                 return self.sessions[key]
         return None
 
@@ -1041,7 +1084,7 @@ class Pomodoro(commands.Cog):
 
         await self._persist_session(session)
 
-        if not self.run_timer.is_running():
+        if not self._unloading and not self.run_timer.is_running():
             self.run_timer.start()
 
         logger.info(f"Started Pomodoro session for group {group['id']} (require_vc={require_vc})")
@@ -1075,9 +1118,10 @@ class Pomodoro(commands.Cog):
             if member is None:
                 continue
             try:
-                await member.send(
-                    f"You are invited to join the Pomodoro session in **{group['name']}**. Joining is optional.",
-                    view=PomodoroInvitationView(self, session, member_id),
+                await service_for(self.bot).send(
+                    PomodoroInvitationView(self, session, member_id),
+                    actor_id=interaction.user.id,
+                    content=f"You are invited to join the Pomodoro session in **{group['name']}**. Joining is optional.",
                 )
             except discord.HTTPException:
                 logger.warning(
@@ -1627,9 +1671,10 @@ class Pomodoro(commands.Cog):
             return
 
         try:
-            await user.send(
-                f"You are invited by <@{interaction.user.id}> to join the Pomodoro session in **{group['name']}**.\nIf you accept, you will also join the study group.",
-                view=PomodoroInvitationView(self, session, user.id),
+            await service_for(self.bot).send(
+                PomodoroInvitationView(self, session, user.id),
+                actor_id=interaction.user.id,
+                content=f"You are invited by <@{interaction.user.id}> to join the Pomodoro session in **{group['name']}**.\nIf you accept, you will also join the study group.",
             )
             await send_response(interaction, f"Sent a Pomodoro invitation to {user.mention}.", ephemeral=ephemeral)
         except discord.HTTPException:
