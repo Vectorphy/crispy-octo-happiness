@@ -42,6 +42,7 @@ class GroupInvitationView(AccessView):
         super().__init__(timeout=300)
         self.group = group
         self.user_id = user_id
+        self.target_member: Optional[discord.Member] = None
         self.action_lock = asyncio.Lock()
         initialize_invitation(self, group.cog.bot, "group", group, user_id)
 
@@ -1654,12 +1655,15 @@ class StudyGroup:
         self, interaction: discord.Interaction, invited_member: discord.Member, ephemeral: bool = True
     ) -> None:
         view = GroupInvitationView(self, invited_member.id)
+        view.target_member = invited_member
         embed = discord.Embed(
             title="Study group invitation",
             description=f"You are invited to **{self.name}**. Choose Join to become a member.",
         )
         try:
-            await service_for(self.cog.bot).send(view, actor_id=interaction.user.id, embed=embed)
+            await service_for(self.cog.bot).send(
+                view, actor_id=interaction.user.id, embed=embed, target_member=invited_member
+            )
         except (discord.HTTPException, ValueError, RuntimeError, sqlite3.Error, OSError):
             view.stop()
             logger.exception(

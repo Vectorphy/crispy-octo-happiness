@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 import re
 import sqlite3
@@ -81,18 +82,24 @@ async def should_use_ephemeral(interaction: discord.Interaction, db) -> bool:
 async def acknowledge_interaction(interaction: discord.Interaction) -> None:
     # An immediate private response allows later public success and private errors
     # without inheriting a deferred message's visibility on the first followup.
-    await interaction.response.send_message("Processing your request…", ephemeral=True)
+    if hasattr(interaction, "response"):
+        res = interaction.response.send_message("Processing your request…", ephemeral=True)
+        if inspect.isawaitable(res):
+            await res
     extras = getattr(interaction, "extras", None)
     if isinstance(extras, dict):
         extras["cpo_acknowledged"] = True
 
 
 async def send_response(interaction: discord.Interaction, *args, ephemeral: bool = True, **kwargs):
-    message = await interaction.followup.send(*args, ephemeral=ephemeral, **kwargs)
+    res = interaction.followup.send(*args, ephemeral=ephemeral, **kwargs)
+    message = await res if inspect.isawaitable(res) else res
     extras = getattr(interaction, "extras", None)
     if isinstance(extras, dict) and extras.pop("cpo_acknowledged", False):
         try:
-            await interaction.delete_original_response()
+            del_res = interaction.delete_original_response()
+            if inspect.isawaitable(del_res):
+                await del_res
         except discord.HTTPException:
             logger.exception(
                 "Could not remove command acknowledgement guild_id=%s user_id=%s",

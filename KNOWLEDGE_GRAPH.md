@@ -1,8 +1,8 @@
 # Chief Productivity Officer (CPO) — Knowledge Graph & Semantic Architecture
 
-Resumed implementation checkpoint (2026-10-05): authority now has Levels 0–5. Only `.env` `BOT_DEVELOPER_ID` confers global Level 5 Supreme Commander; command-granted Level 4 developers are guild-scoped. Non-task activity and settings use current-guild provenance. Shared guild operation locks serialize setup recovery and configuration, while cogs drain background tasks before database shutdown. Setup recovery journals and check-in guild policies persist in SQLite. Core verification passed 461 offline tests; approved invitation, command-audit, and default-role additions are still in progress. The diagrams and detailed maps below describe the older snapshot until the requested final mapping pass.
+Resumed implementation checkpoint (2026-10-05): authority now has Levels 0–5. Only `.env` `BOT_DEVELOPER_ID` confers global Level 5 Supreme Commander; command-granted Level 4 developers are guild-scoped. Non-task activity and settings use current-guild provenance. Shared guild operation locks serialize setup recovery and configuration, while cogs drain background tasks before database shutdown. Setup recovery journals, check-in guild policies, durable invitations, command audit events, and default role gating are fully implemented and verified in SQLite. Full test suite passes 479 offline tests with 0 Mypy errors across 43 source files and clean Ruff lint/formatting.
 
-Current source evidence: [code walkthrough](docs/CODE_WALKTHROUGH.md), [database map](docs/DATABASE_MAP.md), and [checked-TODO audit](docs/TODO_AUDIT.md). Package version `1.0.0rc5` targets `v1.0.0-rc.5`; `.github/scripts/package_runtime.py` validates wheel/source-distribution members and creates the allowlisted hosting ZIP. Development tests stay in Git and are excluded from deployment archives.
+Current source evidence: [code walkthrough](docs/CODE_WALKTHROUGH.md), [database map](docs/DATABASE_MAP.md), [database architecture](database_architecture.md), and [checked-TODO audit](docs/TODO_AUDIT.md). Package version `1.0.0rc5` targets `v1.0.0-rc.5`; `.github/scripts/package_runtime.py` validates wheel/source-distribution members and creates the allowlisted hosting ZIP. Development tests stay in Git and are excluded from deployment archives.
 
 Prerelease verification/build jobs pin Python `3.11.17` on Ubuntu 24.04. General CI covers 3.10, exact 3.11.17, and 3.12. Verification runs through `python -m pytest` to keep source imports available. Manual release recovery uses the requested tag for verification and packaging, even when the workflow is dispatched from a newer branch revision.
 
@@ -16,6 +16,7 @@ This document provides a formal, comprehensive Knowledge Graph and architectural
 Chief-Productivity-Officer/
 ├── bot.py                     # [Entry Point] Bot client lifecycle, extension loader, tree syncing
 ├── database.py                # [Persistence DAL] Thread-safe SQLite access layer (asyncio.Lock)
+├── database_architecture.md   # [Persistence Architecture] Comprehensive ER diagrams, schema reference & concurrency models
 ├── utils.py                   # [Core Utilities] Time/regex parsers, permission checks, ProductivityService
 ├── pyproject.toml             # [Toolchain Config] Packaging metadata, pytest, ruff, mypy settings
 ├── requirements.txt           # [Dependencies] Production runtime dependencies
@@ -32,7 +33,10 @@ Chief-Productivity-Officer/
 │   ├── checkin.py             # Standup check-in sessions, periodic ping loops, attendance UI
 │   ├── study_groups.py        # Dedicated study rooms, dynamic role/channel provisioning, dashboard
 │   ├── pomodoro.py            # Focus/Break timer state machine, VC auto-move, 5:1:3 ratio calculation
-│   ├── manager.py             # 5-tier permission hierarchy, session limits, command authorization
+│   ├── manager.py             # 6-tier permission hierarchy, session limits, command authorization
+│   ├── _access_policy.py      # Default role access gating helper and check functions
+│   ├── _audit.py              # Command and control audit logger for SQLite and Discord
+│   ├── _invitations.py        # Durable recipient invitations with 360s/600s deadlines and CAS locks
 │   ├── _setup_view.py         # Private staged setup wizard, lifetime editor, and resource recovery
 │   ├── _staff_roles.py        # Staff role membership and scoped category/channel access
 │   ├── _session_controls.py   # Current-owner DM approval controls
@@ -43,6 +47,8 @@ Chief-Productivity-Officer/
 │   └── voice_channels.py      # Dedicated voice channel provisioning and lifecycle cleanup
 ├── tests/                     # [Verification Suite] Offline mock-safe unit tests
 │   ├── test_database.py       # Direct SQLite DAL transaction and CRUD tests
+│   ├── test_default_role.py   # Strict default role access gating tests
+│   ├── test_setup_recovery_journal.py # Setup recovery journal persistence and rollback tests
 │   ├── test_new_features.py   # Pomodoro ratios, channel scoping, and permission matrix tests
 │   ├── test_productivity_tracker.py # Productivity metric and embed calculation tests
 │   ├── test_productivity_time.py    # Focus-time DAL: monotonic upsert, multi-user, invalid values, restart

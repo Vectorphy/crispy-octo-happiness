@@ -59,6 +59,7 @@ class CheckinInvitationView(View):
         super().__init__(timeout=3600)
         self.session = session
         self.invitee_id = invitee_id
+        self.target_member: Optional[discord.Member] = None
         initialize_invitation(self, session.cog.bot, "checkin", session, invitee_id)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -1591,10 +1592,13 @@ class CheckinCog(commands.Cog):
                 if member is None:
                     continue
                 try:
+                    view = CheckinInvitationView(session, invitee_id)
+                    view.target_member = member
                     await service_for(self.bot).send(
-                        CheckinInvitationView(session, invitee_id),
+                        view,
                         actor_id=interaction.user.id,
                         content=f"You are invited to join the check-in **{name}**. Joining is optional.",
+                        target_member=member,
                     )
                 except discord.HTTPException:
                     logger.warning(

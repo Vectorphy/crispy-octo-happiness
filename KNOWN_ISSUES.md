@@ -1,6 +1,6 @@
 # Known Issues and Debt (Audit Scope)
 
-Verification (2026-10-05 antigravity-fix): all 402 offline tests pass. Mypy reports zero errors across 34 files; Ruff lint, formatting, and whitespace checks pass. Live Discord provisioning has not been exercised. The existing `audioop` deprecation warning remains.
+Verification (2026-10-05 antigravity-fix): all 479 offline tests pass. Mypy reports zero errors across 43 source files; Ruff lint, formatting, and whitespace checks pass. Live Discord provisioning has not been exercised. The existing `audioop` deprecation warning remains.
 
 ## 1. Functional & Technical Deficiencies
 

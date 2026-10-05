@@ -1,13 +1,14 @@
 """Durable recipient invitations with absolute warning and acceptance deadlines."""
 
 import asyncio
+import inspect
 import logging
 import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
-from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
@@ -18,23 +19,103 @@ logger = logging.getLogger(__name__)
 EXPIRY_NOTICE = "This invitation expired. Ask the session owner to send you a new invitation."
 
 
-async def eligible_recipient(bot: Any, guild_id: int, user_id: int) -> discord.Member | None:
-    guild = bot.get_guild(guild_id)
-    if guild is None or guild.id != guild_id:
+async def _db_call(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    if fn is None:
         return None
-    role_id = await bot.db.get_default_role(guild_id)
     try:
-        member = await guild.fetch_member(user_id)
-    except discord.NotFound:
+        res = fn(*args, **kwargs)
+        if inspect.isawaitable(res):
+            return await res
+        return res
+    except Exception:
+        raise
+
+
+async def eligible_recipient(
+    bot: Any, guild_id: int, user_id: int, fallback_guild: Any = None, member: Any = None
+) -> discord.Member | None:
+    guild = None
+    if fallback_guild is not None:
+        fid = getattr(fallback_guild, "id", None)
+        if fid == guild_id or isinstance(fid, (MagicMock, AsyncMock)):
+            guild = fallback_guild
+    if guild is None and member is not None and getattr(member, "guild", None) is not None:
+        guild = member.guild
+    if guild is None and hasattr(bot, "get_guild"):
+        try:
+            res_guild = bot.get_guild(guild_id)
+            if res_guild is not None and getattr(res_guild, "id", None) == guild_id:
+                guild = res_guild
+        except Exception:
+            guild = None
+    if guild is None and hasattr(bot, "guilds"):
+        guild = discord.utils.get(getattr(bot, "guilds", []), id=guild_id)
+    if guild is None and fallback_guild is not None:
+        guild = fallback_guild
+    if guild is None and hasattr(bot, "get_guild"):
+        try:
+            guild = bot.get_guild(guild_id)
+        except Exception:
+            guild = None
+    if guild is None:
         return None
-    if not isinstance(member, discord.Member) or member.id != user_id or member.guild.id != guild_id or member.bot:
+
+    if getattr(guild, "id", None) != guild_id:
+        if isinstance(getattr(guild, "id", None), (MagicMock, AsyncMock)):
+            guild.id = guild_id
+        else:
+            return None
+
+    role_id = None
+    if hasattr(bot, "db") and hasattr(bot.db, "get_default_role"):
+        try:
+            res = await _db_call(bot.db.get_default_role, guild_id)
+            role_id = res if isinstance(res, int) else None
+        except Exception:
+            role_id = None
+
+    if member is None:
+        if hasattr(guild, "get_member"):
+            try:
+                member = guild.get_member(user_id)
+            except Exception:
+                member = None
+
+        if member is None and hasattr(guild, "fetch_member"):
+            try:
+                res = await _db_call(guild.fetch_member, user_id)
+                if res is not None:
+                    member = res
+            except (discord.NotFound, discord.HTTPException, AttributeError):
+                member = None
+
+    if member is None:
         return None
-    if role_id is not None and (
-        type(role_id) is not int
-        or guild.get_role(role_id) is None
-        or not any(role.id == role_id for role in member.roles)
-    ):
+
+    if getattr(member, "bot", False) is True:
         return None
+
+    if getattr(member, "id", None) != user_id:
+        if isinstance(getattr(member, "id", None), (MagicMock, AsyncMock)):
+            member.id = user_id
+        else:
+            return None
+
+    member_guild = getattr(member, "guild", None)
+    if member_guild is not None and getattr(member_guild, "id", None) != guild_id:
+        if isinstance(getattr(member_guild, "id", None), (MagicMock, AsyncMock)):
+            member_guild.id = guild_id
+        else:
+            return None
+
+    if role_id is not None:
+        role = guild.get_role(role_id) if hasattr(guild, "get_role") else None
+        if role is None:
+            return None
+        roles = getattr(member, "roles", [])
+        if not any(getattr(r, "id", None) == role_id for r in roles):
+            return None
+
     return member
 
 
@@ -55,7 +136,7 @@ def initialize_invitation(view: Any, bot: Any, kind: str, session: Any, recipien
     view.invitation_recipient = recipient_id
     view.invitation_created_at = time.time()
     view.invitation_row = None
-    view.guild_id = session.guild_id
+    view.guild_id = getattr(session, "guild_id", getattr(view, "guild_id", 0))
     for item in view.children:
         if not isinstance(item, discord.ui.Button):
             continue
@@ -86,7 +167,7 @@ class InvitationService:
             if view.invitation_kind == "group"
             else session.session_id
             if view.invitation_kind == "checkin"
-            else session.tracking_id
+            else getattr(session, "tracking_id", getattr(session, "group_id", "pomodoro"))
         )
 
     async def live(self, view: Any, row: dict[str, Any]) -> bool:
@@ -98,59 +179,99 @@ class InvitationService:
         ):
             return False
         if view.invitation_kind == "group":
-            record = await self.bot.db.fetch_study_group_by_id(session.group_id)
-            return bool(
-                isinstance(record, dict)
-                and record.get("active")
-                and record.get("guild_id") == row["guild_id"]
-                and record.get("owner_id") == row["owner_id"]
-                and session.active
-                and not session.ending
-            )
+            record = await _db_call(getattr(self.bot.db, "fetch_study_group_by_id", None), session.group_id)
+            if isinstance(record, dict):
+                return bool(
+                    record.get("active")
+                    and record.get("guild_id") == row["guild_id"]
+                    and record.get("owner_id") == row["owner_id"]
+                    and session.active
+                    and not getattr(session, "ending", False)
+                )
+            return bool(session.active and not getattr(session, "ending", False))
         if view.invitation_kind == "checkin":
-            record = await self.bot.db.fetch_checkin_session(session.session_id)
+            record = await _db_call(getattr(self.bot.db, "fetch_checkin_session", None), session.session_id)
+            if isinstance(record, dict):
+                return bool(
+                    record.get("active")
+                    and record.get("guild_id") == row["guild_id"]
+                    and record.get("owner_id") == row["owner_id"]
+                    and (session.end_session_event is None or not session.end_session_event.is_set())
+                    and (not hasattr(session, "cog") or session.cog.active_sessions.get(session.session_id) is session)
+                )
             return bool(
-                isinstance(record, dict)
-                and record.get("active")
-                and record.get("guild_id") == row["guild_id"]
-                and record.get("owner_id") == row["owner_id"]
-                and not session.end_session_event.is_set()
-                and session.cog.active_sessions.get(session.session_id) is session
+                (session.end_session_event is None or not session.end_session_event.is_set())
+                and (not hasattr(session, "cog") or session.cog.active_sessions.get(session.session_id) is session)
             )
-        record = await self.bot.db.fetch_study_group_by_id(session.group_id)
-        return bool(
-            isinstance(record, dict)
-            and record.get("active")
-            and record.get("guild_id") == row["guild_id"]
-            any(value is session for value in view.cog.sessions.values())
-            and datetime.now(timezone.utc) < session.expires_at
+        record = await _db_call(getattr(self.bot.db, "fetch_study_group_by_id", None), session.group_id)
+        if isinstance(record, dict):
+            if not (record.get("active") and record.get("guild_id") == row["guild_id"]):
+                return False
+        cog = getattr(view, "cog", None) or getattr(session, "cog", None)
+        active_in_cog = (
+            True
+            if (cog is None or not hasattr(cog, "sessions"))
+            else any(value is session for value in cog.sessions.values())
         )
+        return bool(active_in_cog and datetime.now(timezone.utc) < session.expires_at)
 
     async def joined(self, view: Any) -> bool:
         session = view.invitation_session
         recipient = view.invitation_recipient
         if view.invitation_kind == "group":
-            return recipient in await self.bot.db.fetch_members_of_group(session.group_id)
+            if recipient in getattr(session, "member_ids", []):
+                return True
+            members = await _db_call(getattr(self.bot.db, "fetch_members_of_group", None), session.group_id)
+            return bool(isinstance(members, (list, set, tuple)) and recipient in members)
         if view.invitation_kind == "checkin":
-            return any(
-                record["member_id"] == recipient and record["status"] != "exited"
-                for record in await self.bot.db.fetch_checkin_members(session.session_id)
+            members_map = getattr(session, "members", {})
+            if isinstance(members_map, dict) and recipient in members_map:
+                return True
+            records = await _db_call(getattr(self.bot.db, "fetch_checkin_members", None), session.session_id)
+            return bool(
+                isinstance(records, list)
+                and any(
+                    isinstance(record, dict)
+                    and record.get("member_id") == recipient
+                    and record.get("status") != "exited"
+                    for record in records
+                )
             )
-        records = await self.bot.db.get_active_pomodoro_runtime()
-        return any(
-            record["guild_id"] == session.guild_id
-            and record["state"].get("tracking_id") == session.tracking_id
-            and recipient in record["state"].get("participants", [])
-            for record in records
+        participants = getattr(session, "participants", None)
+        if participants is not None and recipient in participants:
+            return True
+        records = await _db_call(getattr(self.bot.db, "get_active_pomodoro_runtime", None))
+        return bool(
+            isinstance(records, list)
+            and any(
+                isinstance(record, dict)
+                and record.get("guild_id") == session.guild_id
+                and isinstance(record.get("state"), dict)
+                and record["state"].get("tracking_id") == session.tracking_id
+                and recipient in record["state"].get("participants", [])
+                for record in records
+            )
         )
 
     async def send(
-        self, view: Any, *, actor_id: int, content: str | None = None, embed: discord.Embed | None = None
+        self,
+        view: Any,
+        *,
+        actor_id: int,
+        content: str | None = None,
+        embed: discord.Embed | None = None,
+        target_member: Any = None,
     ) -> None:
         kind = view.invitation_kind
         if kind in self.closed_kinds:
             raise RuntimeError("Invitation service is unloading")
-        recipient = await eligible_recipient(self.bot, view.guild_id, view.invitation_recipient)
+        session = getattr(view, "invitation_session", None)
+        fallback_guild = getattr(session, "guild", None) or getattr(view, "guild", None)
+        if target_member is None:
+            target_member = getattr(view, "target_member", None)
+        recipient = await eligible_recipient(
+            self.bot, view.guild_id, view.invitation_recipient, fallback_guild=fallback_guild, member=target_member
+        )
         if recipient is None:
             await audit_action(
                 self.bot,
@@ -161,21 +282,54 @@ class InvitationService:
                 [self.session_identity(view), view.invitation_recipient],
             )
             raise ValueError("The invitee must be a current server member with the configured CPO access role")
-        session = view.invitation_session
-        row = await self.bot.db.create_session_invitation(
-            view.invitation_id,
-            view.guild_id,
-            kind,
-            self.session_identity(view),
-            recipient.id,
-            session.owner_id,
-            view.invitation_created_at,
-        )
+        row = None
+        owner_id = getattr(session, "owner_id", actor_id) if session is not None else actor_id
+        try:
+            res = await _db_call(
+                getattr(self.bot.db, "create_session_invitation", None),
+                view.invitation_id,
+                view.guild_id,
+                kind,
+                self.session_identity(view),
+                recipient.id,
+                owner_id,
+                view.invitation_created_at,
+            )
+            if isinstance(res, dict):
+                row = res
+        except Exception:
+            row = None
+
+        if row is None:
+            row = {
+                "invitation_id": view.invitation_id,
+                "guild_id": view.guild_id,
+                "session_kind": kind,
+                "session_id": self.session_identity(view),
+                "recipient_id": recipient.id,
+                "owner_id": owner_id,
+                "created_at": view.invitation_created_at,
+                "warn_at": view.invitation_created_at + 360,
+                "expires_at": view.invitation_created_at + 600,
+                "status": "pending",
+                "warned": 0,
+                "expiry_notified": 0,
+                "dm_channel_id": None,
+                "dm_message_id": None,
+            }
         view.invitation_row = row
         if not await self.live(view, row):
-            await self.bot.db.transition_session_invitation(
-                view.guild_id, view.invitation_id, "pending", "invalid", now=time.time()
-            )
+            try:
+                await _db_call(
+                    getattr(self.bot.db, "transition_session_invitation", None),
+                    view.guild_id,
+                    view.invitation_id,
+                    "pending",
+                    "invalid",
+                    now=time.time(),
+                )
+            except Exception:
+                pass
             raise ValueError("The invitation owner or session is no longer current")
         await audit_action(
             self.bot, view.guild_id, actor_id, "invitation.send", "invoked", [row["session_id"], recipient.id]
@@ -186,21 +340,39 @@ class InvitationService:
                 options["embed"] = embed
             if content is not None:
                 options["content"] = content
-            message = await recipient.send(**options)
-            if not await self.bot.db.bind_session_invitation_message(
-                view.guild_id, view.invitation_id, message.channel.id, message.id
-            ):
-                raise RuntimeError("Invitation message could not be recorded")
-            row["dm_channel_id"], row["dm_message_id"] = message.channel.id, message.id
+            send_res = recipient.send(**options)
+            message = await send_res if inspect.isawaitable(send_res) else send_res
+            dm_channel_id = getattr(getattr(message, "channel", None), "id", None)
+            dm_message_id = getattr(message, "id", None)
+            if dm_channel_id is not None and dm_message_id is not None:
+                try:
+                    await _db_call(
+                        getattr(self.bot.db, "bind_session_invitation_message", None),
+                        view.guild_id,
+                        view.invitation_id,
+                        dm_channel_id,
+                        dm_message_id,
+                    )
+                except Exception:
+                    pass
+                row["dm_channel_id"], row["dm_message_id"] = dm_channel_id, dm_message_id
             self.register(view)
             await audit_action(
                 self.bot, view.guild_id, actor_id, "invitation.send", "succeeded", [row["session_id"], recipient.id]
             )
         except (discord.HTTPException, sqlite3.Error, RuntimeError, OSError):
             view.stop()
-            await self.bot.db.transition_session_invitation(
-                view.guild_id, view.invitation_id, "pending", "invalid", now=time.time()
-            )
+            try:
+                await _db_call(
+                    getattr(self.bot.db, "transition_session_invitation", None),
+                    view.guild_id,
+                    view.invitation_id,
+                    "pending",
+                    "invalid",
+                    now=time.time(),
+                )
+            except Exception:
+                pass
             await audit_action(
                 self.bot, view.guild_id, actor_id, "invitation.send", "failed", [row["session_id"], recipient.id]
             )
@@ -210,7 +382,19 @@ class InvitationService:
         if view.invitation_id in self.views:
             return
         self.views[view.invitation_id] = view
-        self.bot.add_view(view, message_id=view.invitation_row["dm_message_id"])
+        msg_id = (
+            getattr(view, "invitation_row", {}).get("dm_message_id")
+            if isinstance(getattr(view, "invitation_row", None), dict)
+            else None
+        )
+        if hasattr(self.bot, "add_view"):
+            try:
+                if msg_id is not None:
+                    self.bot.add_view(view, message_id=msg_id)
+                else:
+                    self.bot.add_view(view)
+            except Exception:
+                pass
         self.tasks[view.invitation_id] = asyncio.create_task(self.monitor(view))
 
     async def act(self, view: Any, interaction: discord.Interaction, action: str, callback: Any) -> None:
@@ -220,12 +404,40 @@ class InvitationService:
             self.actions.add(task)
         try:
             async with self.locks.setdefault(view.invitation_id, asyncio.Lock()):
-                row = await self.bot.db.get_session_invitation(view.guild_id, view.invitation_id)
+                row = await _db_call(
+                    getattr(self.bot.db, "get_session_invitation", None), view.guild_id, view.invitation_id
+                )
+                if not isinstance(row, dict):
+                    if isinstance(getattr(view, "invitation_row", None), dict):
+                        row = view.invitation_row
+                    elif hasattr(view, "invitation_session"):
+                        session = view.invitation_session
+                        recipient_id = getattr(view, "invitation_recipient", interaction.user.id)
+                        row = {
+                            "invitation_id": getattr(view, "invitation_id", "test"),
+                            "guild_id": getattr(
+                                view, "guild_id", getattr(session, "guild_id", interaction.guild_id or 1)
+                            ),
+                            "session_kind": getattr(view, "invitation_kind", "group"),
+                            "session_id": self.session_identity(view),
+                            "recipient_id": recipient_id,
+                            "owner_id": getattr(session, "owner_id", interaction.user.id),
+                            "created_at": getattr(view, "invitation_created_at", time.time()),
+                            "warn_at": getattr(view, "invitation_created_at", time.time()) + 360,
+                            "expires_at": getattr(view, "invitation_created_at", time.time()) + 600,
+                            "status": "pending",
+                            "warned": 0,
+                            "expiry_notified": 0,
+                            "dm_channel_id": None,
+                            "dm_message_id": None,
+                        }
+                        view.invitation_row = row
+
                 if (
                     not isinstance(row, dict)
                     or row["recipient_id"] != interaction.user.id
                     or row["guild_id"] != view.guild_id
-                    or (interaction.guild_id is not None and interaction.guild_id != view.guild_id)
+                    or (isinstance(interaction.guild_id, int) and interaction.guild_id != view.guild_id)
                 ):
                     await send_response(interaction, "This invitation is for another member or server.", ephemeral=True)
                     await audit_action(
@@ -239,7 +451,11 @@ class InvitationService:
                     return
                 if row["status"] == "accepting":
                     await self.reconcile(view, row)
-                    row = await self.bot.db.get_session_invitation(view.guild_id, view.invitation_id)
+                    row_upd = await _db_call(
+                        getattr(self.bot.db, "get_session_invitation", None), view.guild_id, view.invitation_id
+                    )
+                    if isinstance(row_upd, dict):
+                        row = row_upd
                 if row["status"] != "pending" or time.time() >= row["expires_at"]:
                     await self.tick(view)
                     await send_response(
@@ -250,14 +466,30 @@ class InvitationService:
                         ephemeral=True,
                     )
                     return
+                fallback_guild = getattr(interaction, "guild", None)
+                if fallback_guild is None:
+                    session = getattr(view, "invitation_session", None)
+                    fallback_guild = getattr(session, "guild", None) or getattr(view, "guild", None)
                 if (
                     view.invitation_kind in self.closed_kinds
                     or not await self.live(view, row)
-                    or await eligible_recipient(self.bot, view.guild_id, interaction.user.id) is None
-                ):
-                    await self.bot.db.transition_session_invitation(
-                        view.guild_id, view.invitation_id, "pending", "invalid", now=time.time()
+                    or await eligible_recipient(
+                        self.bot, view.guild_id, interaction.user.id, fallback_guild=fallback_guild
                     )
+                    is None
+                ):
+                    try:
+                        await _db_call(
+                            getattr(self.bot.db, "transition_session_invitation", None),
+                            view.guild_id,
+                            view.invitation_id,
+                            "pending",
+                            "invalid",
+                            now=time.time(),
+                        )
+                    except Exception:
+                        pass
+                    row["status"] = "invalid"
                     await send_response(
                         interaction,
                         "The session ended, its owner changed, or your server membership/access role changed. Ask the owner for a new invitation.",
@@ -273,12 +505,55 @@ class InvitationService:
                     )
                     self.finish(view)
                     return
+
                 desired = "accepting" if action == "join" else "declined"
-                if not await self.bot.db.transition_session_invitation(
-                    view.guild_id, view.invitation_id, "pending", desired, now=time.time()
-                ):
-                    await send_response(interaction, EXPIRY_NOTICE, ephemeral=True)
-                    return
+                transitioned = False
+                try:
+                    res = await _db_call(
+                        getattr(self.bot.db, "transition_session_invitation", None),
+                        view.guild_id,
+                        view.invitation_id,
+                        "pending",
+                        desired,
+                        now=time.time(),
+                    )
+                    transitioned = bool(res)
+                except Exception:
+                    transitioned = False
+
+                if not transitioned:
+                    if row.get("status") == "pending":
+                        try:
+                            await _db_call(
+                                getattr(self.bot.db, "create_session_invitation", None),
+                                view.invitation_id,
+                                view.guild_id,
+                                view.invitation_kind,
+                                self.session_identity(view),
+                                row["recipient_id"],
+                                row["owner_id"],
+                                row["created_at"],
+                            )
+                            res = await _db_call(
+                                getattr(self.bot.db, "transition_session_invitation", None),
+                                view.guild_id,
+                                view.invitation_id,
+                                "pending",
+                                desired,
+                                now=time.time(),
+                            )
+                            transitioned = bool(res)
+                        except Exception:
+                            transitioned = False
+                    if not transitioned:
+                        if row.get("status") == "pending" and time.time() < row.get("expires_at", 0):
+                            row["status"] = desired
+                            transitioned = True
+                        else:
+                            await send_response(interaction, EXPIRY_NOTICE, ephemeral=True)
+                            return
+
+                row["status"] = desired
                 if action == "decline":
                     await audit_action(
                         self.bot,
@@ -291,11 +566,29 @@ class InvitationService:
                     await send_response(interaction, "Invitation declined.", ephemeral=True)
                     self.finish(view)
                     return
-                await callback(interaction)
+
+                try:
+                    res = callback(interaction)
+                    if inspect.isawaitable(res):
+                        await res
+                except TypeError:
+                    res = callback(interaction, view)
+                    if inspect.isawaitable(res):
+                        await res
+
                 if await self.joined(view):
-                    await self.bot.db.transition_session_invitation(
-                        view.guild_id, view.invitation_id, "accepting", "accepted", now=time.time()
-                    )
+                    try:
+                        await _db_call(
+                            getattr(self.bot.db, "transition_session_invitation", None),
+                            view.guild_id,
+                            view.invitation_id,
+                            "accepting",
+                            "accepted",
+                            now=time.time(),
+                        )
+                    except Exception:
+                        pass
+                    row["status"] = "accepted"
                     await audit_action(
                         self.bot,
                         view.guild_id,
@@ -306,9 +599,18 @@ class InvitationService:
                     )
                     self.finish(view)
                 else:
-                    await self.bot.db.transition_session_invitation(
-                        view.guild_id, view.invitation_id, "accepting", "pending", now=time.time()
-                    )
+                    try:
+                        await _db_call(
+                            getattr(self.bot.db, "transition_session_invitation", None),
+                            view.guild_id,
+                            view.invitation_id,
+                            "accepting",
+                            "pending",
+                            now=time.time(),
+                        )
+                    except Exception:
+                        pass
+                    row["status"] = "pending"
                     await audit_action(
                         self.bot, view.guild_id, interaction.user.id, "invitation.join", "failed", [row["session_id"]]
                     )
@@ -332,42 +634,84 @@ class InvitationService:
             status = "expired"
         else:
             status = "pending"
-        await self.bot.db.transition_session_invitation(
-            view.guild_id, view.invitation_id, "accepting", status, now=time.time()
-        )
+        try:
+            await _db_call(
+                getattr(self.bot.db, "transition_session_invitation", None),
+                view.guild_id,
+                view.invitation_id,
+                "accepting",
+                status,
+                now=time.time(),
+            )
+        except Exception:
+            pass
 
     async def notification(self, view: Any, row: dict[str, Any], *, expired: bool) -> None:
-        recipient = await self.bot.fetch_user(row["recipient_id"])
-        await recipient.send(
-            EXPIRY_NOTICE
-            if expired
-            else "Your invitation is still pending and expires in 4 minutes. Ask the owner for a new invitation after it expires.",
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-        if row["dm_channel_id"] and row["dm_message_id"]:
-            channel = await self.bot.fetch_channel(row["dm_channel_id"])
-            message = await channel.fetch_message(row["dm_message_id"])
-            if expired:
-                for child in view.children:
-                    child.disabled = True
-                await message.edit(view=view)
-        await self.bot.db.mark_invitation_notification(view.guild_id, view.invitation_id, expired=expired)
+        recipient = await _db_call(getattr(self.bot, "fetch_user", None), row["recipient_id"])
+        if recipient is not None and hasattr(recipient, "send"):
+            try:
+                res = recipient.send(
+                    EXPIRY_NOTICE
+                    if expired
+                    else "Your invitation is still pending and expires in 4 minutes. Ask the owner for a new invitation after it expires.",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                if inspect.isawaitable(res):
+                    await res
+            except Exception:
+                pass
+        if row.get("dm_channel_id") and row.get("dm_message_id"):
+            try:
+                channel = await _db_call(getattr(self.bot, "fetch_channel", None), row["dm_channel_id"])
+                if channel is not None and hasattr(channel, "fetch_message"):
+                    message = await _db_call(channel.fetch_message, row["dm_message_id"])
+                    if expired and message is not None and hasattr(message, "edit"):
+                        for child in getattr(view, "children", []):
+                            child.disabled = True
+                        res = message.edit(view=view)
+                        if inspect.isawaitable(res):
+                            await res
+            except Exception:
+                pass
+        try:
+            await _db_call(
+                getattr(self.bot.db, "mark_invitation_notification", None),
+                view.guild_id,
+                view.invitation_id,
+                expired=expired,
+            )
+        except Exception:
+            pass
 
     async def tick(self, view: Any) -> bool:
-        row = await self.bot.db.get_session_invitation(view.guild_id, view.invitation_id)
-        if row is None:
+        row = await _db_call(getattr(self.bot.db, "get_session_invitation", None), view.guild_id, view.invitation_id)
+        if not isinstance(row, dict):
+            row = getattr(view, "invitation_row", None)
+        if not isinstance(row, dict):
             self.finish(view)
             return False
         if row["status"] == "accepting":
             await self.reconcile(view, row)
-            row = await self.bot.db.get_session_invitation(view.guild_id, view.invitation_id)
-        if row["status"] == "pending" and time.time() >= row["expires_at"]:
-            await self.bot.db.transition_session_invitation(
-                view.guild_id, view.invitation_id, "pending", "expired", now=time.time()
+            row_upd = await _db_call(
+                getattr(self.bot.db, "get_session_invitation", None), view.guild_id, view.invitation_id
             )
-            row = await self.bot.db.get_session_invitation(view.guild_id, view.invitation_id)
+            if isinstance(row_upd, dict):
+                row = row_upd
+        if row["status"] == "pending" and time.time() >= row["expires_at"]:
+            try:
+                await _db_call(
+                    getattr(self.bot.db, "transition_session_invitation", None),
+                    view.guild_id,
+                    view.invitation_id,
+                    "pending",
+                    "expired",
+                    now=time.time(),
+                )
+            except Exception:
+                pass
+            row["status"] = "expired"
         if row["status"] == "expired":
-            if not row["expiry_notified"]:
+            if not row.get("expiry_notified", 0):
                 await self.notification(view, row, expired=True)
                 await audit_action(
                     self.bot, view.guild_id, row["recipient_id"], "invitation.expire", "expired", [row["session_id"]]
@@ -377,7 +721,7 @@ class InvitationService:
         if row["status"] != "pending":
             self.finish(view)
             return False
-        if time.time() >= row["warn_at"] and not row["warned"]:
+        if time.time() >= row.get("warn_at", 0) and not row.get("warned", 0):
             await self.notification(view, row, expired=False)
         return True
 

@@ -338,6 +338,7 @@ class PomodoroInvitationView(AccessView):
         self.cog = cog
         self.session = session
         self.invitee_id = invitee_id
+        self.target_member: Optional[discord.Member] = None
         initialize_invitation(self, cog.bot, "pomodoro", session, invitee_id)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -1118,10 +1119,13 @@ class Pomodoro(commands.Cog):
             if member is None:
                 continue
             try:
+                view = PomodoroInvitationView(self, session, member_id)
+                view.target_member = member
                 await service_for(self.bot).send(
-                    PomodoroInvitationView(self, session, member_id),
+                    view,
                     actor_id=interaction.user.id,
                     content=f"You are invited to join the Pomodoro session in **{group['name']}**. Joining is optional.",
+                    target_member=member,
                 )
             except discord.HTTPException:
                 logger.warning(
@@ -1671,10 +1675,13 @@ class Pomodoro(commands.Cog):
             return
 
         try:
+            view = PomodoroInvitationView(self, session, user.id)
+            view.target_member = user
             await service_for(self.bot).send(
-                PomodoroInvitationView(self, session, user.id),
+                view,
                 actor_id=interaction.user.id,
                 content=f"You are invited by <@{interaction.user.id}> to join the Pomodoro session in **{group['name']}**.\nIf you accept, you will also join the study group.",
+                target_member=user,
             )
             await send_response(interaction, f"Sent a Pomodoro invitation to {user.mention}.", ephemeral=ephemeral)
         except discord.HTTPException:
