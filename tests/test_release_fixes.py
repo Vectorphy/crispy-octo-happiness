@@ -43,11 +43,71 @@ def group_fixture():
     group.group_role_id = 50
     group.group_info_embed = AsyncMock()
     role = MagicMock(spec=discord.Role)
+    role.id = 50
+    role.guild = group.guild
+    role.name = "study-role"
+    role.managed = False
+    role.delete = AsyncMock()
     channel = AsyncMock(spec=discord.VoiceChannel)
+    channel.id = 40
+    channel.guild = group.guild
+    channel.permissions_for.return_value = discord.Permissions.all()
     channel.overwrites_for = MagicMock(return_value=discord.PermissionOverwrite(connect=True))
+    text = AsyncMock(spec=discord.TextChannel)
+    text.id = 30
+    text.guild = group.guild
+    text.permissions_for.return_value = discord.Permissions.all()
     group.guild.get_channel.return_value = channel
     group.guild.get_role.return_value = role
+    group.guild.me.roles = []
+    group.guild.me.guild_permissions = discord.Permissions.all()
+    group.guild.me.top_role.__le__.return_value = False
+    bot.db.get_all_study_groups.return_value = []
+    for getter in (
+        bot.db.get_group_category,
+        bot.db.get_commands_channel,
+        bot.db.get_mod_log_channel,
+        bot.db.get_default_vc,
+        bot.db.get_default_role,
+    ):
+        getter.return_value = None
+    record = {
+        "id": 7,
+        "group_id": group.group_id,
+        "guild_id": 99,
+        "owner_id": 123,
+        "active": 1,
+        "text_id": 30,
+        "vc_id": 40,
+        "group_role_id": 50,
+    }
+    bot.db.fetch_study_group_by_id.return_value = record
+    pending = []
+
+    async def retire(guild_id, group_id):
+        assert (guild_id, group_id) == (99, record["group_id"])
+        record["active"] = 0
+        pending.extend(
+            {"id": number, "guild_id": 99, "group_id": group_id, "resource_type": kind, "resource_id": resource_id}
+            for number, (kind, resource_id) in enumerate((("text_channel", 30), ("voice_channel", 40), ("role", 50)), 1)
+        )
+
+    async def acknowledge(identifier):
+        pending[:] = [item for item in pending if item["id"] != identifier]
+
+    bot.db.retire_study_group_for_cleanup.side_effect = retire
+    bot.db.get_pending_cleanups.side_effect = lambda *args, **kwargs: list(pending)
+    bot.db.delete_pending_cleanup.side_effect = acknowledge
     return group, channel, role
+
+
+def cleanup_resources(group, voice):
+    text = AsyncMock(spec=discord.TextChannel)
+    text.id = 30
+    text.guild = group.guild
+    text.permissions_for.return_value = discord.Permissions.all()
+    group.guild.get_channel.side_effect = {30: text, 40: voice}.get
+    return text
 
 
 @pytest.mark.asyncio
@@ -531,6 +591,7 @@ async def test_declined_invitation_cannot_be_accepted():
 @pytest.mark.asyncio
 async def test_group_cleanup_blocks_join_and_removes_every_pomodoro_alias():
     group, channel, role = group_fixture()
+    cleanup_resources(group, channel)
     group_id = group.group_id
     group.cog.active_study_groups[group_id] = group
     group.cog.log_mod_action = AsyncMock()
@@ -540,6 +601,10 @@ async def test_group_cleanup_blocks_join_and_removes_every_pomodoro_alias():
     unrelated = MagicMock(group_id=8, text_id=31, guild_id=group.guild_id)
     pomo = MagicMock()
     pomo.sessions = {7: session, group_id: session, 8: unrelated}
+    session.lock = asyncio.Lock()
+    pomo._persist_session = AsyncMock()
+    pomo._persist_productivity = AsyncMock()
+    pomo._last_runtime_save = {}
 
     async def remove_session(current):
         for key, item in list(pomo.sessions.items()):
@@ -559,7 +624,10 @@ async def test_group_cleanup_blocks_join_and_removes_every_pomodoro_alias():
     assert not group.active and not group.member_ids
     assert group_id not in group.cog.active_study_groups
     group.db.add_member_to_study_group_db.assert_not_awaited()
-    group.db.delete_study_group.assert_awaited_once_with(group_id)
+    group.db.retire_study_group_for_cleanup.assert_awaited_once_with(99, group_id)
+    assert (await group.db.fetch_study_group_by_id(group_id))["active"] == 0
+    assert not await group.db.get_pending_cleanups(99)
+    assert not session.runtime_active
     group.cog.log_mod_action.assert_awaited_once()
     view.stop()
 
@@ -713,6 +781,7 @@ async def test_database_admission_is_atomic_and_rejects_ended_groups():
 @pytest.mark.asyncio
 async def test_group_end_concurrent_and_repeated_after_clear_runs_once():
     group, channel, role = group_fixture()
+    cleanup_resources(group, channel)
     group.cog.log_mod_action = AsyncMock()
     group.bot.get_cog.return_value = None
     group.guild.members = []
@@ -734,21 +803,25 @@ async def test_group_end_concurrent_and_repeated_after_clear_runs_once():
     await group.end_group(delay=0)
     channel.delete.assert_awaited_once()
     role.delete.assert_awaited_once()
-    group.db.delete_study_group.assert_awaited_once()
+    group.db.retire_study_group_for_cleanup.assert_awaited_once()
+    assert not await group.db.get_pending_cleanups(99)
     assert group.ended and group.guild is None
 
 
 @pytest.mark.asyncio
 async def test_group_end_missing_resources_are_already_deleted():
     group, channel, role = group_fixture()
+    text = cleanup_resources(group, channel)
     group.cog.log_mod_action = AsyncMock()
     group.bot.get_cog.return_value = None
     group.guild.members = []
     missing = discord.NotFound(MagicMock(status=404), "Unknown resource")
     channel.delete.side_effect = missing
+    text.delete.side_effect = missing
     role.delete = AsyncMock(side_effect=missing)
     await group.end_group(delay=0)
     group.db.record_pending_cleanup.assert_not_awaited()
+    assert not await group.db.get_pending_cleanups(99)
     assert group.ended
 
 
@@ -762,6 +835,7 @@ async def test_cleanup_retry_retains_resources_when_ownership_is_uncertain(probl
     db.get_pending_cleanups.return_value = [
         {"id": 1, "guild_id": 99, "group_id": "old", "resource_type": "voice_channel", "resource_id": 40}
     ]
+    db.get_pending_cleanups.side_effect = None
     db.fetch_study_group_by_id.return_value = None
     db.get_all_study_groups.return_value = []
     for getter in (db.get_group_category, db.get_commands_channel, db.get_mod_log_channel, db.get_default_vc):

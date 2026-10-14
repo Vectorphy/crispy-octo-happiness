@@ -3,6 +3,7 @@ import logging
 import sqlite3
 import sys
 import uuid
+from contextlib import AsyncExitStack
 from datetime import datetime, timedelta
 from typing import Any, List, Optional, Union
 
@@ -23,6 +24,7 @@ from utils import (
     DEFAULT_SESSION_DURATION,
     acknowledge_interaction,
     check_manager,
+    complete_operation,
     guild_operation_locks,
     has_guild_permissions,
     parse_mentions,
@@ -554,7 +556,11 @@ class StudyGroup:
         if not self.guild:
             return
         failures = []
-        for resource_id, kind in ((self.vc_id, "voice"), (self.text_id, "text"), (self.group_role_id, "role")):
+        for resource_id, kind in (
+            (self.vc_id, "voice_channel"),
+            (self.text_id, "text_channel"),
+            (self.group_role_id, "role"),
+        ):
             if not resource_id:
                 continue
             resource = self._provisioned_resources.get(resource_id) or (
@@ -1790,13 +1796,13 @@ class StudyGroup:
                 # 1. Check if the group is marked inactive (active = False)
                 if not self.active:
                     logger.info(f"Group '{self.name}' is being ended by the owner or due to manual condition.")
-                    if await self.end_group(delete_text_channel=False):
+                    if await self.end_group():
                         return
 
                 # 2. Check if there are no members left in the group
                 elif len(self.member_ids) == 0:
                     logger.warning(f"Group '{self.name}' has no members left and is being ended.")
-                    if await self.end_group(delete_text_channel=False):
+                    if await self.end_group():
                         return
 
                 # 3. Check if the group's duration has elapsed
@@ -1804,7 +1810,7 @@ class StudyGroup:
                     logger.info(
                         f"Group '{self.name}' duration of {parse_seconds_to_hms(self.duration)} has elapsed. Ending the group."
                     )
-                    if await self.end_group(delete_text_channel=False):
+                    if await self.end_group():
                         return
 
                 # Wait for 1 minute before checking the conditions again
@@ -1830,144 +1836,86 @@ class StudyGroup:
             return self.ended
 
     async def _end_group(self, delete_text_channel: bool, delay: int, actor_id: Optional[int]):
-        """End the study group by clearing data, deleting channels, removing roles, and clearing permissions."""
+        """Retire durably before attempting deletion; all ending paths delete the same resources."""
+        if self.guild is None:
+            return
+        guild, group_id, group_name = self.guild, self.group_id, self.name
         try:
-            if not self.guild:
-                logger.error("Guild is None in end_group")
-                return
-            guild, group_id, group_name = self.guild, self.group_id, self.name
-
-            # 5. Clean up associated Pomodoro and Checkin sessions
-            pomo_cog = self.bot.get_cog("Pomodoro") if self.bot else None
-            if pomo_cog:
-                sessions = {id(session): session for session in pomo_cog.sessions.values()}
-                for session in sessions.values():
-                    if session.guild_id == self.guild_id and (
-                        str(session.group_id) == str(group_id) or session.text_id == self.text_id
-                    ):
-                        await pomo_cog._remove_session(session)
-
-            async with self.membership_lock:
-                self.active = False
-
-            # Fetch the role, text channel, and voice channel by their IDs
-            role = self.guild.get_role(self.group_role_id)
-            ch_text = self.guild.get_channel(self.text_id)
-            text_channel = ch_text if isinstance(ch_text, discord.TextChannel) else None
-            ch_vc = self.guild.get_channel(self.vc_id)
-            voice_channel = ch_vc if isinstance(ch_vc, discord.VoiceChannel) else None
-
-            # Calculate end timestamp
-            end_timestamp = int((datetime.now() + timedelta(seconds=delay)).timestamp())
-            countdown_text = f"<t:{end_timestamp}:R>"
-
-            if text_channel and delay > 0:
-                role_mention = role.mention if role else f"<@&{self.group_role_id}>"
-                await text_channel.send(
-                    content=f"Hey people of {role_mention}\nThe End Function will start in {delay} seconds."
-                )
-                logger.info(f"The End condition has been triggered. from this namespae: {__name__}")
-                await text_channel.send(content=countdown_text)
-
+            channel = guild.get_channel(self.text_id)
+            if isinstance(channel, discord.TextChannel) and delay > 0:
+                try:
+                    await channel.send(
+                        content=f"This study group ends <t:{int(datetime.now().timestamp()) + delay}:R>."
+                    )
+                except Exception:
+                    logger.exception("Group end countdown unavailable guild_id=%s group_id=%s", guild.id, group_id)
             if delay > 0:
                 await asyncio.sleep(delay)
-
-            # 1. Handle text channel deletion or permission revoking
-            if text_channel and text_channel.id not in self._deleted_resources:
-                if delete_text_channel:
-                    try:
-                        await text_channel.delete(reason="Study group ended, deleting text channel.")
-                        self._deleted_resources.add(text_channel.id)
-                        logger.info(f"Text channel '{text_channel.name}' deleted for group '{self.name}'.")
-                    except discord.NotFound:
-                        self._deleted_resources.add(text_channel.id)
-                    except Exception as e:
-                        logger.error(f"Error deleting text channel '{text_channel.name}': {e}")
-                        if self.guild and self.text_id:
-                            await self.db.record_pending_cleanup(
-                                guild_id=self.guild.id,
-                                group_id=str(self.group_id),
-                                resource_type="text_channel",
-                                resource_id=self.text_id,
-                                last_error=str(e),
-                            )
-                else:
-                    if role:
-                        try:
-                            # Revoke the group's role permissions from the text channel
-                            await text_channel.set_permissions(role, overwrite=None)
-                            logger.info(
-                                f"Permissions revoked from text channel '{text_channel.name}' for role '{role.name}'."
-                            )
-                        except Exception as e:
-                            logger.error(f"Error revoking permissions in text channel '{text_channel.name}': {e}")
-
-            # 2. Delete the voice channel
-            if voice_channel and voice_channel.id not in self._deleted_resources:
-                try:
-                    await voice_channel.delete(reason="Study group ended, deleting voice channel.")
-                    self._deleted_resources.add(voice_channel.id)
-                    logger.info(f"Voice channel '{voice_channel.name}' deleted for group '{self.name}'.")
-                except discord.NotFound:
-                    self._deleted_resources.add(voice_channel.id)
-                except Exception as e:
-                    logger.error(f"Error deleting voice channel '{voice_channel.name} from {self.name}': {e}")
-                    if self.guild and self.vc_id:
-                        await self.db.record_pending_cleanup(
-                            guild_id=self.guild.id,
-                            group_id=str(self.group_id),
-                            resource_type="voice_channel",
-                            resource_id=self.vc_id,
-                            last_error=str(e),
-                        )
-
-            # 3. De-assign the role from all members
-            if role and role.id not in self._deleted_resources:
-                try:
-                    for member in guild.members:
-                        if role in member.roles:
-                            await member.remove_roles(role, reason="Study group ended, removing group role.")
-                    logger.info(f"Role '{role.name}' removed from all members of group '{self.name}'.")
-                except Exception as e:
-                    logger.error(f"Error de-assigning role '{role.name}' from members: {e}")
-
-                # 4. Delete the role
-                try:
-                    await role.delete(reason="Study group ended, deleting group role.")
-                    self._deleted_resources.add(role.id)
-                    logger.info(f"Role '{role.name}' deleted for group '{self.name}'.")
-                except discord.NotFound:
-                    self._deleted_resources.add(role.id)
-                except Exception as e:
-                    logger.error(f"Error deleting role '{role.name}': {e}")
-                    if self.guild and self.group_role_id:
-                        await self.db.record_pending_cleanup(
-                            guild_id=self.guild.id,
-                            group_id=str(self.group_id),
-                            resource_type="role",
-                            resource_id=self.group_role_id,
-                            last_error=str(e),
-                        )
-
-            checkin_cog = self.bot.get_cog("CheckinCog") if self.bot else None
-            if checkin_cog and self.text_id:
-                for sid, s in list(checkin_cog.active_sessions.items()):
-                    if s.text_id == self.text_id:
-                        await s.clear_session_data()
-
-            # 6. Delete group from database
-            if self.group_id:
-                await self.db.delete_study_group(self.group_id)
-
+            # End never takes _cleanup_lock: retry holds it before taking this guild lock.
+            async with guild_operation_locks(self.bot).setdefault(guild.id, asyncio.Lock()):
+                await complete_operation(self._retire_for_cleanup(guild))
+                pending = await self.db.get_pending_cleanups(guild.id)
+                for item in pending:
+                    if item["group_id"] == group_id:
+                        await self.cog._execute_cleanup_item(item, guild)
             await self.cog.log_mod_action(guild, "Study group ended", group_id, group_name, actor_id)
+        except Exception:
+            logger.exception("Group ending retained for retry guild_id=%s group_id=%s", guild.id, group_id)
 
-            # 7. Clear group data
+    async def _retire_for_cleanup(self, guild: discord.Guild) -> None:
+        async with self.membership_lock, AsyncExitStack() as stack:
+            record = await self.db.fetch_study_group_by_id(self.group_id)
+            text_id = record.get("text_id") if isinstance(record, dict) else self.text_id
+            groups = await self.db.get_all_study_groups(guild.id)
+            owns_text = bool(text_id) and not any(
+                row.get("active") and row.get("group_id") != self.group_id and row.get("text_id") == text_id
+                for row in groups
+            )
+            pomo = self.bot.get_cog("Pomodoro")
+            sessions = []
+            if pomo is not None:
+                identities = {str(self.group_id)}
+                if isinstance(record, dict) and record.get("guild_id") == guild.id:
+                    identities.add(str(record["id"]))
+                sessions = [
+                    session
+                    for session in {id(value): value for value in pomo.sessions.values()}.values()
+                    if session.guild_id == guild.id and str(session.group_id) in identities
+                ]
+                for session in sessions:
+                    await stack.enter_async_context(session.lock)
+                    session.is_paused = True
+                    await pomo._persist_session(session, required=True)
+                    await pomo._persist_productivity(session, final=True)
+            checkin = self.bot.get_cog("CheckinCog")
+            checkins = []
+            if checkin is not None:
+                checkins = [
+                    session
+                    for session in checkin.active_sessions.values()
+                    if owns_text and session.guild_id == guild.id and session.text_id == text_id
+                ]
+                for session in checkins:
+                    await stack.enter_async_context(session.join_lock)
+            await self.db.retire_study_group_for_cleanup(guild.id, str(self.group_id))
+            # No await between committed recovery ownership and dropping in-memory ownership.
+            if pomo is not None:
+                for session in sessions:
+                    session.runtime_active = False
+                    for key, value in list(pomo.sessions.items()):
+                        if value is session:
+                            pomo.sessions.pop(key, None)
+                    pomo._last_runtime_save.pop(id(session), None)
+                if not pomo.sessions and pomo.run_timer.is_running():
+                    pomo.run_timer.stop()
+            if checkin is not None:
+                for session in checkins:
+                    session.end_session_event.set()
+                    session.member_ids.clear()
+                    session.member_statuses.clear()
+                    checkin.active_sessions.pop(session.session_id, None)
             self.clear_group_data()
             self.ended = True
-            logger.info("Data cleared guild_id=%s group_id=%s name=%s", guild.id, group_id, group_name)
-
-        except Exception:
-            logger.exception("Failed to end study group guild_id=%s group_id=%s", self.guild_id, self.group_id)
 
     ## End - Clear Class Variables / Attributes and Trackers
     def clear_group_data(self):
@@ -2144,160 +2092,127 @@ class StudyGroupCog(commands.Cog):
             return await self._process_pending_cleanups_locked(guild)
 
     async def _process_pending_cleanups_locked(self, guild: Optional[discord.Guild] = None) -> dict[str, int]:
-        """
-        Scan pending_resource_cleanups in the database and retry deletion of
-        channels or roles that failed during earlier group cleanup.
-        Returns a summary dict {'resolved': int, 'retried': int, 'failed': int}.
-        """
         summary = {"resolved": 0, "retried": 0, "failed": 0}
-        guild_id = guild.id if guild else None
         try:
-            pending_items = await self.bot.db.get_pending_cleanups(guild_id=guild_id)
+            pending = await self.bot.db.get_pending_cleanups(guild_id=guild.id if guild else None)
         except Exception:
-            logger.exception("Failed to query pending cleanups from database")
+            logger.exception("Cleanup queue unavailable")
             return summary
-
-        for item in pending_items:
-            item_id = int(item["id"])
-            target_guild_id = int(item["guild_id"])
-            resource_type = str(item["resource_type"])
-            resource_id = int(item["resource_id"])
-            target_guild = (
-                guild
-                if (guild and guild.id == target_guild_id)
-                else (self.bot.get_guild(target_guild_id) if hasattr(self.bot, "get_guild") else None)
-            )
-
-            if not target_guild:
-                logger.debug("Guild %s not found for cleanup %s", target_guild_id, item_id)
+        for item in pending:
+            target = guild if guild and guild.id == item["guild_id"] else self.bot.get_guild(item["guild_id"])
+            if target is None:
+                summary["failed"] += 1
                 continue
-
-            try:
-                group = await self.bot.db.fetch_study_group_by_id(item["group_id"])
-                groups = await self.bot.db.get_all_study_groups(target_guild_id)
-                setting_ids = (
-                    await self.bot.db.get_group_category(target_guild_id),
-                    await self.bot.db.get_commands_channel(target_guild_id),
-                    await self.bot.db.get_mod_log_channel(target_guild_id),
-                    await self.bot.db.get_default_vc(target_guild_id),
-                )
-                if isinstance(group, dict) and (
-                    group.get("active") or str(group.get("guild_id")) != str(target_guild_id)
-                ):
-                    raise ValueError("Cleanup group is active or belongs to another guild")
-                resource_key = {"text_channel": "text_id", "voice_channel": "vc_id", "role": "group_role_id"}.get(
-                    resource_type
-                )
-                if resource_key is None:
-                    raise ValueError("Unknown cleanup resource type")
-                if isinstance(group, dict) and group.get(resource_key) != resource_id:
-                    raise ValueError("Cleanup resource does not match its recorded group")
-                if resource_id in setting_ids or any(
-                    row.get("active")
-                    and resource_id
-                    in (row.get("text_id"), row.get("vc_id"), row.get("group_role_id"), row.get("category_id"))
-                    for row in groups
-                ):
-                    raise ValueError("Cleanup resource is in active use")
-                if resource_type in ("text_channel", "voice_channel"):
-                    channel = target_guild.get_channel(resource_id)
-                    if channel is None and hasattr(self.bot, "fetch_channel"):
-                        try:
-                            channel = await self.bot.fetch_channel(resource_id)
-                        except discord.NotFound:
-                            channel = None
-                        except discord.Forbidden as e:
-                            await self.bot.db.update_cleanup_retry(
-                                item_id,
-                                status="pending",
-                                last_error=f"Forbidden: {e}",
-                            )
-                            summary["failed"] += 1
-                            continue
-                        except discord.HTTPException as e:
-                            await self.bot.db.update_cleanup_retry(item_id, last_error=str(e))
-                            summary["failed"] += 1
-                            continue
-
-                    if channel is None:
-                        await self.bot.db.delete_pending_cleanup(item_id)
-                        summary["resolved"] += 1
-                        logger.info("Channel %s already gone, resolved cleanup %s", resource_id, item_id)
-                        continue
-
-                    expected_type = discord.TextChannel if resource_type == "text_channel" else discord.VoiceChannel
-                    if not isinstance(channel, expected_type) or channel.guild.id != target_guild_id:
-                        raise ValueError("Cleanup channel guild or type mismatch")
-                    me = getattr(target_guild, "me", None)
-                    if me:
-                        perms = channel.permissions_for(me)
-                        if not perms.manage_channels:
-                            await self.bot.db.update_cleanup_retry(
-                                item_id,
-                                status="pending",
-                                last_error="Bot lacks manage_channels permission on channel",
-                            )
-                            summary["failed"] += 1
-                            continue
-
-                    await channel.delete(reason="Retry cleanup: study group ended")
-                    await self.bot.db.delete_pending_cleanup(item_id)
-                    summary["resolved"] += 1
-                    logger.info("Successfully deleted channel %s on retry for cleanup %s", resource_id, item_id)
-
-                elif resource_type == "role":
-                    role = target_guild.get_role(resource_id)
-                    if role is None:
-                        await self.bot.db.delete_pending_cleanup(item_id)
-                        summary["resolved"] += 1
-                        logger.info("Role %s already gone, resolved cleanup %s", resource_id, item_id)
-                        continue
-
-                    if not isinstance(role, discord.Role) or role.guild.id != target_guild_id:
-                        raise ValueError("Cleanup role guild or type mismatch")
-                    me = getattr(target_guild, "me", None)
-                    if me:
-                        guild_perms = getattr(me, "guild_permissions", None)
-                        has_manage_roles = getattr(guild_perms, "manage_roles", False) if guild_perms else False
-                        top_role = getattr(me, "top_role", None)
-                        if not has_manage_roles or (top_role is not None and top_role <= role):
-                            err_msg = "Bot lacks manage_roles or role hierarchy insufficient"
-                            await self.bot.db.update_cleanup_retry(
-                                item_id,
-                                status="pending",
-                                last_error=err_msg,
-                            )
-                            summary["failed"] += 1
-                            continue
-
-                    await role.delete(reason="Retry cleanup: study group ended")
-                    await self.bot.db.delete_pending_cleanup(item_id)
-                    summary["resolved"] += 1
-                    logger.info("Successfully deleted role %s on retry for cleanup %s", resource_id, item_id)
-
-                else:
-                    logger.warning("Unknown resource_type %s in cleanup %s", resource_type, item_id)
-
-            except discord.NotFound:
-                await self.bot.db.delete_pending_cleanup(item_id)
-                summary["resolved"] += 1
-            except discord.Forbidden as e:
-                await self.bot.db.update_cleanup_retry(
-                    item_id,
-                    status="pending",
-                    last_error=f"Forbidden: {e}",
-                )
-                summary["failed"] += 1
-            except Exception as e:
-                logger.error("Error retrying cleanup %s: %s", item_id, e)
-                await self.bot.db.update_cleanup_retry(
-                    item_id,
-                    status="pending",
-                    last_error=str(e),
-                )
-                summary["failed"] += 1
-
+            async with self._creation_locks.setdefault(target.id, asyncio.Lock()):
+                resolved = await self._execute_cleanup_item(item, target)
+            summary["retried"] += 1
+            summary["resolved" if resolved else "failed"] += 1
         return summary
+
+    async def _cleanup_ownership(self, item: dict[str, Any], guild: discord.Guild) -> None:
+        resource_id = item["resource_id"]
+        kind = item["resource_type"]
+        if guild.id != item["guild_id"]:
+            raise ValueError("Cleanup guild mismatch")
+        key = {"text_channel": "text_id", "voice_channel": "vc_id", "role": "group_role_id"}.get(kind)
+        if key is None:
+            raise ValueError("Unknown cleanup resource type")
+        record = await self.bot.db.fetch_study_group_by_id(item["group_id"])
+        if isinstance(record, dict) and (
+            record.get("active") or record.get("guild_id") != guild.id or record.get(key) != resource_id
+        ):
+            raise ValueError("Cleanup resource provenance changed")
+        # The queue is also the provenance for historical provisioning failures without a group row.
+        groups = await self.bot.db.get_all_study_groups(guild.id)
+        settings = (
+            await self.bot.db.get_group_category(guild.id),
+            await self.bot.db.get_commands_channel(guild.id),
+            await self.bot.db.get_mod_log_channel(guild.id),
+            await self.bot.db.get_default_vc(guild.id),
+            await self.bot.db.get_default_role(guild.id),
+        )
+        if resource_id in settings or any(
+            row.get("active")
+            and resource_id in (row.get("text_id"), row.get("vc_id"), row.get("group_role_id"), row.get("category_id"))
+            for row in groups
+        ):
+            raise ValueError("Cleanup resource is in active use")
+
+    async def _execute_cleanup_item(self, item: dict[str, Any], guild: discord.Guild) -> bool:
+        """Called with the guild operation lock; never takes the retry or end lock."""
+        if item["resource_type"] in ("text", "voice"):
+            item = {**item, "resource_type": f"{item['resource_type']}_channel"}
+        resource_id, kind = item["resource_id"], item["resource_type"]
+        resource: Any
+        try:
+            await self._cleanup_ownership(item, guild)
+            if kind == "role":
+                resource = guild.get_role(resource_id)
+                if resource is None:
+                    try:
+                        roles = await asyncio.wait_for(guild.fetch_roles(), timeout=30)
+                    except discord.NotFound as error:
+                        raise ValueError("Cleanup role inventory unavailable") from error
+                    resource = next((role for role in roles if role.id == resource_id), None)
+                if resource is not None:
+                    if (
+                        not isinstance(resource, discord.Role)
+                        or resource.guild.id != guild.id
+                        or resource.id != resource_id
+                    ):
+                        raise ValueError("Cleanup role guild, type or ID mismatch")
+                    if (
+                        resource.id == guild.id
+                        or resource.managed is True
+                        or resource.name in {"CPO Manager", "CPO Bot Developer", "CPO Supreme Commander"}
+                    ):
+                        raise ValueError("Cleanup role is protected")
+                    me = guild.me
+                    if me is None or any(role.id == resource_id for role in me.roles):
+                        raise ValueError("Cleanup role belongs to the bot or bot membership is unavailable")
+                    if not me.guild_permissions.manage_roles or me.top_role <= resource:
+                        raise ValueError("Bot lacks manage_roles or role hierarchy insufficient")
+            else:
+                resource = guild.get_channel(resource_id)
+                if resource is None:
+                    resource = await asyncio.wait_for(self.bot.fetch_channel(resource_id), timeout=30)
+                    if resource is None:
+                        raise ValueError("Cleanup channel lookup unavailable")
+                if resource is not None:
+                    expected = discord.TextChannel if kind == "text_channel" else discord.VoiceChannel
+                    if (
+                        not isinstance(resource, expected)
+                        or resource.guild.id != guild.id
+                        or resource.id != resource_id
+                    ):
+                        raise ValueError("Cleanup channel guild, type or ID mismatch")
+                    if guild.me is None or not resource.permissions_for(guild.me).manage_channels:
+                        raise ValueError("Bot lacks manage_channels permission on channel")
+            # REST awaits can reveal reassigned resources; refresh persisted ownership before deletion.
+            await self._cleanup_ownership(item, guild)
+            if resource is not None:
+                await asyncio.wait_for(resource.delete(reason="Study group ended"), timeout=30)
+        except discord.NotFound:
+            pass
+        except Exception as error:
+            logger.exception(
+                "Cleanup retained guild_id=%s group_id=%s resource_id=%s", guild.id, item["group_id"], resource_id
+            )
+            try:
+                await self.bot.db.update_cleanup_retry(item["id"], last_error=str(error))
+            except Exception:
+                logger.exception(
+                    "Cleanup failure acknowledgement retained guild_id=%s resource_id=%s", guild.id, resource_id
+                )
+            return False
+        try:
+            await self.bot.db.delete_pending_cleanup(item["id"])
+        except Exception:
+            logger.exception(
+                "Cleanup deletion acknowledgement retained guild_id=%s resource_id=%s", guild.id, resource_id
+            )
+            return False
+        return True
 
     @app_commands.command(
         name="retry_cleanups",
@@ -2758,9 +2673,11 @@ class StudyGroupCog(commands.Cog):
             ephemeral=ephemeral,
         )
 
+        completed = pending = failed = 0
         for row in db_groups:
             row_dict = dict(row)
             try:
+                members = await self.bot.db.fetch_members_of_group(row_dict["group_id"])
                 # Reconstruct StudyGroup in memory to utilize end_group method
                 group = self.active_study_groups.get(row_dict["group_id"]) or StudyGroup(
                     self.bot.db,
@@ -2770,7 +2687,7 @@ class StudyGroupCog(commands.Cog):
                     row_dict["creator_id"],
                     row_dict["category_id"],
                     row_dict["max_members"],
-                    [],
+                    members,
                 )
                 group.group_id = row_dict["group_id"]
                 group.owner_id = row_dict["owner_id"]
@@ -2778,20 +2695,32 @@ class StudyGroupCog(commands.Cog):
                 group.vc_id = row_dict["vc_id"]
                 group.text_id = row_dict["text_id"]
                 group.guild = interaction.guild
-
-                await group.end_group(delete_text_channel=True, delay=0, actor_id=interaction.user.id)
+                group.active = True
+                self.active_study_groups[group.group_id] = group
+                if await group.end_group(delay=0, actor_id=interaction.user.id):
+                    obligations = await self.bot.db.get_pending_cleanups(interaction.guild.id)
+                    if any(item["group_id"] == row_dict["group_id"] for item in obligations):
+                        pending += 1
+                    else:
+                        completed += 1
+                else:
+                    failed += 1
+                    self._start_group_monitor(group)
             except Exception as e:
                 logger.error(f"Error purging group {row_dict['group_id']}: {e}")
+                failed += 1
 
         await self.log_mod_action(
             interaction.guild,
             "Study groups purged",
             "All active groups",
-            f"Processed {len(db_groups)} groups",
+            f"Completed {completed}; cleanup pending {pending}; failed {failed}",
             interaction.user.id,
         )
         await self._send_cleanup_result(
-            interaction, "Finished purging all active study groups in this server.", ephemeral=ephemeral
+            interaction,
+            f"Study group purge: completed {completed}; cleanup pending {pending}; failed {failed}.",
+            ephemeral=ephemeral,
         )
 
     @app_commands.command(name="end_group", description="End a study group and cleanup its resources")
