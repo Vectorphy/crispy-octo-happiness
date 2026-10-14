@@ -1,5 +1,7 @@
 import asyncio
 import sqlite3
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
@@ -9,7 +11,6 @@ from cogs.study_groups import GroupInvitationView, StudyGroup, StudyGroupCog
 from cogs.tasklist import TaskActionView, TaskList
 from cogs.voice_channels import VoiceChannels
 from database import DBHandler
-from test_file import run_all_feature_tests
 from tests.invitation_store import configure_invitations
 
 
@@ -400,7 +401,22 @@ async def test_group_actions_log_without_pinging():
 
 @pytest.mark.asyncio
 async def test_standalone_command_matrix_asserts_all_54_flows():
-    assert await run_all_feature_tests() == (54, 54)
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        "import asyncio; from test_file import run_all_feature_tests; "
+        "assert asyncio.run(run_all_feature_tests()) == (54, 54)",
+        cwd=Path(__file__).resolve().parents[1],
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        output, _ = await asyncio.wait_for(process.communicate(), timeout=120)
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+    assert process.returncode == 0, output.decode(errors="replace")
 
 
 @pytest.mark.asyncio
