@@ -677,11 +677,13 @@ class DBHandler:
             with self.conn:
                 cursor = self.conn.cursor()
                 cursor.execute(
-                    "SELECT id FROM pending_resource_cleanups WHERE resource_id = ? AND status = 'pending'",
+                    "SELECT id, guild_id, group_id, resource_type FROM pending_resource_cleanups WHERE resource_id = ? AND status = 'pending'",
                     (resource_id,),
                 )
                 row = cursor.fetchone()
                 if row:
+                    if (row[1], row[2], row[3]) != (guild_id, str(group_id), resource_type):
+                        raise ValueError("Cleanup resource already belongs to another obligation")
                     cleanup_id = int(row[0])
                     cursor.execute(
                         "UPDATE pending_resource_cleanups SET "
@@ -1464,6 +1466,106 @@ class DBHandler:
         async with self.lock:
             await self._run_in_thread(_sync)
             logger.info("Study group marked inactive group_id=%s", group_id)
+
+    async def retire_study_group_for_cleanup(self, guild_id: int, group_id: str) -> None:
+        """Transfer all saved resource IDs to durable cleanup before retiring a group."""
+        if type(guild_id) is not int or guild_id <= 0 or not group_id:
+            raise ValueError("Invalid group cleanup identity")
+
+        def _sync() -> None:
+            with self.conn:
+                row = self.conn.execute(
+                    "SELECT * FROM study_groups WHERE group_id = ? AND guild_id = ?", (group_id, guild_id)
+                ).fetchone()
+                if row is None:
+                    raise ValueError("Group cleanup provenance unavailable")
+                if not row["active"]:
+                    return
+                runtimes = self.conn.execute(
+                    "SELECT group_id, state_json FROM pomodoro_runtime "
+                    "WHERE guild_id = ? AND group_id IN (?, ?) AND active = ?",
+                    (guild_id, group_id, str(row["id"]), 1),
+                ).fetchall()
+                for runtime in runtimes:
+                    state = json.loads(runtime["state_json"])
+                    if not isinstance(state, dict) or not isinstance(state.get("focus_seconds", {}), dict):
+                        raise ValueError("Cleanup runtime focus provenance unavailable")
+                    focus = state.get("focus_seconds", {})
+                    if not focus:
+                        continue
+                    tracking_id = state.get("tracking_id")
+                    if not isinstance(tracking_id, str) or not tracking_id:
+                        raise ValueError("Cleanup runtime tracking identity unavailable")
+                    conflict = self.conn.execute(
+                        "SELECT 1 FROM productivity_focus_time "
+                        "WHERE session_id = ? AND (guild_id != ? OR group_id != ?) LIMIT 1",
+                        (tracking_id, guild_id, runtime["group_id"]),
+                    ).fetchone()
+                    if conflict:
+                        raise ValueError("Cleanup runtime tracking identity belongs to another guild or group")
+                    values = []
+                    for user_id, seconds in focus.items():
+                        if (
+                            not isinstance(user_id, str)
+                            or not user_id.isdecimal()
+                            or isinstance(seconds, bool)
+                            or not isinstance(seconds, (int, float))
+                            or seconds < 0
+                            or not math.isfinite(seconds)
+                        ):
+                            raise ValueError("Invalid cleanup runtime focus")
+                        values.append((tracking_id, int(user_id), guild_id, runtime["group_id"], float(seconds)))
+                    self.conn.executemany(
+                        "INSERT INTO productivity_focus_time "
+                        "(session_id, user_id, guild_id, group_id, focus_seconds) VALUES (?, ?, ?, ?, ?) "
+                        "ON CONFLICT(session_id, user_id) DO UPDATE SET focus_seconds = "
+                        "MAX(productivity_focus_time.focus_seconds, excluded.focus_seconds)",
+                        values,
+                    )
+                for kind, resource_id in (
+                    ("text_channel", row["text_id"]),
+                    ("voice_channel", row["vc_id"]),
+                    ("role", row["group_role_id"]),
+                ):
+                    if not resource_id:
+                        continue
+                    queued = self.conn.execute(
+                        "SELECT guild_id, group_id, resource_type FROM pending_resource_cleanups "
+                        "WHERE resource_id = ? AND status = ?",
+                        (resource_id, "pending"),
+                    ).fetchall()
+                    if any(tuple(item) != (guild_id, group_id, kind) for item in queued):
+                        raise ValueError("Cleanup resource already belongs to another obligation")
+                    if not queued:
+                        self.conn.execute(
+                            "INSERT INTO pending_resource_cleanups "
+                            "(guild_id, group_id, resource_type, resource_id, status) VALUES (?, ?, ?, ?, ?)",
+                            (guild_id, group_id, kind, resource_id, "pending"),
+                        )
+                self.conn.execute(
+                    "UPDATE study_groups SET active = ? WHERE group_id = ? AND guild_id = ?", (0, group_id, guild_id)
+                )
+                self.conn.execute("DELETE FROM study_groups_members WHERE group_id = ?", (group_id,))
+                self.conn.execute(
+                    "UPDATE pomodoro_runtime SET active = ? WHERE group_id IN (?, ?) AND guild_id = ?",
+                    (0, group_id, str(row["id"]), guild_id),
+                )
+                shared_text = self.conn.execute(
+                    "SELECT 1 FROM study_groups WHERE guild_id = ? AND text_id = ? AND active = ? LIMIT 1",
+                    (guild_id, row["text_id"], 1),
+                ).fetchone()
+                if row["text_id"] and not shared_text:
+                    self.conn.execute(
+                        "DELETE FROM checkin_members WHERE session_id IN "
+                        "(SELECT session_id FROM checkin_sessions WHERE guild_id = ? AND text_id = ?)",
+                        (guild_id, row["text_id"]),
+                    )
+                    self.conn.execute(
+                        "DELETE FROM checkin_sessions WHERE guild_id = ? AND text_id = ?", (guild_id, row["text_id"])
+                    )
+
+        async with self.lock:
+            await self._run_in_thread(_sync)
 
     ### Get Groups the User is in (Fetches multiple groups per user)
     async def get_study_groups_of_user(self, user_id: int, guild_id: int):

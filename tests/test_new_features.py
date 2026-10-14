@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
+from database import DBHandler
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from cogs.checkin import CheckinSession
 from cogs.pomodoro import Pomodoro, calculate_pomodoro_ratio
@@ -227,55 +229,64 @@ class TestCheckinPrompts(unittest.TestCase):
 class TestEndGroupFallbackCleanup(unittest.TestCase):
     def test_end_group_fallback_deletes_channels_and_roles(self):
         async def run_test():
-            bot = MagicMock()
-            bot.db = AsyncMock()
-            bot.get_cog.return_value = None
-            cog = StudyGroupCog(bot)
-
-            interaction = AsyncMock()
-            guild = MagicMock()
-            interaction.guild = guild
-            interaction.guild.id = 999
-            interaction.user.id = 12345
-            interaction.channel_id = 777
-
-            # Group is only in DB, not in memory
-            cog.active_study_groups = {}
-
-            mock_text_ch = AsyncMock(spec=discord.TextChannel, id=777)
-            mock_vc_ch = AsyncMock(spec=discord.VoiceChannel, id=888)
-            mock_role = AsyncMock(spec=discord.Role, id=999)
-
-            def get_channel_mock(cid):
-                if cid == 777:
-                    return mock_text_ch
-                if cid == 888:
-                    return mock_vc_ch
-                return None
-
-            guild.get_channel.side_effect = get_channel_mock
-            guild.get_role.return_value = mock_role
-
-            bot.db.get_study_group_by_channel.return_value = {
-                "id": 42,
-                "group_id": "grp-42-uuid",
-                "name": "Orphan Group",
-                "max_members": 5,
-                "active": True,
-                "text_id": 777,
-                "vc_id": 888,
-                "group_role_id": 999,
-                "creator_id": 12345,
-                "owner_id": 12345,
-            }
-
-            await cog.end_group.callback(cog, interaction)
-
-            # Verify text channel, voice channel, and role deleted
-            mock_text_ch.delete.assert_called_once()
-            mock_vc_ch.delete.assert_called_once()
-            mock_role.delete.assert_called_once()
-            bot.db.delete_study_group.assert_called_once_with("grp-42-uuid")
+            db = DBHandler(":memory:")
+            await db.connect()
+            try:
+                bot = MagicMock()
+                bot.db = db
+                bot.get_cog.return_value = None
+                cog = StudyGroupCog(bot)
+                guild = MagicMock(spec=discord.Guild, id=999)
+                guild.me.roles = []
+                guild.me.guild_permissions = discord.Permissions.all()
+                guild.me.top_role.__le__.return_value = False
+                interaction = MagicMock(spec=discord.Interaction)
+                interaction.guild = guild
+                interaction.guild_id = 999
+                interaction.user.id = 12345
+                interaction.channel_id = 777
+                interaction.response = AsyncMock()
+                interaction.response.is_done = MagicMock(return_value=True)
+                interaction.followup = AsyncMock()
+                interaction.extras = {}
+                interaction.client = bot
+                mock_text_ch = AsyncMock(spec=discord.TextChannel, id=777, guild=guild)
+                mock_vc_ch = AsyncMock(spec=discord.VoiceChannel, id=888, guild=guild)
+                mock_role = MagicMock(spec=discord.Role, id=990, guild=guild)
+                mock_role.name = "study-role"
+                mock_role.managed = False
+                mock_role.delete = AsyncMock()
+                for channel in (mock_text_ch, mock_vc_ch):
+                    channel.permissions_for.return_value = discord.Permissions.all()
+                guild.get_channel.side_effect = {777: mock_text_ch, 888: mock_vc_ch}.get
+                guild.get_role.return_value = mock_role
+                bot.get_guild.return_value = guild
+                await db.save_study_group(
+                    {
+                        "group_id": "grp-42-uuid",
+                        "guild_id": 999,
+                        "name": "Orphan Group",
+                        "creator_id": 12345,
+                        "owner_id": 12345,
+                        "member_ids": [12345],
+                        "text_id": 777,
+                        "vc_id": 888,
+                        "group_role_id": 990,
+                        "active": 1,
+                    }
+                )
+                assert not cog.active_study_groups
+                await cog.end_group.callback(cog, interaction)
+                mock_text_ch.delete.assert_awaited_once()
+                mock_vc_ch.delete.assert_awaited_once()
+                mock_role.delete.assert_awaited_once()
+                saved = await db.fetch_study_group_by_id("grp-42-uuid")
+                assert saved["active"] == 0 and saved["group_role_id"] == 990
+                assert not await db.fetch_members_of_group("grp-42-uuid")
+                assert not await db.get_pending_cleanups(999)
+                assert not cog.active_study_groups
+            finally:
+                await db.close()
 
         asyncio.run(run_test())
 
