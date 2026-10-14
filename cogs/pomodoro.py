@@ -296,7 +296,7 @@ class PomodoroPresenceView(AccessView):
             return
         if interaction.user.id in self.session.dropped_out_members:
             await interaction.response.send_message(
-                "You dropped out of this session. Use /resume_pomodoro to rejoin.",
+                "You dropped out of this Pomodoro session. Attendance is unavailable while you are dropped out.",
                 ephemeral=True,
             )
             return
