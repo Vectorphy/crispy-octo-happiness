@@ -162,6 +162,7 @@ class InvitationService:
         self.closed_kinds: set[str] = set()
         self.claims: set[str] = set()
         self.callbacks: set[str] = set()
+        self.notice_retries: dict[str, int] = {}
 
     async def restore(self) -> None:
         from types import SimpleNamespace
@@ -433,7 +434,7 @@ class InvitationService:
             raise
 
     def register(self, view: Any) -> None:
-        if view.invitation_id in self.views:
+        if view.invitation_kind in self.closed_kinds or view.invitation_id in self.views:
             return
         self.views[view.invitation_id] = view
         msg_id = (
@@ -670,42 +671,58 @@ class InvitationService:
                 "Invitation claim recovery will retry guild_id=%s invitation_id=%s", view.guild_id, view.invitation_id
             )
 
-    async def notification(self, view: Any, row: dict[str, Any], *, expired: bool) -> None:
-        recipient = await _db_call(getattr(self.bot, "fetch_user", None), row["recipient_id"])
-        if recipient is not None and hasattr(recipient, "send"):
-            try:
-                res = recipient.send(
-                    EXPIRY_NOTICE
-                    if expired
-                    else "Your invitation is still pending and expires in 4 minutes. Ask the owner for a new invitation after it expires.",
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-                if inspect.isawaitable(res):
-                    await res
-            except Exception:
-                pass
-        if row.get("dm_channel_id") and row.get("dm_message_id"):
-            try:
-                channel = await _db_call(getattr(self.bot, "fetch_channel", None), row["dm_channel_id"])
-                if channel is not None and hasattr(channel, "fetch_message"):
-                    message = await _db_call(channel.fetch_message, row["dm_message_id"])
-                    if expired and message is not None and hasattr(message, "edit"):
-                        for child in getattr(view, "children", []):
-                            child.disabled = True
-                        res = message.edit(view=view)
-                        if inspect.isawaitable(res):
-                            await res
-            except Exception:
-                pass
+    async def notification(self, view: Any, row: dict[str, Any], *, expired: bool) -> bool:
         try:
+            recipient = await asyncio.wait_for(
+                _db_call(getattr(self.bot, "fetch_user", None), row["recipient_id"]), timeout=15
+            )
+            if recipient is None or not hasattr(recipient, "send"):
+                raise RuntimeError("Invitation recipient unavailable")
+            res = recipient.send(
+                EXPIRY_NOTICE
+                if expired
+                else "Your invitation is still pending and expires in 4 minutes. Ask the owner for a new invitation after it expires.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            if inspect.isawaitable(res):
+                await asyncio.wait_for(res, timeout=15)
             await _db_call(
                 getattr(self.bot.db, "mark_invitation_notification", None),
                 view.guild_id,
                 view.invitation_id,
                 expired=expired,
             )
-        except Exception:
-            pass
+        except (discord.HTTPException, sqlite3.Error, RuntimeError, OSError, ValueError, asyncio.TimeoutError):
+            self.notice_retries[view.invitation_id] = self.notice_retries.get(view.invitation_id, 0) + 1
+            logger.exception(
+                "Invitation notice will retry guild_id=%s invitation_id=%s expired=%s",
+                view.guild_id,
+                view.invitation_id,
+                expired,
+            )
+            return False
+        self.notice_retries.pop(view.invitation_id, None)
+        row["expiry_notified" if expired else "warned"] = 1
+        if expired and row.get("dm_channel_id") and row.get("dm_message_id"):
+            try:
+                channel = await asyncio.wait_for(
+                    _db_call(getattr(self.bot, "fetch_channel", None), row["dm_channel_id"]), timeout=15
+                )
+                if channel is not None and hasattr(channel, "fetch_message"):
+                    message = await asyncio.wait_for(_db_call(channel.fetch_message, row["dm_message_id"]), timeout=15)
+                    if message is not None and hasattr(message, "edit"):
+                        for child in getattr(view, "children", []):
+                            child.disabled = True
+                        res = message.edit(view=view)
+                        if inspect.isawaitable(res):
+                            await asyncio.wait_for(res, timeout=15)
+            except (discord.HTTPException, RuntimeError, OSError, ValueError, asyncio.TimeoutError):
+                logger.exception(
+                    "Expired invitation controls could not be disabled guild_id=%s invitation_id=%s",
+                    view.guild_id,
+                    view.invitation_id,
+                )
+        return True
 
     async def tick(self, view: Any) -> bool:
         row = await _db_call(getattr(self.bot.db, "get_session_invitation", None), view.guild_id, view.invitation_id)
@@ -722,7 +739,7 @@ class InvitationService:
                 return True
         if row["status"] == "pending" and time.time() >= row["expires_at"]:
             try:
-                await _db_call(
+                transitioned = await _db_call(
                     getattr(self.bot.db, "transition_session_invitation", None),
                     view.guild_id,
                     view.invitation_id,
@@ -730,12 +747,18 @@ class InvitationService:
                     "expired",
                     now=time.time(),
                 )
-            except Exception:
-                pass
+            except (sqlite3.Error, RuntimeError, OSError, ValueError):
+                logger.exception(
+                    "Invitation expiry will retry guild_id=%s invitation_id=%s", view.guild_id, view.invitation_id
+                )
+                return True
+            if not transitioned:
+                return True
             row["status"] = "expired"
         if row["status"] == "expired":
             if not row.get("expiry_notified", 0):
-                await self.notification(view, row, expired=True)
+                if not await self.notification(view, row, expired=True):
+                    return True
                 await audit_action(
                     self.bot, view.guild_id, row["recipient_id"], "invitation.expire", "expired", [row["session_id"]]
                 )
@@ -759,7 +782,8 @@ class InvitationService:
                     logger.exception(
                         "Invitation monitor will retry guild_id=%s invitation_id=%s", view.guild_id, view.invitation_id
                     )
-                await asyncio.sleep(1)
+                retries = self.notice_retries.get(view.invitation_id, 0)
+                await asyncio.sleep(min(30, 2 ** min(retries, 5)))
         finally:
             if self.tasks.get(view.invitation_id) is asyncio.current_task():
                 self.tasks.pop(view.invitation_id, None)
@@ -767,6 +791,7 @@ class InvitationService:
     def finish(self, view: Any) -> None:
         view.stop()
         self.views.pop(view.invitation_id, None)
+        self.notice_retries.pop(view.invitation_id, None)
         task = self.tasks.get(view.invitation_id)
         if task is not None and task is not asyncio.current_task():
             task.cancel()
