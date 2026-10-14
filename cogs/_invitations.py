@@ -160,6 +160,8 @@ class InvitationService:
         self.locks: dict[str, asyncio.Lock] = {}
         self.recovery_lock = asyncio.Lock()
         self.closed_kinds: set[str] = set()
+        self.claims: set[str] = set()
+        self.callbacks: set[str] = set()
 
     async def restore(self) -> None:
         from types import SimpleNamespace
@@ -306,13 +308,10 @@ class InvitationService:
                     for record in records
                 )
             )
-        participants = getattr(session, "participants", None)
-        if participants is not None and recipient in participants:
-            return True
         records = await _db_call(getattr(self.bot.db, "get_active_pomodoro_runtime", None))
-        return bool(
-            isinstance(records, list)
-            and any(
+        participants = getattr(session, "participants", None)
+        if isinstance(records, list):
+            admitted = any(
                 isinstance(record, dict)
                 and record.get("guild_id") == session.guild_id
                 and isinstance(record.get("state"), dict)
@@ -320,7 +319,15 @@ class InvitationService:
                 and recipient in record["state"].get("participants", [])
                 for record in records
             )
-        )
+            # A cancelled callback can mutate memory before its runtime write starts.
+            # Reconcile that recipient only after the callback has stopped.
+            if participants is not None:
+                if admitted:
+                    participants.add(recipient)
+                else:
+                    participants.discard(recipient)
+            return admitted
+        return bool(participants is not None and recipient in participants)
 
     async def send(
         self,
@@ -470,6 +477,9 @@ class InvitationService:
                         [view.invitation_id],
                     )
                     return
+                if row["status"] == "accepting" and view.invitation_id in self.claims:
+                    await self.reconcile(view, row)
+                    row = await self.bot.db.get_session_invitation(view.guild_id, view.invitation_id)
                 if row["status"] == "accepting":
                     await send_response(
                         interaction,
@@ -529,8 +539,9 @@ class InvitationService:
 
                 desired = "accepting" if action == "join" else "declined"
                 transitioned = False
-                try:
-                    res = await _db_call(
+                cancelled = False
+                claim_task = asyncio.create_task(
+                    _db_call(
                         getattr(self.bot.db, "transition_session_invitation", None),
                         view.guild_id,
                         view.invitation_id,
@@ -538,9 +549,29 @@ class InvitationService:
                         desired,
                         now=time.time(),
                     )
-                    transitioned = bool(res)
-                except Exception:
-                    transitioned = False
+                )
+                while True:
+                    try:
+                        transitioned = bool(await asyncio.shield(claim_task))
+                        break
+                    except asyncio.CancelledError:
+                        # The DAL drains a committed SQLite worker before raising cancellation.
+                        # Drain this call too so ownership follows its actual CAS result.
+                        cancelled = True
+                    except Exception:
+                        break
+
+                if cancelled:
+                    if transitioned:
+                        row["status"] = desired
+                        if action == "join":
+                            self.claims.add(view.invitation_id)
+                            view.invitation_row = row
+                            self.register(view)
+                            await self.reconcile(view, row)
+                        else:
+                            self.finish(view)
+                    raise asyncio.CancelledError
 
                 if not transitioned:
                     await send_response(
@@ -572,23 +603,20 @@ class InvitationService:
                     self.finish(view)
                     return
 
-                res = callback(interaction)
-                if inspect.isawaitable(res):
-                    await res
+                self.claims.add(view.invitation_id)
+                self.callbacks.add(view.invitation_id)
+                try:
+                    res = callback(interaction)
+                    if inspect.isawaitable(res):
+                        await res
+                finally:
+                    self.callbacks.discard(view.invitation_id)
+                    # Register before recovery so a failed write or repeated cancellation has a retry owner.
+                    view.invitation_row = row
+                    self.register(view)
+                    await self.reconcile(view, row)
 
-                if await self.joined(view):
-                    try:
-                        await _db_call(
-                            getattr(self.bot.db, "transition_session_invitation", None),
-                            view.guild_id,
-                            view.invitation_id,
-                            "accepting",
-                            "accepted",
-                            now=time.time(),
-                        )
-                    except Exception:
-                        pass
-                    row["status"] = "accepted"
+                if row["status"] == "accepted":
                     await audit_action(
                         self.bot,
                         view.guild_id,
@@ -599,18 +627,6 @@ class InvitationService:
                     )
                     self.finish(view)
                 else:
-                    try:
-                        await _db_call(
-                            getattr(self.bot.db, "transition_session_invitation", None),
-                            view.guild_id,
-                            view.invitation_id,
-                            "accepting",
-                            "pending",
-                            now=time.time(),
-                        )
-                    except Exception:
-                        pass
-                    row["status"] = "pending"
                     await audit_action(
                         self.bot, view.guild_id, interaction.user.id, "invitation.join", "failed", [row["session_id"]]
                     )
@@ -626,6 +642,9 @@ class InvitationService:
                 self.actions.discard(task)
 
     async def reconcile(self, view: Any, row: dict[str, Any]) -> None:
+        if view.invitation_id in self.callbacks:
+            return
+        self.claims.add(view.invitation_id)
         if await self.joined(view):
             status = "accepted"
         elif not await self.live(view, row):
@@ -635,7 +654,7 @@ class InvitationService:
         else:
             status = "pending"
         try:
-            await _db_call(
+            transitioned = await _db_call(
                 getattr(self.bot.db, "transition_session_invitation", None),
                 view.guild_id,
                 view.invitation_id,
@@ -643,8 +662,13 @@ class InvitationService:
                 status,
                 now=time.time(),
             )
-        except Exception:
-            pass
+            if transitioned:
+                row["status"] = status
+                self.claims.discard(view.invitation_id)
+        except (discord.HTTPException, sqlite3.Error, RuntimeError, OSError, ValueError):
+            logger.exception(
+                "Invitation claim recovery will retry guild_id=%s invitation_id=%s", view.guild_id, view.invitation_id
+            )
 
     async def notification(self, view: Any, row: dict[str, Any], *, expired: bool) -> None:
         recipient = await _db_call(getattr(self.bot, "fetch_user", None), row["recipient_id"])
@@ -691,7 +715,11 @@ class InvitationService:
             self.finish(view)
             return False
         if row["status"] == "accepting":
-            return True
+            if view.invitation_id not in self.claims or view.invitation_id in self.callbacks:
+                return True
+            await self.reconcile(view, row)
+            if row["status"] == "accepting":
+                return True
         if row["status"] == "pending" and time.time() >= row["expires_at"]:
             try:
                 await _db_call(
